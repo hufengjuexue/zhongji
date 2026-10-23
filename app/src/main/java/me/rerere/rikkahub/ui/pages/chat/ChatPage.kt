@@ -613,7 +613,7 @@ private fun ChatPageContent(
                             activeId == null || activeId == conversation.id.toString() -> {
                                 navController.navigate(Screen.VoiceCall(conversation.id.toString()))
                             }
-                            else -> toaster.show(stringResource(R.string.chat_call_in_progress), type = ToastType.Warning)
+                            else -> toaster.show(context.getString(R.string.chat_call_in_progress), type = ToastType.Warning)
                         }
                     },
                     onVideoCall = {
@@ -621,7 +621,7 @@ private fun ChatPageContent(
                         if (activeId == null || activeId == conversation.id.toString()) {
                             navController.navigate(Screen.VideoCall(conversation.id.toString()))
                         } else {
-                            toaster.show(stringResource(R.string.chat_call_in_progress), type = ToastType.Warning)
+                            toaster.show(context.getString(R.string.chat_call_in_progress), type = ToastType.Warning)
                         }
                     },
                 )
