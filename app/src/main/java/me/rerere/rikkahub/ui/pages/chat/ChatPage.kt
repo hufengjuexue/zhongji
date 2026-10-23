@@ -1409,10 +1409,10 @@ private fun ChatPageContent(
                             val result = when (type) {
                                 "global" -> {
                                     vm.updateSettings { s ->
-                                        val existing = s.regexGroups.find { it.name == stringResource(R.string.chat_tavern_assistant) }
+                                        val existing = s.regexGroups.find { it.name == context.getString(R.string.chat_tavern_assistant) }
                                         val updated = if (existing == null) {
                                             s.regexGroups + me.rerere.rikkahub.data.model.RegexGroup(
-                                                name = stringResource(R.string.chat_tavern_assistant),
+                                                name = context.getString(R.string.chat_tavern_assistant),
                                                 regexes = regexes,
                                             )
                                         } else {
