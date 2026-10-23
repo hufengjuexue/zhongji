@@ -1,0 +1,227 @@
+package me.rerere.rikkahub.ui.components.ui
+
+import androidx.core.net.toUri
+import android.content.Intent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.fastForEach
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import me.rerere.rikkahub.utils.RELEASE_PAGE_URL
+import me.rerere.ui.toast.ToastType
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Download01
+import me.rerere.rikkahub.BuildConfig
+import me.rerere.rikkahub.R
+import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
+import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.hooks.useThrottle
+import me.rerere.rikkahub.ui.pages.chat.ChatVM
+import me.rerere.rikkahub.utils.Version
+import me.rerere.rikkahub.utils.onError
+import me.rerere.rikkahub.utils.onSuccess
+import me.rerere.rikkahub.utils.toLocalDateTime
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
+import kotlin.time.toJavaInstant
+
+/**
+ * 远端版本是否真的比本地新——**只看主版本段**。
+ *
+ * 每日构建的版本号形如 2.5.6.1004（在主版本后追加一段自增序号）。
+ * Version 类会把它当成「第四个数字段更大」从而判为新版本，所以这里
+ * 显式按本地段数截断比较：本地 2.5.6 只拿远端前三段 [2,5,6] 比，
+ * 多出来的序号段一律忽略。
+ */
+private fun isNewerMainVersion(remote: String): Boolean {
+    val local = parseMainVersion(BuildConfig.VERSION_NAME)
+    val target = parseMainVersion(remote)
+    for (i in local.indices) {
+        val x = local.getOrElse(i) { 0 }
+        val y = target.getOrElse(i) { 0 }
+        if (y != x) return y > x
+    }
+    // 主版本完全相同：后面多出的段是每日构建序号，不算新版本
+    return false
+}
+
+private fun parseMainVersion(version: String): List<Int> =
+    version.trim()
+        .removePrefix("v")
+        .split('.', '-', '+')
+        .mapNotNull { seg -> seg.takeWhile { it.isDigit() }.toIntOrNull() }
+
+@OptIn(ExperimentalTime::class)
+@Composable
+fun UpdateCard(vm: ChatVM) {
+    val state by vm.updateState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val toaster = LocalToaster.current
+    state.onError {
+        Card {
+            Column(
+                modifier = Modifier
+                    .padding(8.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.update_card_check_failed),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = it.message ?: stringResource(R.string.update_card_unknown_error),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+    state.onSuccess { info ->
+        var showDetail by remember { mutableStateOf(false) }
+        var dismissed by remember { mutableStateOf(false) }
+        // 只比主版本段。
+        //
+        // 这里原本用 Version(...) > Version(...)，而它逐位比较全部数字段，
+        // 于是 2.5.6.1004（每日构建序号）会被判成比 2.5.6 新。虽然
+        // UpdateChecker 已经过滤掉每日构建，但那是唯一的防线——源里若
+        // 混进一条带 nightly 样式版本号的记录，这里就会直接弹出「更新到
+        // 每日构建」。两道防线各管一段：上游负责筛，这里负责不认第四段。
+        val current = remember { Version(BuildConfig.VERSION_NAME) }
+        val latest = remember(info) { Version(info.version) }
+        if (isNewerMainVersion(info.version) && !dismissed) {
+            Card(
+                onClick = {
+                    showDetail = true
+                }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.update_card_new_version_found, info.version),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { dismissed = true }) {
+                            Icon(
+                                imageVector = HugeIcons.Cancel01,
+                                contentDescription = stringResource(R.string.update_card_close),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    MarkdownBlock(
+                        content = info.changelog,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.heightIn(max = 200.dp)
+                    )
+                }
+            }
+        }
+        if (showDetail) {
+            ModalBottomSheet(
+                onDismissRequest = { showDetail = false },
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = info.version,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    // 兜底源可能没带时间戳（API 缺字段），这时不显示比显示错误日期好
+                    remember(info.publishedAt) {
+                        runCatching { Instant.parse(info.publishedAt).toJavaInstant().toLocalDateTime() }
+                            .getOrNull()
+                    }?.let { published ->
+                        Text(
+                            text = published,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    MarkdownBlock(
+                        content = info.changelog,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp)
+                            .verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    // 不内置下载：下载通道一向不稳（GitHub 直连被墙、公共代理
+                    // 时好时坏），交给浏览器取包反而可靠，用户也能自己核对来源。
+                    OutlinedCard(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, RELEASE_PAGE_URL.toUri())
+                                )
+                            }.onFailure {
+                                toaster.show(
+                                    context.getString(R.string.update_card_open_failed),
+                                    type = ToastType.Error,
+                                )
+                            }
+                        },
+                    ) {
+                        ListItem(
+                            headlineContent = {
+                                Text(text = stringResource(R.string.update_card_go_github))
+                            },
+                            supportingContent = {
+                                Text(text = stringResource(R.string.update_card_go_github_desc))
+                            },
+                            leadingContent = {
+                                Icon(
+                                    imageVector = HugeIcons.Download01,
+                                    contentDescription = null
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

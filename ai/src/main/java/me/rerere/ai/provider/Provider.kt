@@ -1,0 +1,143 @@
+package me.rerere.ai.provider
+
+import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.core.Tool
+import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.ui.ImageGenSize
+import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.ai.ui.StreamChunk
+import me.rerere.ai.ui.UIMessage
+import kotlin.uuid.Uuid
+
+// 提供商实现
+// 采用无状态设计，使用时除了需要传入需要的参数外，还需要传入provider setting作为参数
+interface Provider<T : ProviderSetting> {
+    suspend fun listModels(providerSetting: T): List<Model>
+
+    /** 查询额度，见 [ProviderQuota]。不支持或没有开启时返回 null */
+    suspend fun getQuota(providerSetting: T): ProviderQuota? = null
+
+    suspend fun generateText(
+        providerSetting: T,
+        messages: List<UIMessage>,
+        params: TextGenerationParams,
+    ): TextGenerationResult
+
+    suspend fun streamText(
+        providerSetting: T,
+        messages: List<UIMessage>,
+        params: TextGenerationParams,
+    ): Flow<StreamChunk>
+
+    suspend fun generateEmbedding(
+        providerSetting: T,
+        params: EmbeddingGenerationParams,
+    ): EmbeddingGenerationResult {
+        error("Embedding generation is not supported")
+    }
+
+    suspend fun generateImage(
+        providerSetting: ProviderSetting,
+        params: ImageGenerationParams,
+    ): Flow<ImageGenerationItem> {
+        error("Image generation is not supported")
+    }
+
+    suspend fun editImage(
+        providerSetting: ProviderSetting,
+        params: ImageEditParams,
+    ): Flow<ImageGenerationItem> {
+        error("Image edit is not supported")
+    }
+}
+
+@Serializable
+data class TextGenerationResult(
+    val id: String,
+    val model: String,
+    val message: UIMessage,
+    val finishReason: String? = null,
+    val usage: TokenUsage? = null,
+)
+
+@Serializable
+data class TextGenerationParams(
+    val model: Model,
+    val temperature: Float? = null,
+    val topP: Float? = null,
+    val topK: Int? = null,
+    val maxTokens: Int? = null,
+    val tools: List<Tool> = emptyList(),
+    val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
+    val customHeaders: List<CustomHeader> = emptyList(),
+    val customBody: List<CustomBody> = emptyList(),
+    val sessionId: String? = null,
+    // 防空回复（Gemini）：系统提示词不走 systemInstruction，而是作为对话流中的
+    // user/model 假历史轮注入（SYSTEM 消息原位转为 user 轮，保留世界书等深度注入位置）
+    val systemPromptInChat: Boolean = false,
+    // 中转站兼容：修复 Gemini 经 OpenAI 兼容中转时 reasoning_content 吞掉正文的问题
+    val enableProxyFix: Boolean = false,
+    // 强制关闭深度思考：置位后本请求不写入任何思考相关字段（reasoning_effort /
+    // reasoning / thinking），而不是传 "none" 之类的关闭值——实测部分中转站
+    // 只要收到该字段就会开启思考链，故必须整个字段都不出现。
+    val disableReasoning: Boolean = false,
+)
+
+@Serializable
+data class ImageGenerationParams(
+    val model: Model,
+    val prompt: String,
+    val numOfImages: Int = 1,
+    val size: String = ImageGenSize.AUTO.value,
+    /**
+     * 思考强度。AUTO 表示不显式指定，由站点自己决定——多数站点没有这个参数，
+     * 发了反而可能被拒，所以只有用户显式选过才带。
+     */
+    val reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+    val partialImages: Int = 2,
+    val customHeaders: List<CustomHeader> = emptyList(),
+    val customBody: List<CustomBody> = emptyList(),
+)
+
+@Serializable
+data class ImageEditParams(
+    val model: Model,
+    val prompt: String,
+    val images: List<String>,
+    val numOfImages: Int = 1,
+    val size: String = ImageGenSize.AUTO.value,
+    val reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+    val partialImages: Int = 2,
+    val customHeaders: List<CustomHeader> = emptyList(),
+    val customBody: List<CustomBody> = emptyList(),
+)
+
+@Serializable
+data class EmbeddingGenerationParams(
+    val model: Model,
+    val input: List<String>,
+    val dimensions: Int? = null,
+    val customHeaders: List<CustomHeader> = emptyList(),
+    val customBody: List<CustomBody> = emptyList(),
+)
+
+@Serializable
+data class EmbeddingGenerationResult(
+    val model: String,
+    val embeddings: List<List<Float>>,
+)
+
+@Serializable
+data class CustomHeader(
+    val name: String,
+    val value: String
+)
+
+@Serializable
+data class CustomBody(
+    val key: String,
+    val value: JsonElement
+)

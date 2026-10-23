@@ -1,0 +1,107 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.cursor
+.history
+.kotlin
+__pycache__/
+tmp_stellium/
+build.log
+stelli/
+# 本地调研/验证报告，不推远程
+*research_*.json
+*验证报告*
+*_verification_report.*
+verification_report.*
+
+# 本地插件包等杂物，不推远程
+dsh-purge.zip
+nihe.zip
+
+# 文档站：构建依赖与产物（源工程在 docs-site/，产物输出到 site/docs/）
+docs-site/node_modules/
+docs-site/.vitepress/cache/
+site/docs/
+
+# AI agent 使用文档/本地配置，不推远程
+CLAUDE.md
+AGENTS.md
+.claude/
+.agents/
+.hermes/
+.cursor/
+.windsurf/
+.cursorrules
+GEMINI.md
+
+# 华灯正式签名密钥（勿提交）
+keystore-backup/
+
+# 本地插件开发与提示词工程产物，不推远程
+cocoon_plugin/
+*plugin.zip
+*插件*.zip
+*主题增强*.zip
+
+# 华灯白饭鱼酒馆助手（签名证书派生加密载荷，不入库）
+com.huadeng.baifanyu.tavern/
+com.huadeng.baifanyu.tavern.zip
+r18_plain/
+
+# 本地素材与杂项文件，不推远程
+plugins.zip
+1_plugins.zip
+前端.zip
+素材/
+酒馆500+美化/
+云南财经/
+# 只忽略仓库根目录的临时测试目录。
+# 写成裸的 test/ 会匹配任意层级，把 app/src/test/ 下的单元测试
+# 也一并忽略掉——那些测试是防回归用的，必须进版本库。
+/test/
+aaa.txt
+
+# ── 插件编辑器（含加密实现，不随仓库分发）──
+docs/plugin-editor/
+
+# ── 构建产物 ──
+rikkahub-plus-*.apk
+*.apk
+
+# ── 个人素材 ──
+1.png
+v0.8.9.19__R6.4_.png
+真人宝可梦*.png
+新图标.jpg
+*版截图.zip
+
+# ── 临时文件与日志 ──
+log.txt
+111.txt
+2.txt
+18.json
+66666*.txt
+
+# ── 临时打包与日志产物 ──
+ci_latest_logs.zip
+dsh-purge.zip
+
+# ── 第三方逆向引擎源码包（211MB，仅本地参考，不入库）──
+玄星逆核-开源源码.zip
+XuanXingNieHe/
+*.zip
+
+# ── 杂项测试文本 ──
+3.txt
+4.txt
+aaa.txt
+001.txt
+材料/

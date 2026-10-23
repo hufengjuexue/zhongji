@@ -1,0 +1,368 @@
+package me.rerere.rikkahub
+
+import android.app.Application
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
+import android.widget.Toast
+import androidx.compose.foundation.ComposeFoundationFlags
+import androidx.compose.runtime.Composer
+import androidx.compose.runtime.tooling.ComposeStackTraceMode
+import androidx.core.app.NotificationChannelCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
+import me.rerere.rikkahub.data.skills.SkillManager
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import me.rerere.common.android.appTempFolder
+import com.whl.quickjs.android.QuickJSLoader
+import me.rerere.rikkahub.di.appModule
+import me.rerere.rikkahub.di.dataSourceModule
+import me.rerere.rikkahub.di.repositoryModule
+import me.rerere.rikkahub.plugin.di.pluginModule
+import me.rerere.rikkahub.di.viewModelModule
+import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.sync.BackupManager
+import me.rerere.rikkahub.data.sync.RestoreFailedException
+import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.service.MediaCreationService
+import me.rerere.rikkahub.service.WebServerService
+import me.rerere.rikkahub.utils.CrashHandler
+import me.rerere.rikkahub.utils.DatabaseUtil
+import org.koin.android.ext.android.get
+import org.koin.android.ext.koin.androidContext
+import org.koin.android.ext.koin.androidLogger
+import org.koin.androidx.workmanager.koin.workManagerFactory
+import org.koin.core.context.startKoin
+import me.rerere.rikkahub.utils.l10n
+
+private const val TAG = "RikkaHubApp"
+
+const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
+const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
+const val CHAT_GENERATION_FOREGROUND_CHANNEL_ID = "chat_generation_foreground"
+const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
+const val VOICE_CALL_NOTIFICATION_CHANNEL_ID = "voice_call"
+const val MEDIA_CREATION_NOTIFICATION_CHANNEL_ID = "media_creation"
+const val MEMORY_DREAM_NOTIFICATION_CHANNEL_ID = "memory_dream"
+
+class RikkaHubApp : Application() {
+    private fun trace(msg: String) {
+        // 启动诊断打点：每次都是 /sdcard 主线程文件写入（FUSE IPC），release 下是纯启动开销，
+        // 仅 debug 构建保留
+        if (!BuildConfig.DEBUG) return
+        try {
+            java.io.File("/sdcard/rikkahub_trace.txt").appendText("${System.currentTimeMillis()} $msg\n")
+        } catch (_: Exception) {}
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        trace("onCreate start")
+        // 插件解密密钥依赖 APK 签名，必须在任何插件读取之前完成初始化
+        me.rerere.rikkahub.plugin.crypto.PluginCrypto.init(this)
+        trace("plugin crypto init")
+        // Restore files and settings before eager Koin singletons or workers can access them.
+        try {
+            val restored = runBlocking(Dispatchers.IO) {
+                BackupManager.applyPendingRestore(this@RikkaHubApp, JsonInstant)
+            }
+            if (restored) {
+                Toast.makeText(this, R.string.backup_page_restore_success, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: RestoreFailedException) {
+            Log.e(TAG, "Backup restore rolled back", e)
+            Toast.makeText(this, l10n("备份恢复失败，已保留原数据。请重新导入备份。", "Backup restore failed. Your original data was kept; please import the backup again."), Toast.LENGTH_LONG).show()
+        }
+        trace("koin config")
+        startKoin {
+            // Koin 日志在 release 下只产生日志字符串拼接开销
+            if (BuildConfig.DEBUG) androidLogger()
+            androidContext(this@RikkaHubApp)
+            workManagerFactory()
+            modules(appModule, viewModelModule, dataSourceModule, repositoryModule, pluginModule)
+        }
+        trace("koin done")
+        this.createNotificationChannel()
+        trace("notification done")
+
+        // set cursor window size to 32MB
+        DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
+        trace("cursor done")
+
+        // TaskManager 持久化：此前 setPersistenceDir 无任何调用方，任务状态只存在内存里，
+        // 进程被杀即全部丢失（.tasks/{id}.json 的注释形同虚设）
+        runCatching {
+            me.rerere.rikkahub.data.ai.tools.TaskManager.setPersistenceDir(
+                java.io.File(filesDir, ".tasks")
+            )
+        }
+        trace("taskmanager done")
+
+        // install crash handler
+        CrashHandler.install(this)
+        trace("crashhandler done")
+
+        // Init QuickJS native library
+        QuickJSLoader.init()
+        trace("quickjs done")
+
+        // 插件声明的供应商要随启动就位，顺带清掉已被外部删掉的插件留下的供应商
+        runCatching { get<me.rerere.rikkahub.plugin.manager.PluginManager>() }
+            .onFailure { Log.e(TAG, "plugin manager init failed", it) }
+
+        // delete temp files
+        deleteTempFiles()
+        trace("tempfiles done")
+
+        // sync upload files to DB
+        syncManagedFiles()
+        trace("sync done")
+
+        // 按保留天数清理旧附件与生成图片（移植自 Rikkahub-Revised 的按日文件清理）
+        cleanupExpiredFiles()
+        trace("cleanup done")
+
+        // Extract builtin skills from assets after install/update
+        extractBuiltinSkills()
+
+        // Start WebServer if enabled in settings
+        startWebServerIfEnabled()
+        trace("webserver done")
+
+        // AI 主动发消息：进程被杀后重启时重新排程（开机场景由 ProactiveMessageReceiver 处理）
+        rescheduleProactiveMessageIfEnabled()
+        trace("proactive done")
+
+        // Resume media generations interrupted by the last process death
+        resumeMediaCreations()
+        resumeMemoryConsolidation()
+
+        // Increment launch count
+        incrementLaunchCount()
+        trace("onCreate complete")
+
+        // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
+    }
+
+    private fun resumeMediaCreations() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<MediaCreationService>().resumePending()
+            }.onFailure {
+                Log.e(TAG, "resumeMediaCreations failed", it)
+            }
+        }
+    }
+
+    private fun resumeMemoryConsolidation() {
+        // 应用被切走后进程随时可能被冻结，等不到空闲计时结束，这时直接开始整理
+        ProcessLifecycleOwner.get().lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) get<MemoryConsolidationScheduler>().onAppHidden()
+            }
+        )
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<MemoryConsolidationScheduler>().resumePending()
+            }.onFailure {
+                Log.e(TAG, "resumeMemoryConsolidation failed", it)
+            }
+        }
+    }
+
+    private fun incrementLaunchCount() {
+        get<AppScope>().launch {
+            runCatching {
+                val count = get<SettingsStore>().incrementLaunchCount()
+                Log.i(TAG, "incrementLaunchCount: $count")
+            }.onFailure {
+                Log.e(TAG, "incrementLaunchCount failed", it)
+            }
+        }
+    }
+
+    private fun deleteTempFiles() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            val dir = appTempFolder
+            if (dir.exists()) {
+                dir.deleteRecursively()
+            }
+        }
+    }
+
+    private fun extractBuiltinSkills() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            get<SkillManager>().ensureBuiltinSkillsExtracted()
+        }
+    }
+
+    private fun syncManagedFiles() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<FilesManager>().syncFolder()
+            }.onFailure {
+                Log.e(TAG, "syncManagedFiles failed", it)
+            }
+        }
+    }
+
+    private fun cleanupExpiredFiles() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                val retentionDays = get<SettingsStore>().settingsFlowRaw.first().fileRetentionDays
+                if (retentionDays > 0) {
+                    val result = get<FilesManager>().deleteFilesOlderThan(retentionDays)
+                    Log.i(TAG, "cleanupExpiredFiles: deleted ${result.totalDeleted}, failed ${result.failedFiles}")
+                }
+            }.onFailure {
+                Log.e(TAG, "cleanupExpiredFiles failed", it)
+            }
+        }
+    }
+
+    private fun rescheduleProactiveMessageIfEnabled() {
+        get<AppScope>().launch {
+            runCatching {
+                val settings = get<SettingsStore>().settingsFlowRaw.first()
+                if (settings.proactiveMessageSetting.enabled) {
+                    me.rerere.rikkahub.data.service.ProactiveMessageService.scheduleNext(
+                        this@RikkaHubApp,
+                        settings.proactiveMessageSetting
+                    )
+                    Log.i(TAG, "Rescheduled proactive message alarm on app start")
+                }
+            }.onFailure {
+                Log.e(TAG, "rescheduleProactiveMessageIfEnabled failed", it)
+            }
+        }
+    }
+
+    private fun startWebServerIfEnabled() {
+        get<AppScope>().launch {
+            runCatching {
+                delay(500)
+                val settings = get<SettingsStore>().awaitLoaded()
+                if (settings.webServerEnabled) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            this@RikkaHubApp,
+                            android.Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        Log.w(TAG, "startWebServerIfEnabled: notification permission not granted, skipping")
+                        return@launch
+                    }
+                    if (Build.VERSION.SDK_INT >= 37 &&
+                        !settings.webServerLocalhostOnly &&
+                        ContextCompat.checkSelfPermission(
+                            this@RikkaHubApp,
+                            android.Manifest.permission.ACCESS_LOCAL_NETWORK
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        Log.w(TAG, "startWebServerIfEnabled: local network permission not granted, skipping")
+                        return@launch
+                    }
+                    val intent = Intent(this@RikkaHubApp, WebServerService::class.java).apply {
+                        action = WebServerService.ACTION_START
+                        putExtra(WebServerService.EXTRA_PORT, settings.webServerPort)
+                        putExtra(WebServerService.EXTRA_LOCALHOST_ONLY, settings.webServerLocalhostOnly)
+                    }
+                    startForegroundService(intent)
+                }
+            }.onFailure {
+                Log.e(TAG, "startWebServerIfEnabled failed", it)
+            }
+        }
+    }
+
+    private fun createNotificationChannel() {
+        val notificationManager = NotificationManagerCompat.from(this)
+        val chatCompletedChannel = NotificationChannelCompat
+            .Builder(
+                CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID,
+                NotificationManagerCompat.IMPORTANCE_HIGH
+            )
+            .setName(getString(R.string.notification_channel_chat_completed))
+            .setVibrationEnabled(true)
+            .build()
+        notificationManager.createNotificationChannel(chatCompletedChannel)
+
+        val chatLiveUpdateChannel = NotificationChannelCompat
+            .Builder(
+                CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID,
+                NotificationManagerCompat.IMPORTANCE_LOW
+            )
+            .setName(getString(R.string.notification_channel_chat_live_update))
+            .setVibrationEnabled(false)
+            .build()
+        notificationManager.createNotificationChannel(chatLiveUpdateChannel)
+
+        val webServerChannel = NotificationChannelCompat
+            .Builder(WEB_SERVER_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+            .setName(getString(R.string.notification_channel_web_server))
+            .setVibrationEnabled(false)
+            .setShowBadge(false)
+            .build()
+        notificationManager.createNotificationChannel(webServerChannel)
+
+        val generationForegroundChannel = NotificationChannelCompat
+            .Builder(CHAT_GENERATION_FOREGROUND_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+            .setName(getString(R.string.notification_channel_generation_foreground))
+            .setVibrationEnabled(false)
+            .setShowBadge(false)
+            .build()
+        notificationManager.createNotificationChannel(generationForegroundChannel)
+
+        val voiceCallChannel = NotificationChannelCompat
+            .Builder(VOICE_CALL_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+            .setName(l10n("语音通话", "Voice call"))
+            .setVibrationEnabled(false)
+            .setShowBadge(false)
+            .build()
+        notificationManager.createNotificationChannel(voiceCallChannel)
+
+        val mediaCreationChannel = NotificationChannelCompat
+            .Builder(MEDIA_CREATION_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_DEFAULT)
+            .setName(getString(R.string.media_creation_title))
+            .build()
+        notificationManager.createNotificationChannel(mediaCreationChannel)
+
+        val memoryDreamChannel = NotificationChannelCompat
+            .Builder(MEMORY_DREAM_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+            .setName(getString(R.string.memory_dream_title))
+            .setVibrationEnabled(false)
+            .setShowBadge(false)
+            .build()
+        notificationManager.createNotificationChannel(memoryDreamChannel)
+    }
+
+    override fun onTerminate() {
+        super.onTerminate()
+        get<AppScope>().cancel()
+        stopService(Intent(this, WebServerService::class.java))
+    }
+}
+
+class AppScope : CoroutineScope by CoroutineScope(
+    SupervisorJob()
+        + Dispatchers.Main
+        + CoroutineName("AppScope")
+        + CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "AppScope exception", e)
+    }
+)

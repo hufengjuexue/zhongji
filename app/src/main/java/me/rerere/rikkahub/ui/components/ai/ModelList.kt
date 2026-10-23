@@ -1,0 +1,1012 @@
+package me.rerere.rikkahub.ui.components.ai
+
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.fastAny
+import androidx.compose.ui.util.fastFilter
+import androidx.compose.ui.util.fastForEach
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowDown01
+import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.Brain02
+import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.DragDropHorizontal
+import me.rerere.hugeicons.stroke.Favourite
+import me.rerere.hugeicons.stroke.Image03
+import me.rerere.hugeicons.stroke.Search01
+import me.rerere.hugeicons.stroke.Text
+import me.rerere.hugeicons.stroke.Tools
+import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
+import me.rerere.rikkahub.ui.components.ui.Tag
+import me.rerere.rikkahub.ui.components.ui.TagType
+import me.rerere.rikkahub.ui.context.LocalNavController
+import me.rerere.rikkahub.ui.hooks.rememberSharedPreferenceString
+import me.rerere.rikkahub.ui.theme.extendColors
+import me.rerere.rikkahub.utils.toDp
+import me.rerere.ui.icons.HeartIcon
+import org.koin.compose.koinInject
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
+import kotlin.uuid.Uuid
+import me.rerere.rikkahub.ui.components.ui.ThemedIcon
+import me.rerere.rikkahub.ui.context.LocalSettings
+
+class ModelListState internal constructor(
+    modelId: Uuid?,
+    providers: List<ProviderSetting>,
+    type: ModelType,
+    fallbackToAllTypes: Boolean = false,
+) {
+
+    var modelId by mutableStateOf(modelId)
+        private set
+
+    var providers by mutableStateOf(providers)
+        private set
+
+    var type by mutableStateOf(type)
+        private set
+
+    var visible by mutableStateOf(false)
+        private set
+
+    /**
+     * 实际参与过滤的模型类型集合。
+     *
+     * 供应商的 `/models` 接口只返回模型 id，拉回来的模型类型一律默认成 [ModelType.CHAT]，
+     * 除非用户在供应商详情页手动改过。生图页若严格按 [ModelType.IMAGE] 过滤，绝大多数用户
+     * 看到的会是一个空列表——"选不了模型"就是这么来的。开启 fallbackToAllTypes 后，
+     * 只有当全局确实不存在该类型的模型时才退化成"除嵌入模型外全部可选"；一旦用户标了
+     * 任意一个 IMAGE 模型，就恢复严格过滤，不会污染正常用法。
+     *
+     * 在 [update] 里算好存字段，而不是用 getter 现算：下游 `remember(providers, modelTypes)`
+     * 靠引用相等判缓存，每次重组返回新 Set 会让所有过滤每帧重算。
+     */
+    var effectiveTypes: Set<ModelType> = setOf(type)
+        private set
+
+    /** 是否因兜底而放宽了类型过滤（列表里混着非目标类型的模型），用于给用户一句说明 */
+    val isTypeFilterRelaxed: Boolean
+        get() = effectiveTypes.size > 1
+
+    val currentModel: Model?
+        get() = modelId?.let { providers.findModelById(it) }
+
+    val filteredProviders: List<ProviderSetting>
+        get() = providers.fastFilter { provider ->
+            provider.enabled && provider.models.fastAny { model -> model.type in effectiveTypes }
+        }
+
+    fun open() {
+        visible = true
+    }
+
+    fun close() {
+        visible = false
+    }
+
+    internal fun update(
+        modelId: Uuid?,
+        providers: List<ProviderSetting>,
+        type: ModelType,
+        fallbackToAllTypes: Boolean = false,
+    ) {
+        this.modelId = modelId
+        this.providers = providers
+        this.type = type
+        this.effectiveTypes = resolveEffectiveTypes(providers, type, fallbackToAllTypes)
+    }
+
+    private fun resolveEffectiveTypes(
+        providers: List<ProviderSetting>,
+        type: ModelType,
+        fallbackToAllTypes: Boolean,
+    ): Set<ModelType> {
+        if (!fallbackToAllTypes) return setOf(type)
+        val hasExactType = providers.fastAny { provider ->
+            provider.models.fastAny { it.type == type }
+        }
+        if (hasExactType) return setOf(type)
+        return ModelType.entries.filterTo(mutableSetOf()) { it != ModelType.EMBEDDING }
+    }
+}
+
+@Composable
+fun rememberModelListState(
+    modelId: Uuid?,
+    providers: List<ProviderSetting>,
+    type: ModelType,
+    fallbackToAllTypes: Boolean = false,
+): ModelListState {
+    return remember {
+        ModelListState(
+            modelId = modelId,
+            providers = providers,
+            type = type,
+            fallbackToAllTypes = fallbackToAllTypes,
+        )
+    }.also {
+        it.update(
+            modelId = modelId,
+            providers = providers,
+            type = type,
+            fallbackToAllTypes = fallbackToAllTypes,
+        )
+    }
+}
+
+@Composable
+fun ModelSelector(
+    modelId: Uuid?,
+    providers: List<ProviderSetting>,
+    type: ModelType,
+    modifier: Modifier = Modifier,
+    onlyIcon: Boolean = false,
+    allowClear: Boolean = false,
+    fallbackToAllTypes: Boolean = false,
+    onSelect: (Model) -> Unit
+) {
+    val state = rememberModelListState(
+        modelId = modelId,
+        providers = providers,
+        type = type,
+        fallbackToAllTypes = fallbackToAllTypes,
+    )
+
+    ModelSelectorButton(
+        state = state,
+        modifier = modifier,
+        onlyIcon = onlyIcon,
+        allowClear = allowClear,
+        onClear = { onSelect(Model()) },
+    )
+
+    ModelListSheet(
+        state = state,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+internal fun ModelSelectorButton(
+    state: ModelListState,
+    modifier: Modifier = Modifier,
+    onlyIcon: Boolean = false,
+    allowClear: Boolean = false,
+    onClear: () -> Unit = {},
+    // WebView 工具条代理点击：外部要求打开原生选择器
+    forceShow: Boolean = false,
+    onForceShowHandled: () -> Unit = {},
+) {
+    // WebView 工具条代理点击：原生菜单由外部请求打开
+    LaunchedEffect(forceShow) {
+        if (forceShow) {
+            state.open()
+            onForceShowHandled()
+        }
+    }
+    val model = state.currentModel
+
+    if (!onlyIcon) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = {
+                    state.open()
+                },
+                modifier = modifier
+            ) {
+                model?.modelId?.let {
+                    AutoAIIcon(
+                        it, Modifier
+                            .padding(end = 4.dp)
+                            .size(36.dp),
+                        color = Color.Transparent
+                    )
+                }
+                Text(
+                    text = model?.displayName ?: stringResource(R.string.model_list_select_model),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (allowClear && model != null) {
+                IconButton(
+                    onClick = onClear,
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.Cancel01,
+                        contentDescription = "Clear"
+                    )
+                }
+            }
+        }
+    } else {
+        // 主题可换模型选择图标（官方对应 #options_button / 模型下拉区域）
+        val themeIcons = LocalSettings.current.displaySetting.themeIcons
+        IconButton(
+            onClick = {
+                state.open()
+            },
+        ) {
+            if (model != null) {
+                AutoAIIcon(
+                    modifier = Modifier.size(36.dp),
+                    name = model.modelId,
+                    color = Color.Transparent
+                )
+            } else {
+                ThemedIcon(
+                    imageVector = HugeIcons.Brain02,
+                    contentDescription = stringResource(R.string.setting_model_page_chat_model),
+                    // 模型选择有主题专属映射：主题对模型下拉/设置预设的改写
+                    // 优先于菜单按钮，两者都缺时回退到菜单按钮的图标
+                    imageUrl = themeIcons.effectiveModelImageUrl,
+                    tint = themeIcons.effectiveModelTint?.let { Color(it) },
+                    scale = themeIcons.effectiveModelScale,
+                )
+            }
+        }
+    }
+}
+
+// 显示当前模型的胶囊按钮，样式和 Select 保持一致，点击后由调用方打开模型列表
+@Composable
+internal fun ModelField(
+    model: Model?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        tonalElevation = 4.dp,
+        shape = CircleShape,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (model != null) {
+                AutoAIIcon(
+                    name = model.modelId,
+                    modifier = Modifier.size(24.dp),
+                    color = Color.Transparent,
+                )
+            }
+            Text(
+                text = model?.displayName ?: stringResource(R.string.model_list_select_model),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = HugeIcons.ArrowDown01,
+                contentDescription = null,
+            )
+        }
+    }
+}
+
+@Composable
+fun ModelListSheet(
+    state: ModelListState,
+    onSelect: (Model) -> Unit,
+) {
+    if (!state.visible) return
+
+    val coroutineScope = rememberCoroutineScope()
+    val sheetState = rememberBottomSheetState(
+        initialValue = SheetValue.Hidden,
+        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
+    )
+
+    fun dismiss() {
+        coroutineScope.launch {
+            sheetState.hide()
+            state.close()
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = {
+            state.close()
+        },
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(8.dp)
+                .fillMaxHeight(0.8f)
+                .imePadding(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            // 兜底放开了类型过滤，列表里会混进聊天模型——不说明的话用户不知道自己在选什么。
+            if (state.isTypeFilterRelaxed) {
+                Text(
+                    text = stringResource(R.string.model_list_type_filter_relaxed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
+
+            ModelList(
+                currentModel = state.modelId,
+                providers = state.filteredProviders,
+                modelTypes = state.effectiveTypes,
+                onSelect = {
+                    onSelect(it)
+                    dismiss()
+                },
+                onDismiss = {
+                    dismiss()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.ModelList(
+    currentModel: Uuid? = null,
+    providers: List<ProviderSetting>,
+    modelTypes: Set<ModelType>,
+    onSelect: (Model) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    val settingsStore = koinInject<SettingsStore>()
+    val settings = settingsStore.settingsFlow
+        .collectAsStateWithLifecycle()
+
+    val favoriteModels = settings.value.favoriteModels.mapNotNull { modelId ->
+        val model = settings.value.providers.findModelById(modelId) ?: return@mapNotNull null
+        if (model.type !in modelTypes) return@mapNotNull null
+        val provider = model.findProvider(providers = settings.value.providers, checkOverwrite = false) ?: return@mapNotNull null
+        model to provider
+    }
+
+    var searchKeywords by remember { mutableStateOf("") }
+
+    // 上游 2.5.6：折叠的供应商（持久化），搜索时全部展开
+    // 本地 modelTypes 为多选集合，故沿用本地命名，仅移植折叠逻辑
+    var collapsedProvidersPref by rememberSharedPreferenceString("model_list_collapsed_providers", "")
+    val collapsedProviders = remember(collapsedProvidersPref) {
+        collapsedProvidersPref.orEmpty().split(",").filter { it.isNotBlank() }.toSet()
+    }
+    fun isCollapsed(provider: ProviderSetting): Boolean =
+        searchKeywords.isBlank() && provider.id.toString() in collapsedProviders
+
+    fun toggleCollapsed(provider: ProviderSetting) {
+        val id = provider.id.toString()
+        collapsedProvidersPref = (if (id in collapsedProviders) collapsedProviders - id else collapsedProviders + id)
+            .joinToString(",")
+    }
+
+    val typeFilteredModelsByProvider = remember(providers, modelTypes) {
+        providers.associate { provider ->
+            provider.id to provider.models.fastFilter { it.type in modelTypes }
+        }
+    }
+
+    val searchFilteredModelsByProvider = remember(providers, modelTypes, searchKeywords) {
+        providers.associate { provider ->
+            provider.id to provider.models.fastFilter {
+                it.type in modelTypes && it.displayName.contains(searchKeywords, true)
+            }
+        }
+    }
+
+    val visibleModelsByProvider = remember(providers, searchFilteredModelsByProvider, collapsedProviders, searchKeywords) {
+        providers.associate { provider ->
+            provider.id to if (isCollapsed(provider)) emptyList() else searchFilteredModelsByProvider[provider.id].orEmpty()
+        }
+    }
+
+    // 计算当前选中模型的位置
+    val selectedModelPosition = remember(currentModel, favoriteModels, providers, typeFilteredModelsByProvider) {
+        // 仅用于初始定位，搜索关键词此时为空
+        if (currentModel == null) return@remember 0
+
+        var position = 0
+
+        // 跳过无providers提示
+        if (providers.isEmpty()) {
+            position += 1
+        }
+
+        // 检查是否在收藏列表中
+        val favoriteIndex = favoriteModels.indexOfFirst { it.first.id == currentModel }
+        if (favoriteIndex >= 0) {
+            if (favoriteModels.isNotEmpty()) {
+                position += 1 // favorite header
+            }
+            position += favoriteIndex
+            return@remember position
+        }
+
+        // 跳过收藏列表
+        if (favoriteModels.isNotEmpty()) {
+            position += 1 // favorite header
+            position += favoriteModels.size
+        }
+
+        // 在providers中查找
+        for (provider in providers) {
+            position += 1 // provider header
+            val models = typeFilteredModelsByProvider[provider.id].orEmpty()
+            val modelIndex = models.indexOfFirst { it.id == currentModel }
+            val collapsed = isCollapsed(provider)
+            if (modelIndex >= 0) {
+                // 折叠时定位到供应商标题
+                if (collapsed) return@remember position - 1
+                position += modelIndex
+                return@remember position
+            }
+            if (!collapsed) position += models.size
+        }
+
+        0
+    }
+
+    val lazyListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = selectedModelPosition
+    )
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        // 计算favorite models在列表中的位置偏移
+        var favoriteStartIndex = 0
+        if (providers.isEmpty()) {
+            favoriteStartIndex = 1 // no providers item
+        }
+        if (favoriteModels.isNotEmpty()) {
+            favoriteStartIndex += 1 // favorite header
+        }
+
+        val fromIndex = from.index - favoriteStartIndex
+        val toIndex = to.index - favoriteStartIndex
+
+        // 只处理favorite models范围内的拖拽
+        if (fromIndex >= 0 && toIndex >= 0 &&
+            fromIndex < favoriteModels.size && toIndex < favoriteModels.size
+        ) {
+            val newFavoriteModels = settings.value.favoriteModels.toMutableList().apply {
+                add(toIndex, removeAt(fromIndex))
+            }
+            coroutineScope.launch {
+                settingsStore.update { oldSettings ->
+                    oldSettings.copy(favoriteModels = newFavoriteModels)
+                }
+            }
+        }
+    }
+    val haptic = LocalHapticFeedback.current
+
+    val providerPositions = remember(providers, favoriteModels, visibleModelsByProvider) {
+        var currentIndex = 0
+        if (providers.isEmpty()) {
+            currentIndex = 1 // no providers item
+        }
+        if (favoriteModels.isNotEmpty()) {
+            currentIndex += 1 // favorite header
+            currentIndex += favoriteModels.size // favorite models
+        }
+
+        providers.map { provider ->
+            val position = currentIndex
+            currentIndex += 1 // provider header
+            currentIndex += visibleModelsByProvider[provider.id].orEmpty().size
+            provider.id to position
+        }.toMap()
+    }
+
+    Surface(
+        shape = RoundedCornerShape(50),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+    ) {
+        OutlinedTextField(
+            value = searchKeywords,
+            onValueChange = { searchKeywords = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = {
+                Text(
+                    text = stringResource(R.string.model_list_search_placeholder),
+                )
+            },
+            shape = RoundedCornerShape(50),
+            colors = TextFieldDefaults.colors(
+                unfocusedIndicatorColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent,
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+            ),
+            leadingIcon = {
+                val modelSearchIcons = settings.value.displaySetting.themeIcons
+                ThemedIcon(
+                    imageVector = HugeIcons.Search01,
+                    contentDescription = null,
+                    imageUrl = modelSearchIcons.effectiveSearchImageUrl,
+                    tint = modelSearchIcons.effectiveSearchTint?.let { Color(it) },
+                    scale = modelSearchIcons.effectiveSearchScale,
+                )
+            },
+            maxLines = 1,
+        )
+    }
+
+    LazyColumn(
+        state = lazyListState,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(8.dp),
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
+    ) {
+        if (providers.isEmpty()) {
+            item {
+                Text(
+                    text = stringResource(R.string.model_list_no_providers),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.extendColors.gray6,
+                    modifier = Modifier.padding(8.dp)
+                )
+            }
+        }
+
+        if (favoriteModels.isNotEmpty()) {
+            stickyHeader {
+                Text(
+                    text = stringResource(R.string.model_list_favorite),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(bottom = 4.dp, top = 8.dp)
+                )
+            }
+
+            items(
+                items = favoriteModels,
+                key = { "favorite:" + it.first.id.toString() }
+            ) { (model, provider) ->
+                ReorderableItem(
+                    state = reorderableState,
+                    key = "favorite:" + model.id.toString()
+                ) { isDragging ->
+                    ModelItem(
+                        model = model,
+                        onSelect = onSelect,
+                        modifier = Modifier
+                            .scale(if (isDragging) 0.95f else 1f)
+                            .animateItem(),
+                        providerSetting = provider,
+                        select = model.id == currentModel,
+                        onDismiss = {
+                            onDismiss()
+                        },
+                        tail = {
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        settingsStore.update { settings ->
+                                            settings.copy(
+                                                favoriteModels = settings.favoriteModels.filter { it != model.id }
+                                            )
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    HeartIcon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        },
+                        dragHandle = {
+                            Icon(
+                                imageVector = HugeIcons.DragDropHorizontal,
+                                contentDescription = null,
+                                modifier = Modifier.longPressDraggableHandle(
+                                    onDragStarted = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                    },
+                                    onDragStopped = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                    }
+                                )
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        providers.fastForEach { providerSetting ->
+            val collapsed = isCollapsed(providerSetting)
+            stickyHeader(key = "header:${providerSetting.id}") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { toggleCollapsed(providerSetting) }
+                        .padding(horizontal = 8.dp)
+                        .padding(bottom = 4.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Icon(
+                        imageVector = if (collapsed) HugeIcons.ArrowRight01 else HugeIcons.ArrowDown01,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+
+                    Text(
+                        text = providerSetting.name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    ProviderQuotaText(
+                        providerSetting = providerSetting,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            items(
+                items = visibleModelsByProvider[providerSetting.id].orEmpty(),
+                key = { it.id }
+            ) { model ->
+                val favorite = settings.value.favoriteModels.contains(model.id)
+                ModelItem(
+                    model = model,
+                    onSelect = onSelect,
+                    modifier = Modifier.animateItem(),
+                    providerSetting = providerSetting,
+                    select = currentModel == model.id,
+                    onDismiss = {
+                        onDismiss()
+                    },
+                    tail = {
+                        IconButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    settingsStore.update { settings ->
+                                        if (favorite) {
+                                            settings.copy(
+                                                favoriteModels = settings.favoriteModels.filter { it != model.id }
+                                            )
+
+                                        } else {
+                                            settings.copy(
+                                                favoriteModels = settings.favoriteModels + model.id
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        ) {
+                            if (favorite) {
+                                Icon(
+                                    HeartIcon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = HugeIcons.Favourite,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    // 供应商Badge行
+    val providerBadgeListState = rememberLazyListState()
+    LaunchedEffect(lazyListState) {
+        // 当LazyColumn滚动时，LazyRow也跟随滚动
+        snapshotFlow { lazyListState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .debounce(100) // 防抖处理
+            .collect { index ->
+                if (index > 0) {
+                    val currentProvider = providerPositions.entries.findLast {
+                        index > it.value
+                    }
+                    val index = providers.indexOfFirst { it.id == currentProvider?.key }
+                    if (index >= 0) {
+                        providerBadgeListState.animateScrollToItem(index)
+                    } else {
+                        providerBadgeListState.requestScrollToItem(0)
+                    }
+                } else {
+                    providerBadgeListState.requestScrollToItem(0)
+                }
+            }
+    }
+    if (providers.isNotEmpty()) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 8.dp),
+            state = providerBadgeListState
+        ) {
+            items(providers) { provider ->
+                AssistChip(
+                    onClick = {
+                        val position = providerPositions[provider.id] ?: 0
+                        coroutineScope.launch {
+                            lazyListState.animateScrollToItem(position)
+                        }
+                    },
+                    label = {
+                        Text(provider.name)
+                    },
+                    leadingIcon = {
+                        AutoAIIcon(name = provider.name, modifier = Modifier.size(16.dp))
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelItem(
+    model: Model,
+    providerSetting: ProviderSetting,
+    select: Boolean,
+    onSelect: (Model) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    tail: @Composable RowScope.() -> Unit = {},
+    dragHandle: @Composable (RowScope.() -> Unit)? = null
+) {
+    val navController = LocalNavController.current
+    val interactionSource = remember { MutableInteractionSource() }
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = if (select) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+            contentColor = if (select) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        )
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp, horizontal = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .combinedClickable(
+                        enabled = true,
+                        onLongClick = {
+                            onDismiss()
+                            navController.navigate(
+                                Screen.SettingProviderDetail(
+                                    providerSetting.id.toString()
+                                )
+                            )
+                        },
+                        onClick = { onSelect(model) },
+                        interactionSource = interactionSource,
+                        indication = LocalIndication.current
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    AutoAIIcon(
+                        name = model.modelId,
+                        modifier = Modifier
+                            .padding(4.dp)
+                            .size(32.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = model.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        ModelTypeTag(model = model)
+
+                        ModelModalityTag(model = model)
+
+                        ModelAbilityTag(model = model)
+                    }
+                }
+                tail()
+            }
+            dragHandle?.let { it() }
+        }
+    }
+}
+
+@Composable
+fun ModelTypeTag(model: Model) {
+    Tag(
+        type = TagType.INFO
+    ) {
+        Text(
+            text = stringResource(
+                when (model.type) {
+                    ModelType.CHAT -> R.string.setting_provider_page_chat_model
+                    ModelType.EMBEDDING -> R.string.setting_provider_page_embedding_model
+                    ModelType.IMAGE -> R.string.setting_provider_page_image_model
+                }
+            )
+        )
+    }
+}
+
+@Composable
+fun ModelModalityTag(model: Model) {
+    Tag(
+        type = TagType.SUCCESS
+    ) {
+        model.inputModalities.fastForEach { modality ->
+            Icon(
+                imageVector = when (modality) {
+                    Modality.TEXT -> HugeIcons.Text
+                    Modality.IMAGE -> HugeIcons.Image03
+                },
+                contentDescription = null,
+                modifier = Modifier
+                    .size(LocalTextStyle.current.lineHeight.toDp())
+                    .padding(1.dp)
+            )
+        }
+        Icon(
+            imageVector = HugeIcons.ArrowRight01,
+            contentDescription = null,
+            modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp())
+        )
+        model.outputModalities.fastForEach { modality ->
+            Icon(
+                imageVector = when (modality) {
+                    Modality.TEXT -> HugeIcons.Text
+                    Modality.IMAGE -> HugeIcons.Image03
+                },
+                contentDescription = null,
+                modifier = Modifier
+                    .size(LocalTextStyle.current.lineHeight.toDp())
+                    .padding(1.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun ModelAbilityTag(model: Model) {
+    model.abilities.fastForEach { ability ->
+        when (ability) {
+            ModelAbility.TOOL -> {
+                Tag(
+                    type = TagType.WARNING
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.Tools,
+                        contentDescription = null,
+                        modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp())
+                    )
+                }
+            }
+
+            ModelAbility.REASONING -> {
+                Tag(
+                    type = TagType.INFO
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.deepthink),
+                        contentDescription = null,
+                        modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp()),
+                    )
+                }
+            }
+        }
+    }
+}

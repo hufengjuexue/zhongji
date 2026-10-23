@@ -1,0 +1,1564 @@
+package me.rerere.rikkahub.data.ai
+
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.Tool
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.Provider
+import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.StreamChunkHandler
+import me.rerere.ai.ui.handleTextGenerationResult
+import me.rerere.ai.ui.fixProxyPromotedReply
+import me.rerere.ai.ui.limitContext
+import me.rerere.ai.ui.pruneOldTransientContent
+import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
+import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
+import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
+import me.rerere.rikkahub.data.ai.transformers.RegexOutputTransformer
+import me.rerere.rikkahub.data.ai.transformers.applyStreamingRegexTail
+import me.rerere.rikkahub.data.ai.transformers.findSafeInsertIndex
+import me.rerere.rikkahub.data.files.FileFolders
+import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
+import me.rerere.rikkahub.data.ai.transformers.transforms
+import me.rerere.rikkahub.data.ai.PromptDebugCache
+import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
+import me.rerere.rikkahub.data.ai.tools.truncateForToolResult
+import me.rerere.rikkahub.data.ai.transformers.visualTransforms
+import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.ai.prompts.buildMemoryPrompt
+import me.rerere.rikkahub.data.model.MemoryFile
+import me.rerere.rikkahub.data.model.assembleContext
+import me.rerere.rikkahub.data.model.assembleCharacterCardMessages
+import me.rerere.rikkahub.data.model.assembleMainPrompt
+import me.rerere.rikkahub.data.model.buildExampleMessages
+import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.data.repository.MemoryRepository
+import java.io.File
+import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import kotlin.time.Clock
+import kotlin.uuid.Uuid
+import me.rerere.rikkahub.utils.l10n
+
+/**
+ * 本轮是否注册记忆工具（memory_tool）。
+ *
+ * 两条规则缺一不可：
+ * - 助手自身要开着记忆功能；
+ * - 非酒馆模式。
+ *
+ * 酒馆模式下不注册记忆工具，因为记忆是 App 自带的工作流，不属于原版酒馆的
+ * 上下文构成——原版酒馆没有让模型自行管理长期记忆的能力。开着它会让助手
+ * 在本该纯角色扮演的对话里主动 create/edit/delete 记忆记录，既污染上下文，
+ * 也和「酒馆模式 = 纯净请求」的定位冲突。
+ *
+ * 判定必须放在这里而不是只依赖调用方裁剪：tools 参数来自 ChatService 的
+ * 两条不同路径（handleMessageComplete 与 generateForAssistant），后者历史上
+ * 没有做酒馆裁剪，而本函数所在的一层是所有路径的公共叠加点。
+ *
+ * 抽成纯函数是为了让这条规则可单测——它此前是散在 buildList 里的内联条件，
+ * 一旦被改动没有任何测试会发现。
+ */
+private const val TAG = "GenerationHandler"
+private const val MAX_EMPTY_RESPONSE_RETRIES = 3
+private const val ROLLING_CONTEXT_SYSTEM_PROMPT =
+    "The following is a rolling summary of earlier conversation turns. Use it as context, " +
+        "but follow the latest messages when they differ:\n<rolling_context_summary>"
+private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
+private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
+
+// 搜索结果的体积由用户设置的结果数决定，且结果列表 UI 与引用跳转都依赖完整的 JSON 结构，不参与截断
+private val TOOLS_WITHOUT_OUTPUT_TRUNCATION = setOf("search_web")
+private const val MAX_PROVIDER_NETWORK_RETRIES = 3
+private const val INITIAL_PROVIDER_RETRY_DELAY_MS = 1_000L
+
+private class StreamChunkHandlingException(cause: Throwable) : RuntimeException(cause)
+
+@Serializable
+sealed interface GenerationChunk {
+    data class Messages(
+        val messages: List<UIMessage>
+    ) : GenerationChunk
+}
+
+class GenerationLoop(
+    private val context: Context,
+    private val providerManager: ProviderManager,
+    private val json: Json,
+    private val memoryRepo: MemoryRepository,
+    private val conversationRepo: ConversationRepository,
+    private val pluginToolProvider: me.rerere.rikkahub.plugin.provider.PluginToolProvider,
+) {
+    fun generateText(
+        settings: Settings,
+        model: Model,
+        messages: List<UIMessage>,
+        inputTransformers: List<InputMessageTransformer> = emptyList(),
+        outputTransformers: List<OutputMessageTransformer> = emptyList(),
+        assistant: Assistant,
+        memories: List<MemoryFile>? = null,
+        tools: List<Tool> = emptyList(),
+        conversationModeInjectionIds: Set<Uuid> = emptySet(),
+        conversationLorebookIds: Set<Uuid> = emptySet(),
+        maxSteps: Int = 256,
+        processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+        conversationSystemPrompt: String? = null,
+        conversationId: Uuid? = null,
+        workspaceCwd: String? = null,
+        generationType: me.rerere.rikkahub.data.model.GenerationType = me.rerere.rikkahub.data.model.GenerationType.NORMAL,
+        maxTokensOverride: Int? = null,
+        // 上下文滚动压缩：摘要内容 + 请求窗口起始索引（该索引之前的消息由摘要替代）
+        rollingContextSummary: String? = null,
+        requestMessageStartIndex: Int = 0,
+    ): Flow<GenerationChunk> = flow {
+        val provider = model.findProvider(settings.providers) ?: error("Provider not found")
+        val providerImpl = providerManager.getProviderByType(provider)
+
+        var messages: List<UIMessage> = messages
+
+    fun describeTool(name: String): String = when {
+        name.startsWith("execute_python") -> l10n("🔧 Python → 正在执行代码...", "🔧 Python → Running code...")
+        name.startsWith("execute_command") -> l10n("🔧 Shell → 正在执行命令...", "🔧 Shell → Running command...")
+        name == "file" -> l10n("🔧 文件 → 正在操作...", "🔧 Files → Working...")
+        name.startsWith("database_") -> l10n("🔧 数据库 → 正在查询...", "🔧 Database → Querying...")
+        name.startsWith("search_web") || name.startsWith("scrape_") -> l10n("🔧 搜索 → 正在搜索...", "🔧 Search → Searching...")
+        name.startsWith("use_skill") -> l10n("🔧 知识 → 正在读取...", "🔧 Knowledge → Reading...")
+        name.startsWith("clipboard") -> l10n("🔧 剪贴板 → 正在操作...", "🔧 Clipboard → Working...")
+        name.startsWith("get_time") -> l10n("🔧 时间 → 获取中...", "🔧 Time → Fetching...")
+        name.startsWith("text_to_speech") -> l10n("🔧 语音 → 正在朗读...", "🔧 Speech → Speaking...")
+        name.startsWith("present_file") -> l10n("🔧 文件 → 正在分享...", "🔧 Files → Sharing...")
+        name.startsWith("eval_javascript") -> l10n("🔧 JS → 正在执行...", "🔧 JS → Running...")
+        name.startsWith("memory_") -> l10n("🔧 记忆 → 正在处理...", "🔧 Memory → Processing...")
+        name == "delegate_agent" -> l10n("🤖 子 agent → 已派发到后台...", "🤖 Sub-agent → Dispatched to background...")
+        name == "check_subagent" -> l10n("🤖 子 agent → 正在取回结果...", "🤖 Sub-agent → Fetching result...")
+            else -> l10n("🔧 $name → 正在处理...", "🔧 $name → Working...")
+    }
+
+    /**
+     * 缓存 system prompt（循环不变，避免每步重建 PromptContext + tool.systemPrompt）
+     */
+    suspend fun buildCachedSystemPrompt(
+        assistant: Assistant,
+        settings: Settings,
+        messages: List<UIMessage>,
+        memories: List<MemoryFile>,
+        conversationSystemPrompt: String?,
+        tools: List<Tool>,
+        model: Model,
+        context: android.content.Context,
+        conversationRepo: me.rerere.rikkahub.data.repository.ConversationRepository,
+    ): List<UIMessage> {
+        val activePersona = settings.personas
+            .find { it.id == settings.activePersonaId }
+            ?.takeIf { it.enabled && (it.lockedCharacterIds.isEmpty() || assistant.id in it.lockedCharacterIds) }
+        val personaDesc = activePersona?.description?.takeIf { it.isNotBlank() } ?: ""
+        // 官方：人设只在 IN_PROMPT 位置通过 {{persona}} 嵌入系统提示词，其余位置由独立消息注入
+        val personaDescForPrompt = if (activePersona?.position == me.rerere.rikkahub.data.model.PersonaInjectionPosition.IN_PROMPT) {
+            personaDesc
+        } else {
+            ""
+        }
+        val userName = settings.displaySetting.userNickname.ifBlank { "User" }
+
+        // 官方 Chat Completion 结构：默认模板的角色卡拆成独立消息（主提示 + 角色卡字段）
+        // 默认模板（空 或 与内置默认完全一致）才按官方拆分；contextTemplate 无 UI 入口，
+        // 默认值就是内置模板文本，因此绝大多数角色卡都走官方拆分
+        val useOfficialSplit = assistant.tavernData != null &&
+            (assistant.contextTemplate.isBlank() ||
+                assistant.contextTemplate.trim() == me.rerere.rikkahub.data.model.DEFAULT_CONTEXT_TEMPLATE)
+        val conversationOverride = assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()
+
+        // 收集插件系统提示词。
+        // 酒馆模式下同样注入：插件是用户主动安装的注入内容，属于用户明确要发送的东西，
+        // 与 App 自带的工作流（记忆/技能/工作空间）性质不同，必须保留，
+        // 否则酒馆模式一开、依赖插件注入的功能就会失效。
+        val tavernMode = settings.huadengSettings.enableTavernMode
+        val pluginSystemPromptText = run {
+            val pluginPrompts = pluginToolProvider.getPluginSystemPrompts()
+            if (pluginPrompts.isEmpty()) "" else pluginPrompts.joinToString("\n\n")
+        }
+        if (pluginSystemPromptText.isNotBlank()) {
+            Log.i(TAG, "buildCachedSystemPrompt: plugin system prompt injected (${pluginSystemPromptText.length} chars)")
+        }
+
+        val mainIdentity = if (conversationOverride) {
+            conversationSystemPrompt
+        } else if (useOfficialSplit) {
+            // 官方默认 Main Prompt：角色卡没有 system_prompt 时必须明确"下一句由角色回复"，
+            // 否则模型只能靠内容猜角色——/sendas 等插入助手消息后会把角色认反
+            assistant.assembleMainPrompt().ifBlank {
+                "Write ${assistant.name}'s next reply in a fictional chat between ${assistant.name} and $userName."
+            }
+        } else if (assistant.tavernData != null) {
+            assistant.assembleContext(userName = userName, personaDesc = personaDescForPrompt)
+        } else {
+            assistant.systemPrompt
+        }
+
+        // 工具路由说明按实际注册的工具裁剪：纯聊天助手（角色卡/记忆场景，无任何工具）
+        // 不该背 ~230 tokens 的工具指引，还会被误导去调用不存在的 web_search/execute_python
+        val toolNames = tools.map { it.name }.toSet()
+        fun hasTool(vararg prefixes: String) = toolNames.any { name -> prefixes.any { name.startsWith(it) } }
+        val hasShell = hasTool("execute_command", "workspace_shell")
+        val hasPython = hasTool("execute_python")
+        val hasCalculator = hasTool("calculator")
+        val routingLines = buildList {
+            if (hasTool("workspace_read", "workspace_write")) add("Workspace files → workspace_read/write/edit (/workspace/...)")
+            if (hasTool("workspace_shell")) add("Workspace shell → workspace_shell (git, builds, Unix tools in sandbox)")
+            if (hasTool("file")) add("Device files → file action=\"read/write/patch/list/search/copy/move/delete\" (Download/skills dirs)")
+            if (hasTool("execute_command")) add("Device shell → execute_command (shell operations, process management, system tools)")
+            if (hasPython) add("Python → execute_python (data processing, API)")
+            if (hasCalculator) add("Math → calculator${if (hasPython) " (NOT execute_python)" else ""}")
+            if (hasTool("web_search", "search_", "scrape_")) add("Web → web_search / web_fetch")
+            if (hasTool("memory_tool", "memory_")) add("Memory → memory_tool")
+        }
+        val ethicLines = buildList {
+            add("❌ Do NOT describe what you will do — just do it")
+            add("❌ Do NOT stop after writing a stub — complete then report")
+            add("❌ Do NOT fabricate results — if a tool fails, say so")
+            if (hasShell) add("❌ Do NOT use shell when a dedicated tool exists")
+            if (hasPython && hasCalculator) add("❌ Do NOT use execute_python for math (use calculator)")
+            if (hasTool("ask_user")) add("✅ If you need user input, use ask_user directly")
+        }
+        val assemblerContext = me.rerere.rikkahub.data.ai.prompts.PromptContext(
+            identitySection = mainIdentity,
+            // 酒馆模式：工具路由与工作伦理区全部去掉，只留角色卡本身
+            leadInInstructions = if (tavernMode || routingLines.isEmpty()) "" else buildString {
+                appendLine("<tool_selection>")
+                routingLines.forEach { appendLine(it) }
+                appendLine("</tool_selection>")
+                appendLine()
+                appendLine("<work_ethic>")
+                ethicLines.forEach { appendLine(it) }
+                appendLine("</work_ethic>")
+                appendLine()
+            },
+            workspaceDescription = if (!tavernMode && hasTool("workspace_read", "workspace_write", "workspace_shell")) {
+                "Working directory: ${context.filesDir?.absolutePath ?: "."}"
+            } else "",
+            extraInstructions = pluginSystemPromptText,
+            // 提示词缓存：Recent Chats 每天变化且列表随其他会话活动移动，
+            // 放在系统提示（前缀最顶部）会打断全部缓存，已挪到上下文尾部（buildUserContext）
+            constraints = emptyList(),
+        )
+        val system = me.rerere.rikkahub.data.ai.prompts.SystemPromptAssembler.assemble(assemblerContext)
+        val mainText = buildString {
+            append(system)
+            // 酒馆模式：工具的 systemPrompt 段全部不发，工具仍有 JSON schema 可用
+            if (!tavernMode) {
+                tools.forEach { tool ->
+                    appendLine()
+                    append(tool.systemPrompt(model, messages))
+                }
+            }
+        }
+        return buildList {
+            if (mainText.isNotBlank()) {
+                add(UIMessage.system(prompt = mainText))
+            }
+            // 官方拆分：角色卡字段独立消息（charDescription/charPersonality/scenario，世界书 before/after char 锚点）
+            if (useOfficialSplit && !conversationOverride) {
+                addAll(assistant.assembleCharacterCardMessages())
+            }
+        }
+    }
+
+    // ── 预构建：tools + systemPrompt（循环不变，移到外面）──
+    val toolsInternal = buildList {
+        Log.i(TAG, "generateInternal: build tools($assistant)")
+        // 酒馆模式：本层是全部生成路径的公共叠加点，必须兜底裁剪。
+        // 不保留工具时整组清空；保留时只留酒馆基础工具面（插件 + 文件/搜索/抓取/计算器），
+        // 记忆、技能、MCP、工作空间等 App 工作流工具一律不进请求。
+        addAll(tools)
+        if (settings.huadengSettings.enableTavernMode) {
+            if (settings.huadengSettings.tavernModeKeepTools) {
+                retainAll { it.name.isTavernBaseTool() }
+            } else {
+                clear()
+            }
+        }
+        // 便于核对酒馆模式的实际工具面：把最终注册的工具名列出来。
+        // 排查「记忆工具为何还在」这类问题时，这一行直接给出答案。
+        if (settings.huadengSettings.enableTavernMode) {
+            Log.i(TAG, "tavern mode tools: ${if (isEmpty()) "(none)" else joinToString(", ") { it.name }}")
+        }
+    }
+    val statusTrackedTools = toolsInternal.map { tool ->
+        if (tool.name == "ask_user") tool else tool.copy(
+            execute = { args ->
+                processingStatus.value = describeTool(tool.name)
+                try {
+                    val result = tool.execute(args)
+                    processingStatus.value = null
+                    result
+                } catch (e: Exception) {
+                    processingStatus.value = null
+                    throw e
+                }
+            }
+        )
+    }
+    // ── 预构建：system 消息列表（循环不变，移到外面）──
+    val prebuiltSystemMessages = buildCachedSystemPrompt(assistant, settings, messages, memories ?: emptyList(), conversationSystemPrompt, tools, model, context, conversationRepo)
+
+    // Recent Chats 每轮只构建一次（agentic 循环每步复用）：底层查询会反序列化 10 个会话的
+    // 全部消息节点，每步重查是纯浪费；内容精度只到日期，单轮内复用完全安全
+    val prebuiltRecentChats = if (assistant.enableRecentChatsReference) {
+        buildRecentChatsPrompt(assistant, conversationRepo, excludeConversationId = conversationId)
+    } else ""
+
+    // 流式期间正则改由 applyStreamingRegexTail 只跑正在生成的最后一条，避免整段历史逐 chunk 重算
+    val streamingTransformers = outputTransformers.filterNot { it is RegexOutputTransformer }
+
+    for (stepIndex in 0 until maxSteps) {
+            Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
+
+            // Check if we have tool calls ready to continue after user interaction.
+            val pendingTools = messages.lastOrNull()?.getTools()?.filter {
+                it.canResumeExecution
+            } ?: emptyList()
+
+            val toolsToProcess: List<UIMessagePart.Tool>
+
+            // Skip generation if we have approved/denied tool calls to handle
+            if (pendingTools.isEmpty()) {
+                generateInternal(
+                    assistant = assistant,
+                    settings = settings,
+                    messages = messages,
+                    onUpdateMessages = {
+                        messages = it.transforms(
+                            transformers = outputTransformers,
+                            context = context,
+                            model = model,
+                            assistant = assistant,
+                            settings = settings,
+                            conversationId = conversationId,
+                            workspaceCwd = workspaceCwd,
+                        )
+                        emit(
+                            GenerationChunk.Messages(
+                                messages.visualTransforms(
+                                    transformers = streamingTransformers,
+                                    context = context,
+                                    model = model,
+                                    assistant = assistant,
+                                    settings = settings,
+                                    conversationId = conversationId,
+                                    workspaceCwd = workspaceCwd,
+                                ).applyStreamingRegexTail(
+                                    assistant = assistant,
+                                    conversationId = conversationId,
+                                    globalRegexes = settings.globalRegexes,
+                                )
+                            )
+                        )
+                    },
+                    transformers = inputTransformers,
+                    model = model,
+                    providerImpl = providerImpl,
+                    provider = provider,
+                    tools = statusTrackedTools,
+                    memories = memories ?: emptyList(),
+                    stream = assistant.streamOutput,
+                    processingStatus = processingStatus,
+                    conversationSystemPrompt = conversationSystemPrompt,
+                    conversationId = conversationId,
+                    conversationModeInjectionIds = conversationModeInjectionIds,
+                    conversationLorebookIds = conversationLorebookIds,
+                    prebuiltSystemMessages = prebuiltSystemMessages,
+                    prebuiltRecentChats = prebuiltRecentChats,
+                    workspaceCwd = workspaceCwd,
+                    generationType = generationType,
+                    maxTokensOverride = maxTokensOverride,
+                    requestMessageStartIndex = requestMessageStartIndex,
+                    rollingContextSummary = rollingContextSummary,
+                )
+                messages = messages.visualTransforms(
+                    transformers = outputTransformers,
+                    context = context,
+                    model = model,
+                    assistant = assistant,
+                    settings = settings,
+                    conversationId = conversationId,
+                    workspaceCwd = workspaceCwd,
+                )
+                messages = messages.onGenerationFinish(
+                    transformers = outputTransformers,
+                    context = context,
+                    model = model,
+                    assistant = assistant,
+                    settings = settings,
+                    conversationId = conversationId,
+                    workspaceCwd = workspaceCwd,
+                )
+                messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
+                    finishedAt = Clock.System.now()
+                        .toLocalDateTime(TimeZone.currentSystemDefault())
+                )
+                emit(GenerationChunk.Messages(messages))
+
+                var toolCalls = messages.last().getTools().filter { !it.isExecuted }
+                // 兜底：部分模型/中转站不走 function calling，而在文本里输出 DSML 格式的工具调用
+                // 仅在没有真实 tool call 时触发，对正常模型零开销
+                if (toolCalls.isEmpty()) {
+                    val textContent = messages.last().parts.filterIsInstance<UIMessagePart.Text>().joinToString("") { it.text }
+                    val dsmlCalls = parseDsmlToolCalls(textContent, toolsInternal.mapTo(HashSet()) { it.name })
+                    if (dsmlCalls.isNotEmpty()) {
+                        Log.w(TAG, "Parsed ${dsmlCalls.size} DSML tool calls from text output")
+                        // 把文本中的 DSML 标记替换为干净的说明，保留其余正文
+                        val cleanedText = cleanDsmlFromText(textContent)
+                        val lastMsg = messages.last()
+                        val cleanedParts = if (cleanedText.isNotBlank()) {
+                            lastMsg.parts.map { if (it is UIMessagePart.Text) it.copy(text = cleanedText) else it }
+                        } else {
+                            lastMsg.parts.filter { it !is UIMessagePart.Text }
+                        }
+                        messages = messages.dropLast(1) + lastMsg.copy(parts = cleanedParts + dsmlCalls)
+                        toolCalls = dsmlCalls
+                    }
+                }
+                if (toolCalls.isEmpty()) {
+                    break
+                }
+
+                // 中转站兼容：部分中转站对同一 tool name 返回相同 toolCallId，
+                // 流式模式下参数被拼接成 {json1}{json2}，这里拆分并分配新 ID
+                val expandedToolCalls = toolCalls.flatMap { tool ->
+                    val input = tool.input
+                    if (input.length <= 2 || !input.startsWith("{")) {
+                        listOf(tool)
+                    } else {
+                        // 尝试检测拼接的多个 JSON 对象
+                        val splits = splitConcatenatedJsonArgs(input)
+                        if (splits.size <= 1) {
+                            listOf(tool)
+                        } else {
+                            Log.w(TAG, "Splitting concatenated tool args: ${tool.toolName} (${splits.size} parts)")
+                            splits.mapIndexed { index, arg ->
+                                tool.copy(
+                                    toolCallId = "${tool.toolCallId}_$index",
+                                    input = arg,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 1. Deduplicate tools: same (toolName, input) only execute once
+                val seenTools = mutableSetOf<Pair<String, String>>()
+                val uniqueTools = expandedToolCalls.filter { tool ->
+                    val key = tool.toolName to tool.input
+                    if (key in seenTools) {
+                        Log.w(TAG, "Deduplicated duplicate tool call: ${tool.toolName}")
+                        false
+                    } else {
+                        seenTools.add(key)
+                        true
+                    }
+                }
+
+                // Check for tools that need approval
+                var hasPendingApproval = false
+                val updatedTools = uniqueTools.map { tool ->
+                    val toolDef = statusTrackedTools.find { it.name == tool.toolName }
+                    when {
+                        // HITL 工具（ask_user）必须等用户回答：优先于"自动批准"判定，
+                        // 否则自动批准会把它当普通工具放行，问答流被打断
+                        mustWaitForUser(tool.toolName, tool.approvalState) -> {
+                            hasPendingApproval = true
+                            tool.copy(approvalState = ToolApprovalState.Pending)
+                        }
+                        // 安全设置：自动批准所有工具调用（绕过单工具审批判定）
+                        settings.securitySetting.autoApproveAllTools &&
+                            tool.approvalState is ToolApprovalState.Auto -> tool
+                        // Tool needs approval and state is Auto -> set to Pending
+                        // 安全设置：强制确认所有工具调用（无视单工具的 needsApproval）
+                        (toolDef?.needsApproval(tool.inputAsJson()) == true || settings.securitySetting.forceConfirmToolCalls) &&
+                            tool.approvalState is ToolApprovalState.Auto -> {
+                            hasPendingApproval = true
+                            tool.copy(approvalState = ToolApprovalState.Pending)
+                        }
+                        // State is Pending -> keep waiting
+                        tool.approvalState is ToolApprovalState.Pending -> {
+                            hasPendingApproval = true
+                            tool
+                        }
+
+                        else -> tool
+                    }
+                }
+
+                // If any tools were updated to Pending, update the message and break
+                if (updatedTools != uniqueTools) {
+                    val lastMessage = messages.last()
+                    val updatedParts = lastMessage.parts.map { part ->
+                        if (part is UIMessagePart.Tool) {
+                            updatedTools.find { it.toolCallId == part.toolCallId } ?: part
+                        } else {
+                            part
+                        }
+                    }
+                    messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
+                    emit(GenerationChunk.Messages(messages))
+                }
+
+                // 3. Guardrail: same tool called N+ times in one batch → break
+                if (!hasPendingApproval) {
+                    val toolNameCount = updatedTools.groupingBy { it.toolName }.eachCount()
+                    val looped = toolNameCount.entries.find { it.value >= assistant.toolRecurringLimit }
+                    if (looped != null) {
+                        Log.w(TAG, "Guardrail: ${looped.key} called ${looped.value} times in one batch, breaking")
+                        break
+                    }
+                }
+
+                // If there are pending approvals, break and wait for user
+                if (hasPendingApproval) {
+                    Log.i(TAG, "generateText: waiting for tool approval")
+                    break
+                }
+
+                toolsToProcess = updatedTools
+            } else {
+                // Resuming after user interaction - use the resumable tools directly.
+                Log.i(TAG, "generateText: resuming with ${pendingTools.size} resumable tools")
+                toolsToProcess = messages.last().getTools().filter { it.canResumeExecution }
+            }
+
+            // Handle tools (execute approved tools, handle denied tools)
+            val executedTools = arrayListOf<UIMessagePart.Tool>()
+            val isParallel = assistant.enableParallelToolExecution && toolsToProcess.size > 1
+            // 工具结果进入历史后每轮重复计费：超长输出截断并落盘（shell 可用时模型可自行读取全文）
+            val hasShellAccess = toolsInternal.any { it.name == "execute_command" }
+            fun truncateToolResult(result: Result<UIMessagePart.Tool>): Result<UIMessagePart.Tool> =
+                if (settings.huadengSettings.enableToolResultTruncation) {
+                    result.map { it.copy(output = maybeTruncateToolOutput(it, it.output, hasShellAccess)) }
+                } else {
+                    result
+                }
+
+            if (isParallel) {
+                // 并行执行所有工具
+                coroutineScope {
+                    val deferreds = toolsToProcess.map { tool ->
+                        async {
+                            tool to runCatching {
+                                kotlinx.coroutines.withTimeout(assistant.toolExecTimeout * 1000L) {
+                                    executeToolCall(tool, toolsInternal, json)
+                                }
+                            }
+                        }
+                    }
+                    deferreds.forEach { deferred ->
+                        val (tool, result) = deferred.await()
+                        addToolResult(executedTools, tool, truncateToolResult(result), json)
+                    }
+                }
+            } else {
+                // 顺序执行（原版行为）
+                toolsToProcess.forEach { tool ->
+                    val result = runCatching {
+                        kotlinx.coroutines.withTimeout(assistant.toolExecTimeout * 1000L) {
+                            executeToolCall(tool, toolsInternal, json)
+                        }
+                    }
+                    addToolResult(executedTools, tool, truncateToolResult(result), json)
+                }
+            }
+
+            if (executedTools.isEmpty()) {
+                // No results to add (all tools were pending)
+                break
+            }
+
+            // Update last message with executed tools (NOT create TOOL message)
+            val lastMessage = messages.last()
+            val updatedParts = lastMessage.parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    executedTools.find { it.toolCallId == part.toolCallId } ?: part
+                } else part
+            }
+            messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
+            emit(
+                GenerationChunk.Messages(
+                    messages.transforms(
+                        transformers = outputTransformers,
+                        context = context,
+                        model = model,
+                        assistant = assistant,
+                        settings = settings,
+                        conversationId = conversationId,
+                        workspaceCwd = workspaceCwd,
+                    )
+                )
+            )
+        }
+
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun generateInternal(
+        assistant: Assistant,
+        settings: Settings,
+        messages: List<UIMessage>,
+        onUpdateMessages: suspend (List<UIMessage>) -> Unit,
+        transformers: List<MessageTransformer>,
+        model: Model,
+        providerImpl: Provider<ProviderSetting>,
+        provider: ProviderSetting,
+        tools: List<Tool>,
+        memories: List<MemoryFile>,
+        stream: Boolean,
+        processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+        conversationSystemPrompt: String? = null,
+        conversationModeInjectionIds: Set<Uuid> = emptySet(),
+        conversationLorebookIds: Set<Uuid> = emptySet(),
+        prebuiltSystemMessages: List<UIMessage> = emptyList(),
+        workspaceCwd: String? = null,
+        conversationId: Uuid? = null,
+        generationType: me.rerere.rikkahub.data.model.GenerationType = me.rerere.rikkahub.data.model.GenerationType.NORMAL,
+        maxTokensOverride: Int? = null,
+        requestMessageStartIndex: Int = 0,
+        rollingContextSummary: String? = null,
+        prebuiltRecentChats: String = "",
+    ) {
+        // 滚动压缩：请求窗口从摘要覆盖范围之后开始；UI/工具循环仍使用完整消息列表
+        val requestMessages = if (requestMessageStartIndex > 0) {
+            messages.drop(requestMessageStartIndex.coerceIn(0, messages.size))
+        } else {
+            messages
+        }
+        val limitedChat = requestMessages.limitContext(assistant.contextMessageLimit)
+        // 酒馆模式：请求中只保留原版酒馆的上下文构成（角色卡/世界书/示例消息/作者注释）
+        val tavernMode = settings.huadengSettings.enableTavernMode
+        // 收集插件系统提示词（suspend 调用，需在 coroutine 上下文中）
+        val pluginSystemPromptText = run {
+            val pluginPrompts = pluginToolProvider.getPluginSystemPrompts()
+            if (pluginPrompts.isEmpty()) "" else pluginPrompts.joinToString("\n\n")
+        }
+        val internalMessages = buildList {
+            // 延迟构建：prebuiltSystemMessages 几乎总是非空，fallback 每步白算一遍是纯浪费
+            val fallbackSystem = { buildString {
+                // ── s10: 使用 SystemPromptAssembler 替代硬编码 ──
+                val assemblerContext = me.rerere.rikkahub.data.ai.prompts.PromptContext(
+                identitySection = buildString {
+                    val effectiveSystemPrompt =
+                        if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                            conversationSystemPrompt
+                        } else {
+                            val fallbackPersona = settings.personas
+                                .find { it.id == settings.activePersonaId }
+                                ?.takeIf { it.enabled && (it.lockedCharacterIds.isEmpty() || assistant.id in it.lockedCharacterIds) }
+                            val fallbackPersonaDesc = fallbackPersona?.description?.takeIf { it.isNotBlank() } ?: ""
+                            val fallbackPersonaForPrompt =
+                                if (fallbackPersona?.position == me.rerere.rikkahub.data.model.PersonaInjectionPosition.IN_PROMPT) {
+                                    fallbackPersonaDesc
+                                } else {
+                                    ""
+                                }
+                            if (assistant.tavernData != null) {
+                                assistant.assembleContext(
+                                    userName = settings.displaySetting.userNickname.ifBlank { "User" },
+                                    personaDesc = fallbackPersonaForPrompt,
+                                )
+                            } else {
+                                assistant.systemPrompt
+                            }
+                        }
+                    append(effectiveSystemPrompt)
+                },
+                // 酒馆模式：工具路由与工作伦理区不发，与 buildCachedSystemPrompt
+                // 的 253 行保持一致。此前这里是硬编码的，无论什么模式都发，
+                // 一旦走到 fallback 路径，酒馆模式就会多背这 193 字符。
+                leadInInstructions = if (tavernMode) ""
+                else buildString {
+                    appendLine("Guidelines:")
+                    appendLine("- Prefer dedicated tools over shell commands for file operations")
+                    appendLine("- When a tool fails, try an alternative approach before giving up")
+                    appendLine("- If you need clarification, ask the user directly")
+                },
+                // 原先无条件写入工作目录。但那 89 字符对没有 workspace 工具的会话
+                // 毫无用处——模型拿不到任何能读写该路径的工具，路径只是白占上下文。
+                // 与 buildCachedSystemPrompt 的 239 行保持一致：只在确有 workspace
+                // 工具且非酒馆模式时才给。
+                workspaceDescription = if (!tavernMode && tools.any { t ->
+                        t.name.startsWith("workspace_")
+                    }
+                ) {
+                    "Working directory: ${context.filesDir?.absolutePath ?: "."}"
+                } else "",
+                extraInstructions = pluginSystemPromptText,
+                // 提示词缓存：Recent Chats 已挪到上下文尾部（buildUserContext）
+                constraints = emptyList(),
+            )
+            val system = me.rerere.rikkahub.data.ai.prompts.SystemPromptAssembler.assemble(assemblerContext)
+
+            // ── 工具prompt（追加在 assembler 结果之后）──
+            append(system)
+            // 酒馆模式：工具的 systemPrompt 段全部不发（工具仍有 JSON schema 可用）。
+            // 必须与 buildCachedSystemPrompt 的同名处理保持一致——那处一直是带
+            // tavernMode 判断的，这里此前漏了，导致走 fallback 路径时酒馆模式
+            // 仍会把全部工具的系统提示词拼进 system，纯净请求不成立。
+            if (!tavernMode) {
+                tools.forEach { tool ->
+                    appendLine()
+                    append(tool.systemPrompt(model, messages))
+                }
+            }
+            }
+            }
+            if (prebuiltSystemMessages.isNotEmpty()) {
+                addAll(prebuiltSystemMessages)
+            } else if (fallbackSystem().isNotBlank()) {
+                add(UIMessage.system(prompt = fallbackSystem()))
+            }
+
+            // 记忆（上游语义）：按文件组织的记忆库内容注入 system
+            if (assistant.enableMemory && !tavernMode && !memories.isNullOrEmpty()) {
+                add(
+                    UIMessage.system(prompt = buildMemoryPrompt(memories)).copy(isSynthetic = true)
+                )
+            }
+
+            // ── 上下文滚动压缩摘要：作为 system 消息注入，替代被覆盖的早期前缀 ──
+            // 酒馆模式：摘要属于"工作流产物"，不发，避免干扰纯净上下文
+            if (!tavernMode && !rollingContextSummary.isNullOrBlank()) {
+                add(UIMessage.system(prompt = ROLLING_CONTEXT_SYSTEM_PROMPT + "\n" + rollingContextSummary + "\n</rolling_context_summary>"))
+            }
+
+            // ── 官方 mes_example：作为示例消息注入（story string 之后、聊天历史之前）──
+            // 酒馆模式：角色卡自带内容，保留（属于用户明确要发送的部分）
+            if (assistant.tavernData != null) {
+                addAll(
+                    assistant.buildExampleMessages(
+                        userName = settings.displaySetting.userNickname.ifBlank { "User" }
+                    )
+                )
+            }
+
+            // ── 提示词缓存：动态上下文（记忆全量 + 日期 + Recent Chats）冻结锚点注入 ──
+            // 记忆/日期/Recent Chats 放前缀区会打断静态前缀；放尾部又会随历史追加而后移
+            // （位置移动 = token 流在它上次出现的位置分叉）。冻结策略见 UserContextAnchorCache：
+            // 内容不变时钉在首次出现的位置，历史纯追加；内容变化时旧块原位保留、新块追加尾部，
+            // token 前缀仍然可命中。临时会话（无 conversationId）退化为尾部注入。
+            val recentChats = prebuiltRecentChats
+            // 酒馆模式：日期 / Recent Chats 一律不发（记忆已由 buildMemoryPrompt 消息承担）
+            val userContext = if (tavernMode) "" else buildUserContext(recentChats)
+            // 锚点缓存里可能残留上一个模式注入的块（记忆/日期/Recent Chats）。
+            // userContext 置空只是不再新增，旧块仍会被下面的循环按 afterMessageId 命中并注入，
+            // 表现为「关掉酒馆模式之外仍收到近期对话」。此处显式清空以保证语义一致。
+            if (tavernMode) {
+                conversationId?.let { UserContextAnchorCache.getOrCreate(it).blocks.clear() }
+            }
+            // 华灯：上下文瞬态内容裁剪——两轮之前的网页搜索结果/图片/音视频不再随请求发送
+            //（占位说明带消息 ID，AI 可用 read_history_message 取回），存储与 UI 不受影响
+            val requestChat = if (settings.huadengSettings.enableTransientContentPrune) {
+                limitedChat.pruneOldTransientContent()
+            } else {
+                limitedChat
+            }
+            val namedChat = requestChat.withMessageNames()
+            val anchor = conversationId?.let { UserContextAnchorCache.getOrCreate(it) }
+            if (anchor != null) {
+                // 锚点消息全部还在窗口内才冻结；被截断/分支切换则重置（与截断同一事件失效）
+                val anchorsValid = anchor.blocks.all { block ->
+                    block.afterMessageId == null || namedChat.any { it.id == block.afterMessageId }
+                }
+                if (!anchorsValid) anchor.blocks.clear()
+                if (userContext.isNotBlank() && anchor.blocks.lastOrNull()?.text != userContext) {
+                    anchor.blocks += UserContextAnchorCache.Block(userContext, namedChat.lastOrNull()?.id)
+                    // 块数上限：旧块原位冻结供后续请求命中前缀（每轮丢旧块 = 前缀每轮
+                    // 在锚点处分叉，缓存失效）。超限才丢最旧块：RAG 用户块只在日期/
+                    // Recent Chats 变化时追加，几乎不会触顶；非 RAG 用户每几轮一次
+                    // 深处分叉，好过每轮分叉
+                    while (anchor.blocks.size > MAX_ANCHOR_BLOCKS) {
+                        anchor.blocks.removeAt(0)
+                    }
+                }
+                var blockIndex = 0
+                for (message in namedChat) {
+                    add(message)
+                    while (blockIndex < anchor.blocks.size &&
+                        anchor.blocks[blockIndex].afterMessageId == message.id
+                    ) {
+                        add(UIMessage.system(prompt = anchor.blocks[blockIndex].text))
+                        blockIndex++
+                    }
+                }
+                // 无锚点消息的块（空历史时创建）兜底放最后
+                while (blockIndex < anchor.blocks.size) {
+                    val block = anchor.blocks[blockIndex++]
+                    if (block.afterMessageId == null) {
+                        add(UIMessage.system(prompt = block.text))
+                    }
+                }
+            } else {
+                addAll(namedChat)
+                if (userContext.isNotBlank()) {
+                    add(UIMessage.system(prompt = userContext))
+                }
+            }
+        }.let { base ->
+            val persona = settings.personas.find { it.id == settings.activePersonaId }
+            // 酒馆模式：用户 Persona 属于用户明确设定的人物信息，保留；
+            // 但它不应带 WorkflowInjection 之类的附加块（在 Persona 描述里，此处无法拆分，整体保留）
+            if (persona != null && persona.enabled && persona.description.isNotBlank() &&
+                (persona.lockedCharacterIds.isEmpty() || assistant.id in persona.lockedCharacterIds)
+            ) {
+                val personaText = "[User Persona]\n${persona.description}"
+                when (persona.position) {
+                    me.rerere.rikkahub.data.model.PersonaInjectionPosition.IN_PROMPT -> {
+                        // 官方拆分路径（主提示词不含人设）才注入独立 SYSTEM 消息；
+                        // 自定义上下文模板已通过 {{persona}} 嵌入时不重复注入
+                        val template = assistant.contextTemplate.ifBlank { me.rerere.rikkahub.data.model.DEFAULT_CONTEXT_TEMPLATE }
+                        val useOfficialSplit = assistant.tavernData != null &&
+                            (assistant.contextTemplate.isBlank() ||
+                                assistant.contextTemplate.trim() == me.rerere.rikkahub.data.model.DEFAULT_CONTEXT_TEMPLATE)
+                        val conversationOverride =
+                            assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()
+                        val embedded = assistant.tavernData != null && !useOfficialSplit && !conversationOverride &&
+                            template.contains("{{persona}}")
+                        if (!embedded) {
+                            // 官方顺序（promptManagerDefaultPromptOrder）：人设位于 before_char 世界书之后、角色卡字段之前
+                            val cardStart = base.indexOfFirst { msg ->
+                                msg.annotations.any { it is me.rerere.ai.ui.UIMessageAnnotation.CharacterCardData }
+                            }
+                            val idx = if (cardStart >= 0) cardStart
+                            else (base.indexOfLast { it.role == MessageRole.SYSTEM } + 1).coerceAtLeast(0)
+                            base.take(idx) + UIMessage.system(personaText) + base.drop(idx)
+                        } else {
+                            base
+                        }
+                    }
+
+                    me.rerere.rikkahub.data.model.PersonaInjectionPosition.AT_DEPTH -> {
+                        val depth = persona.depth.coerceAtLeast(0)
+                        // 按用户轮冻结锚点：base 每步追加消息，若每步重算深度位置，
+                        // 人设注入点每步后移一格、脱离步骤 1 已缓存的前缀。
+                        // 首步记下锚点消息 id，后续步骤按 id 复位（锚点被裁剪才重算）
+                        val turnKey = "${assistant.id}:$conversationId"
+                        val lastUserMsgId = base.lastOrNull { it.role == MessageRole.USER }?.id?.toString()
+                        val cachedAnchor = personaDepthAnchors[turnKey]?.takeIf { it.first == lastUserMsgId }?.second
+                        val idx = when {
+                            cachedAnchor != null -> {
+                                val mode = cachedAnchor.substringBefore(':')
+                                val anchorId = cachedAnchor.substringAfter(':')
+                                val anchorIdx = base.indexOfFirst { it.id.toString() == anchorId }
+                                when {
+                                    anchorIdx < 0 ->
+                                        (base.size - minOf(depth, limitedChat.size))
+                                            .coerceIn(base.size - limitedChat.size, base.size)
+                                    mode == "after" -> anchorIdx + 1
+                                    else -> anchorIdx
+                                }
+                            }
+                            else -> {
+                                val computed = (base.size - minOf(depth, limitedChat.size))
+                                    .coerceIn(base.size - limitedChat.size, base.size)
+                                if (lastUserMsgId != null && base.isNotEmpty()) {
+                                    val mode = if (computed >= base.size) "after" else "before"
+                                    val anchorIdx = if (mode == "after") base.size - 1 else computed
+                                    base.getOrNull(anchorIdx)?.id?.toString()?.let { anchor ->
+                                        if (personaDepthAnchors.size >= 64) personaDepthAnchors.clear()
+                                        personaDepthAnchors[turnKey] = lastUserMsgId to "$mode:$anchor"
+                                    }
+                                }
+                                computed
+                            }
+                        }
+                        val personaMsg = when (persona.role) {
+                            MessageRole.ASSISTANT -> UIMessage.assistant(personaText)
+                            MessageRole.USER -> UIMessage.user(personaText)
+                            else -> UIMessage.system(personaText)
+                        }
+                        val safeIdx = findSafeInsertIndex(base, idx)
+                        base.take(safeIdx) + personaMsg + base.drop(safeIdx)
+                    }
+
+                    else -> base
+                }
+            } else {
+                base
+            }
+        }.transforms(
+            transformers = transformers,
+            context = context,
+            model = model,
+            assistant = assistant,
+            settings = settings,
+            conversationModeInjectionIds = conversationModeInjectionIds,
+            conversationLorebookIds = conversationLorebookIds,
+            processingStatus = processingStatus,
+            workspaceCwd = workspaceCwd,
+            conversationId = conversationId,
+            generationType = generationType,
+            chatUserMessageCount = messages.count { it.role == MessageRole.USER },
+            chatMessageCount = limitedChat.size,
+            memories = memories,
+        )
+
+        // 系统提示词转义：将所有消息中的 < > 转为 HTML 实体，绕过中转站 WAF 拦截
+        // 不仅转义 SYSTEM 消息（工具提示词、system-reminder），也转义 USER 消息
+        // 中的 XML 标签（如 <time_reminder>），避免任何角色的消息触发 WAF
+        val escapedMessages = if (settings.huadengSettings.enableSystemPromptEscape) {
+            internalMessages.map { msg ->
+                msg.copy(
+                    parts = msg.parts.map { part ->
+                        if (part is UIMessagePart.Text) {
+                            part.copy(text = part.text.escapeXmlTags())
+                        } else {
+                            part
+                        }
+                    }
+                )
+            }
+        } else {
+            internalMessages
+        }
+
+        // 提示词查看器：缓存最终发送给模型的完整消息列表（转义后），供聊天抽屉"查看提示词"调试入口渲染。
+        // 插件注入的提示词先登记为遮蔽片段，避免该调试入口成为插件内容的提取通道。
+        PromptDebugCache.setRedactions(
+            if (pluginSystemPromptText.isNotBlank()) listOf(pluginSystemPromptText) else emptyList()
+        )
+        PromptDebugCache.store(conversationId, escapedMessages)
+
+        var messages: List<UIMessage> = messages
+        // 酒馆模式且不保留工具：模型级内置工具（搜索/URL 上下文等）同样不进请求
+        val requestModel = if (settings.huadengSettings.enableTavernMode &&
+            !settings.huadengSettings.tavernModeKeepTools
+        ) {
+            model.copy(tools = emptySet())
+        } else {
+            model
+        }
+        val params = TextGenerationParams(
+            model = requestModel,
+            temperature = assistant.temperature,
+            topP = assistant.topP,
+            topK = assistant.topK,
+            maxTokens = maxTokensOverride ?: assistant.maxTokens,
+            tools = tools,
+            reasoningLevel = assistant.reasoningLevel,
+            customHeaders = buildList {
+                addAll(assistant.customHeaders)
+                addAll(model.customHeaders)
+            },
+            customBody = buildList {
+                addAll(assistant.customBodies)
+                addAll(model.customBodies)
+            },
+            sessionId = conversationId?.toString(),
+            systemPromptInChat = settings.huadengSettings.enableAntiEmptyResponse,
+            enableProxyFix = assistant.enableProxyFix || settings.huadengSettings.enableProxyFix,
+            // 酒馆模式：强制关闭深度思考。注意不是传 reasoning_effort="none"——
+            // 实测部分中转站只要收到该字段就会开启思考链（服务端真实推理，但流式
+            // 通道不回传 reasoning_content，因而界面上看不到），故必须整个字段都不写。
+            // 思考档位 OFF 与酒馆模式等效：部分上游忽略档位参数，必须显式关闭
+            disableReasoning = settings.huadengSettings.enableTavernMode ||
+                assistant.reasoningLevel == me.rerere.ai.core.ReasoningLevel.OFF,
+        )
+        try {
+            if (stream) {
+                // 每次重试都从本次模型调用开始前的消息快照重新合并，避免将重试响应
+                // 追加到已经展示的半截回复后面。预先创建助手消息可让所有尝试复用同一 ID，
+                // ChatService 因而会覆盖当前分支，而不是创建新的候选消息。
+                val responseBaseMessages =
+                    if (messages.lastOrNull()?.role == MessageRole.ASSISTANT) {
+                        messages
+                    } else {
+                        messages + UIMessage(
+                            role = MessageRole.ASSISTANT,
+                            parts = emptyList(),
+                            modelId = model.id,
+                        )
+                    }
+                var retryCount = 0
+                var emptyRetryCount = 0
+
+                while (true) {
+                    val streamChunkHandler = StreamChunkHandler(model)
+                    var attemptMessages = responseBaseMessages
+                    // 防空回复：重试时对请求副本的末条用户消息做微扰（历史消息不动）
+                    val requestMessages =
+                        if (emptyRetryCount > 0) escapedMessages.perturbForEmptyRetry(emptyRetryCount)
+                        else escapedMessages
+                    try {
+                        providerImpl.streamText(
+                            providerSetting = provider,
+                            messages = requestMessages,
+                            params = params
+                        ).collect { chunk ->
+                            try {
+                                if (retryCount > 0 || emptyRetryCount > 0) {
+                                    processingStatus.value = null
+                                }
+                                attemptMessages = streamChunkHandler.handle(attemptMessages, chunk)
+                                onUpdateMessages(attemptMessages)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Throwable) {
+                                // 下游消息转换或 UI 更新失败不属于网络故障，不能重放模型请求。
+                                throw StreamChunkHandlingException(error)
+                            }
+                        }
+                        messages = attemptMessages
+                        // 中转站兼容：流结束后评估整条回复，正文为空而推理有实质内容时
+                        // 把推理提升为正文（中转站把回复塞进 reasoning_content 的病态情形）
+                        if (params.enableProxyFix) {
+                            messages = messages.fixProxyPromotedReply()
+                        }
+                        // 防空回复：无文本、无工具调用的空回复自动微扰重试（Gemini 常见）
+                        if (settings.huadengSettings.enableAntiEmptyResponse &&
+                            emptyRetryCount < MAX_EMPTY_RESPONSE_RETRIES &&
+                            messages.lastOrNull().isBlankAssistantReply()
+                        ) {
+                            emptyRetryCount++
+                            processingStatus.value = context.getString(
+                                R.string.chat_generation_empty_retrying,
+                                emptyRetryCount,
+                                MAX_EMPTY_RESPONSE_RETRIES,
+                            )
+                            Log.w(TAG, "Empty assistant reply, perturbing and retrying ($emptyRetryCount/$MAX_EMPTY_RESPONSE_RETRIES)")
+                            continue
+                        }
+                        break
+                    } catch (error: Throwable) {
+                        if (error is StreamChunkHandlingException) {
+                            throw error.cause ?: error
+                        }
+                        retryCount = awaitNetworkRetryOrThrow(
+                            error = error,
+                            retryCount = retryCount,
+                            processingStatus = processingStatus,
+                            enabled = settings.networkSetting.enableAutoRetry,
+                        )
+                    }
+                }
+            } else {
+                var emptyRetryCount = 0
+                // 每次空回复重试都基于同一快照合并结果，避免把空回复消息残留在历史里
+                val baseMessages = messages
+                while (true) {
+                    val requestMessages =
+                        if (emptyRetryCount > 0) escapedMessages.perturbForEmptyRetry(emptyRetryCount)
+                        else escapedMessages
+                    val result = executeProviderRequestWithRetry(
+                        processingStatus = processingStatus,
+                        enabled = settings.networkSetting.enableAutoRetry,
+                    ) {
+                        providerImpl.generateText(
+                            providerSetting = provider,
+                            messages = requestMessages,
+                            params = params,
+                        )
+                    }
+                    messages = baseMessages.handleTextGenerationResult(result = result, model = model)
+                    if (settings.huadengSettings.enableAntiEmptyResponse &&
+                        emptyRetryCount < MAX_EMPTY_RESPONSE_RETRIES &&
+                        messages.lastOrNull().isBlankAssistantReply()
+                    ) {
+                        emptyRetryCount++
+                        processingStatus.value = context.getString(
+                            R.string.chat_generation_empty_retrying,
+                            emptyRetryCount,
+                            MAX_EMPTY_RESPONSE_RETRIES,
+                        )
+                        continue
+                    }
+                    break
+                }
+                onUpdateMessages(messages)
+            }
+        } finally {
+            processingStatus.value = null
+        }
+    }
+
+    private suspend fun <T> executeProviderRequestWithRetry(
+        processingStatus: MutableStateFlow<String?>,
+        enabled: Boolean,
+        block: suspend () -> T,
+    ): T {
+        var retryCount = 0
+        while (true) {
+            try {
+                return block()
+            } catch (error: Throwable) {
+                retryCount = awaitNetworkRetryOrThrow(
+                    error = error,
+                    retryCount = retryCount,
+                    processingStatus = processingStatus,
+                    enabled = enabled,
+                )
+            }
+        }
+    }
+
+    private suspend fun awaitNetworkRetryOrThrow(
+        error: Throwable,
+        retryCount: Int,
+        processingStatus: MutableStateFlow<String?>,
+        enabled: Boolean,
+    ): Int {
+        // 用户主动停止生成时，底层连接也可能以 IOException("canceled") 收尾；
+        // 先检查协程状态，确保取消不会被当作网络波动重新拉起。
+        currentCoroutineContext().ensureActive()
+        if (!enabled || error !is IOException || retryCount >= MAX_PROVIDER_NETWORK_RETRIES) {
+            throw error
+        }
+
+        val nextRetryCount = retryCount + 1
+        val retryDelay = INITIAL_PROVIDER_RETRY_DELAY_MS shl retryCount
+        processingStatus.value = context.getString(
+            R.string.chat_generation_network_retrying,
+            getNetworkErrorMessage(error),
+            nextRetryCount,
+            MAX_PROVIDER_NETWORK_RETRIES,
+        )
+        Log.w(
+            TAG,
+            "Provider connection failed, retrying in ${retryDelay}ms " +
+                    "($nextRetryCount/$MAX_PROVIDER_NETWORK_RETRIES)",
+            error,
+        )
+        delay(retryDelay)
+        return nextRetryCount
+    }
+
+    private fun getNetworkErrorMessage(error: IOException): String {
+        val messageRes = when (error) {
+            is UnknownHostException -> R.string.chat_generation_network_unknown_host
+            is SocketTimeoutException -> R.string.chat_generation_network_timeout
+            is ConnectException, is NoRouteToHostException -> R.string.chat_generation_network_unreachable
+            else -> R.string.chat_generation_network_disconnected
+        }
+        return context.getString(messageRes)
+    }
+
+    private fun maybeTruncateToolOutput(
+        tool: UIMessagePart.Tool,
+        output: List<UIMessagePart>,
+        hasShellAccess: Boolean,
+    ): List<UIMessagePart> {
+        if (tool.toolName in TOOLS_WITHOUT_OUTPUT_TRUNCATION) return output
+
+        val toolCallId = tool.toolCallId
+        val textParts = output.filterIsInstance<UIMessagePart.Text>()
+        val nonTextParts = output.filter { it !is UIMessagePart.Text }
+        val totalChars = textParts.sumOf { it.text.length }
+
+        if (totalChars <= MAX_TOOL_OUTPUT_CHARS) return output
+
+        // 无 shell 的助手不能读落盘文件，直接头尾截断内联返回（原实现对无 shell 助手完全不截断）
+        if (!hasShellAccess) {
+            return textParts.map { UIMessagePart.Text(it.text.truncateForToolResult()) } + nonTextParts
+        }
+
+        Log.i(TAG, "maybeTruncateToolOutput: truncating tool $toolCallId output ($totalChars chars)")
+
+        val fullText = textParts.joinToString("\n") { it.text }
+        val preview = fullText.take(TOOL_OUTPUT_PREVIEW_CHARS)
+
+        val fileName = "${toolCallId}.txt"
+        val outputDir = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() }
+        File(outputDir, fileName).writeText(fullText)
+
+        return listOf(
+            UIMessagePart.Text(
+                buildString {
+                    appendLine("[Tool output truncated: $totalChars characters total]")
+                    appendLine("Full output saved to: /tool_outputs/$fileName")
+                    appendLine("Use shell to read: `cat /tool_outputs/$fileName`")
+                    appendLine("Use shell to search: `grep \"pattern\" /tool_outputs/$fileName`")
+                    appendLine()
+                    append(preview)
+                }
+            )
+        ) + nonTextParts
+    }
+
+
+}
+
+/**
+ * 执行单个工具调用（提取逻辑以避免并行/串行分支重复）
+ */
+private suspend fun executeToolCall(
+    tool: UIMessagePart.Tool,
+    toolsInternal: List<Tool>,
+    json: kotlinx.serialization.json.Json,
+): UIMessagePart.Tool {
+    return when (tool.approvalState) {
+        is ToolApprovalState.Denied -> {
+            val reason = (tool.approvalState as ToolApprovalState.Denied).reason
+            tool.copy(
+                output = listOf(
+                    UIMessagePart.Text(
+                        json.encodeToString(
+                            buildJsonObject {
+                                put(
+                                    "error",
+                                    JsonPrimitive("Tool execution denied by user. Reason: ${reason.ifBlank { "No reason provided" }}")
+                                )
+                            }
+                        )
+                    )
+                )
+            )
+        }
+
+        is ToolApprovalState.Answered -> {
+            val answer = (tool.approvalState as ToolApprovalState.Answered).answer
+            tool.copy(
+                output = listOf(UIMessagePart.Text(answer))
+            )
+        }
+
+        is ToolApprovalState.Pending -> tool
+
+        else -> {
+            val toolDef = toolsInternal.find { it.name == tool.toolName }
+                ?: error("Tool ${tool.toolName} not found")
+            val args = runCatching {
+                json.parseToJsonElement(tool.input.ifBlank { "{}" })
+            }.getOrElse {
+                error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
+            }
+            Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
+
+            val result = toolDef.execute(args)
+
+            tool.copy(output = result)
+        }
+    }
+}
+
+/**
+ * 将工具执行结果添加到列表中（处理成功和失败两种情况）
+ */
+private fun addToolResult(
+    executedTools: ArrayList<UIMessagePart.Tool>,
+    tool: UIMessagePart.Tool,
+    result: Result<UIMessagePart.Tool>,
+    json: kotlinx.serialization.json.Json,
+) {
+    result.onSuccess { executedTools.add(it) }
+        .onFailure {
+            it.printStackTrace()
+            executedTools.add(
+                tool.copy(
+                    output = listOf(
+                        UIMessagePart.Text(
+                            json.encodeToString(
+                                buildJsonObject {
+                                    put(
+                                        "error",
+                                        JsonPrimitive(buildString {
+                                            // 只给模型类型+消息：堆栈对模型无用还浪费 token、泄漏内部路径
+                                            //（完整堆栈已通过 printStackTrace 进日志）
+                                            append("[${it.javaClass.name}] ${it.message}")
+                                        })
+                                    )
+                                }
+                            )
+                        )
+                    )
+                )
+            )
+        }
+}
+
+/**
+ * ── s10: getUserContext ──
+ * 对标 Claude Code context.ts → getUserContext() → prependUserContext()
+ *
+ * CC 源码 (context.ts):
+ *   getUserContext = memoize(async (): Promise<{claudeMd, currentDate}> => {
+ *     const claudeMd = getClaudeMds(filterInjectedMemoryFiles(await getMemoryFiles()))
+ *     return { ...(claudeMd && { claudeMd }), currentDate: "Today's date is ..." }
+ *   })
+ *
+ * CC 源码 (api.ts → prependUserContext):
+ *   createUserMessage({
+ *     content: `<system-reminder>\nAs you answer the user's questions, you can use the following context:\n${
+ *       Object.entries(context).map(([key, value]) => `# ${key}\n${value}`).join('\n')
+ *     }\n\nIMPORTANT: this context may or may not be relevant...\n</system-reminder>\n`,
+ *     isMeta: true,
+ *   })
+ *
+ * 记忆：整轮对话缓存（memoize），仅当记忆列表变化时重建
+ */
+@kotlin.concurrent.Volatile
+private var _lastUserContextKey: String? = null
+@kotlin.concurrent.Volatile
+private var _lastUserContext: String? = null
+
+/**
+ * userContext（记忆 + 日期 + Recent Chats）冻结锚点缓存（按对话隔离，进程内）。
+ *
+ * 尾部注入的问题：上下文块排在历史之后，历史每追加一条它的位置就后移一位，
+ * token 流在它上一次出现的位置必然分叉。冻结策略：
+ * - 内容不变 → 注入在首次出现的位置（锚点消息之后），历史追加在其后，token 前缀纯追加；
+ * - 内容变化 → 旧块原位保留（内容已冻结不再重渲染），新块追加在当前尾部并更新锚点，
+ *   前缀仍然命中到旧块末尾；
+ * - 锚点消息被上下文窗口截断/分支切换 → 清空重置，按尾部注入重新锚定（该事件本身已破坏前缀）。
+ * 内容变化时旧块原位保留（最多 MAX_ANCHOR_BLOCKS 块，超限丢最旧），新块追加尾部。
+ */
+private const val MAX_ANCHOR_BLOCKS = 4
+
+private object UserContextAnchorCache {
+    data class Block(val text: String, val afterMessageId: Uuid?)
+
+    class Anchor(val blocks: MutableList<Block> = mutableListOf())
+
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Anchor>()
+
+    fun getOrCreate(conversationId: Uuid): Anchor =
+        cache.apply { if (size >= 256) clear() }.getOrPut(conversationId.toString()) { Anchor() }
+}
+
+/**
+ * Persona AT_DEPTH 按用户轮冻结的注入锚点：
+ * key = assistantId:conversationId，value = (lastUserMsgId, "before/after:<消息id>")。
+ * agentic 工具循环每步 base 都会追加消息，按列表长度重算深度位置会让注入点
+ * 每步后移一格、脱离步骤 1 已缓存的前缀；上限 64 会话，超出清空（防长期驻留）。
+ */
+private val personaDepthAnchors =
+    java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+
+private fun buildUserContext(
+    recentChats: String = "",
+): String {
+    val contextMap = linkedMapOf<String, String>()
+
+    // 对标 CC getUserContext: currentDate
+    // 提示词缓存：本函数整体注入上下文尾部（generateInternal 的 base buildList 末尾），
+    // 日期（每天变化）不进入前缀区；记忆已改由 buildMemoryPrompt 的 system 消息注入
+    contextMap["currentDate"] = "Current date: ${java.time.LocalDate.now()}."
+    if (recentChats.isNotBlank()) {
+        contextMap["recentChats"] = recentChats.trim()
+    }
+
+    if (contextMap.isEmpty()) return ""
+
+    // Memoize: 当 contextMap 内容不变时复用
+    val key = contextMap.entries.joinToString("|") { "${it.key}=${it.value}" }
+    if (key == _lastUserContextKey && _lastUserContext != null) {
+        return _lastUserContext!!
+    }
+
+    val result = buildString {
+        appendLine("<system-reminder>")
+        appendLine("As you answer the user's questions, you can use the following context:")
+        contextMap.forEach { (key, value) ->
+            appendLine("# $key")
+            appendLine(value)
+        }
+        appendLine()
+        appendLine("Use this context only if it is relevant to the current task; do not respond to it directly.")
+        append("</system-reminder>")
+    }
+
+    _lastUserContextKey = key
+    _lastUserContext = result
+    return result
+}
+
+/**
+ * 防空回复：判断最后一条消息是否为"空回复"——
+ * 没有任何文本、工具调用的助手消息（仅 Reasoning 也算空，用户看不到可用内容）。
+ */
+private fun UIMessage?.isBlankAssistantReply(): Boolean {
+    if (this == null || role != MessageRole.ASSISTANT) return false
+    return parts.none { part ->
+        part is UIMessagePart.Tool || (part is UIMessagePart.Text && part.text.isNotBlank())
+    }
+}
+
+/**
+ * 防空回复：对请求副本的末条用户消息做微扰后重发。
+ * 既然标点能翻转结果说明离失败边界很近，多个变体轮着试命中率高得多。
+ * 只改请求副本，不触碰历史消息（UI/存储保持原样）。
+ */
+private fun List<UIMessage>.perturbForEmptyRetry(attempt: Int): List<UIMessage> {
+    val index = indexOfLast { it.role == MessageRole.USER }
+    if (index < 0) return this
+    val message = this[index]
+    val partIndex = message.parts.indexOfFirst { it is UIMessagePart.Text && it.text.isNotBlank() }
+    if (partIndex < 0) return this
+    val part = message.parts[partIndex] as UIMessagePart.Text
+    val base = part.text.trimEnd()
+    val perturbed = when (attempt % 4) {
+        1 -> if (base.endsWith(".")) base.dropLast(1) else "$base."   // 删/加句号
+        2 -> "$base ."                                                // 加 " ."
+        3 -> if (base.endsWith("。")) base.dropLast(1) else "$base。"  // 删/加中文句号
+        else -> "$base "                                              // 加空格
+    }.let { if (it == part.text) "$base.." else it }                  // 兜底保证有实际变化
+    return toMutableList().apply {
+        set(index, message.copy(parts = message.parts.toMutableList().also {
+            it[partIndex] = part.copy(text = perturbed)
+        }))
+    }
+}
+
+/**
+ * name= 注入：发送给模型前把消息自带的名字写入内容（对齐官方 names_behavior.DEFAULT），
+ * 让 AI 明确知道这条消息是谁说的；本地保存与 UI 保持原始文本不变。
+ *
+ * 官方规则（openai.js:581-605）：sendas/群聊等 assistant 消息拼 "名字: " 前缀；
+ * SYSTEM 角色（narrator，/sys /sysgen）不拼 —— 官方 narrator 消息带独立 name 字段但不进 content，
+ * 否则会泄漏 "System: " 污染提示词。
+ */
+private fun List<UIMessage>.withMessageNames(): List<UIMessage> = map { message ->
+    if (message.role == MessageRole.SYSTEM) return@map message
+    val name = message.name?.takeIf { it.isNotBlank() } ?: return@map message
+    val textIndex = message.parts.indexOfFirst { it is UIMessagePart.Text }
+    if (textIndex >= 0) {
+        val part = message.parts[textIndex] as UIMessagePart.Text
+        message.copy(
+            parts = message.parts.toMutableList().also { list ->
+                list[textIndex] = part.copy(text = "$name: ${part.text}")
+            }
+        )
+    } else {
+        message.copy(parts = listOf(UIMessagePart.Text("$name: ")) + message.parts)
+    }
+}
+
+/**
+ * 中转站兼容：拆分拼接的 JSON 对象参数。
+ * 部分中转站对同一 tool name 返回相同 toolCallId，流式模式下参数被拼接成 {json1}{json2}。
+ * 按 JSON 对象边界（花括号匹配）拆分，返回每个独立的 JSON 字符串。
+ */
+private fun splitConcatenatedJsonArgs(input: String): List<String> {
+    if (!input.startsWith("{")) return listOf(input)
+    val results = mutableListOf<String>()
+    var depth = 0
+    var start = 0
+    var inString = false
+    var escape = false
+    for (i in input.indices) {
+        val c = input[i]
+        when {
+            escape -> escape = false
+            c == '\\' && inString -> escape = true
+            c == '"' -> inString = !inString
+            !inString && c == '{' -> depth++
+            !inString && c == '}' -> {
+                depth--
+                if (depth == 0) {
+                    results.add(input.substring(start, i + 1))
+                    start = i + 1
+                }
+            }
+        }
+    }
+    // 如果尾部还有未闭合内容，追加为独立片段
+    if (start < input.length) {
+        results.add(input.substring(start))
+    }
+    return results.ifEmpty { listOf(input) }
+}
+
+// ── DSML 文本工具调用兼容 ──
+
+private val DSML_INVOKE_RE = Regex(
+    """<｜｜DSML｜｜\s*invoke\s+name="([^"]+)">([\s\S]*?)</｜｜DSML｜｜\s*invoke>""",
+)
+private val DSML_PARAM_RE = Regex(
+    """<｜｜DSML｜｜\s*parameter\s+name="([^"]+)"(?:\s+string="true")?>([\s\S]*?)</｜｜DSML｜｜\s*parameter>""",
+)
+
+/**
+ * 从文本中解析 DSML 格式的工具调用，返回可执行的 Tool 列表。
+ * 仅当模型不走 function calling 而在文本中输出工具调用时才触发。
+ */
+private fun parseDsmlToolCalls(text: String, availableTools: Set<String>): List<UIMessagePart.Tool> {
+    val results = mutableListOf<UIMessagePart.Tool>()
+    for (match in DSML_INVOKE_RE.findAll(text)) {
+        val rawName = match.groupValues[1]
+        // 名称修正：模型从提示词文本猜的工具名可能与实际注册名不一致
+        val toolName = when {
+            rawName in availableTools -> rawName
+            // 常见别名
+            rawName == "web_search" && "search_web" in availableTools -> "search_web"
+            rawName == "web_fetch" && "scrape_web" in availableTools -> "scrape_web"
+            // 后缀模糊匹配：web_search → search_web
+            availableTools.any { it.replace("_", "") == rawName.replace("_", "").reversed() } ->
+                availableTools.first { it.replace("_", "") == rawName.replace("_", "").reversed() }
+            else -> rawName // 未知工具名，原样传入（执行时会报 not found）
+        }
+        val block = match.groupValues[2]
+        val args = buildJsonObject {
+            for (param in DSML_PARAM_RE.findAll(block)) {
+                put(param.groupValues[1], JsonPrimitive(param.groupValues[2]))
+            }
+        }
+        results.add(
+            UIMessagePart.Tool(
+                toolCallId = "dsml_${toolName}_${results.size}",
+                toolName = toolName,
+                input = args.toString(),
+                output = emptyList(),
+            )
+        )
+    }
+    return results
+}
+
+/**
+ * 从文本中移除 DSML 标签块，保留其余正文。
+ */
+private fun cleanDsmlFromText(text: String): String {
+    // 先移除整个 <calls>...</calls> 块
+    val cleaned = text.replace(Regex("""<｜｜DSML｜｜\s*calls>[\s\S]*?</｜｜DSML｜｜\s*calls>"""), "")
+    // 再兜底移除散落的单个 invoke 块
+    return cleaned.replace(DSML_INVOKE_RE, "").trim()
+}
+
+/**
+ * 将文本中的 < 和 > 转为 HTML 实体，绕过中转站 WAF 安全策略拦截。
+ * 仅转义标签尖括号，不影响引号、等号等其他字符。
+ */
+private fun String.escapeXmlTags(): String =
+    this.replace("<", "&lt;").replace(">", "&gt;")
+
+/** 酒馆模式保留工具面：插件工具 + 文件/搜索/抓取/计算器，其余一律不算 */
+private fun String.isTavernBaseTool(): Boolean =
+    startsWith("plugin_") ||
+        startsWith("search_") ||
+        startsWith("scrape_") ||
+        this == "file" ||
+        this == "web_fetch" ||
+        this == "calculator"
