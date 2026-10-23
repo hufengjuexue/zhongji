@@ -63,6 +63,7 @@ fun AuthorsNotePage() {
     val entries = settings.authorNoteEntriesOrLegacy()
     var editingEntry by remember { mutableStateOf<AuthorNoteEntry?>(null) }
     var editingBuiltin by remember { mutableStateOf(false) }
+    val defaultCustomEntryName = stringResource(R.string.authors_note_custom_default_name)
 
     Scaffold(
         containerColor = CustomColors.topBarColors.containerColor,
@@ -120,7 +121,7 @@ fun AuthorsNotePage() {
                         editingBuiltin = false
                         editingEntry = AuthorNoteEntry(
                             id = "custom:${Uuid.random()}",
-                            name = stringResource(R.string.authors_note_custom_default_name),
+                            name = defaultCustomEntryName,
                         )
                     },
                 ) { Text(stringResource(R.string.authors_note_add)) }
