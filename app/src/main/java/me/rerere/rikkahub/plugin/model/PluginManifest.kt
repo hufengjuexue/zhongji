@@ -1,0 +1,251 @@
+package me.rerere.rikkahub.plugin.model
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+
+/**
+ * 插件清单文件 (manifest.json) 对应的数据类
+ *
+ * 移植自 Tumin (OrangeChat) 插件系统；本仓库裁剪了 customPage / customPageWebView /
+ * ui（声明式 UI）/ hooks / hookConfigs / permissions / promptTemplate 等扩展字段，
+ * 仅保留工具型插件所需的核心字段。
+ */
+@Serializable
+data class PluginManifest(
+    /**
+     * 插件唯一标识，建议使用反向域名格式，如 com.example.plugin.name
+     */
+    val id: String,
+
+    /**
+     * 插件显示名称
+     */
+    val name: String,
+
+    /**
+     * 插件描述
+     */
+    val description: String,
+
+    /**
+     * 插件版本，格式如 1.0.0
+     */
+    val version: String,
+
+    /**
+     * 作者名称
+     */
+    val author: String,
+
+    /**
+     * 插件图标，可以是 emoji 或 URL
+     */
+    val icon: String,
+
+    /** 入口文件路径（相对插件目录），纯前端插件可省略 */
+    val entry: String = "",
+
+    /**
+     * 插件提供的工具列表
+     */
+    val tools: List<PluginToolDefinition> = emptyList(),
+
+    /**
+     * 插件配置字段定义
+     */
+    val config: List<PluginConfigField> = emptyList(),
+
+    /**
+     * 插件允许访问的网络域名白名单。
+     * 插件通过 JS fetch() 发起的 HTTP 请求，目标域名必须在此列表中才会被放行。
+     * 空列表表示禁止所有网络请求。
+     * 特殊值 "*" 表示允许所有域名（不推荐，仅用于开发调试）。
+     */
+    val allowedHosts: List<String> = emptyList(),
+
+    /**
+     * 插件系统提示词（可选）。
+     * 启用后，此内容会作为 extraInstructions 注入到 AI 的 system prompt 中。
+     * 支持内联字符串、"file:" 明文引用、"enc:" 加密引用。
+     */
+    val systemPrompt: String? = null,
+
+    /**
+     * 可选提示词分段（可选）。
+     * 每个分段可独立通过 config 开关控制是否注入。
+     * 用于将大型提示词拆分为可独立开关的功能模块。
+     */
+    val sections: List<PluginPromptSection> = emptyList(),
+
+    /**
+     * 详情页数据卡片（可选）：插件导出的函数名。
+     *
+     * 声明后，插件详情页会调用它并把返回值渲染成一张数据卡片，用于展示
+     * 「今日摄入 1200 kcal」这类需要随时瞄一眼的状态。函数应返回：
+     * `{"title": "...", "items": [{"label": "...", "value": "..."}], "note": "..."}`
+     * items / note 都可省略。函数抛错或超时只是不显示卡片，不影响插件使用。
+     */
+    val detailCard: String? = null,
+
+    /**
+     * 插件声明的供应商（可选）。
+     *
+     * 支持内联 JSON 数组，也支持 "file:" 明文引用、"enc:" 加密引用（文件内容是 JSON 数组）。
+     * 声明后，插件启用时这些供应商（含模型）会出现在「供应商」设置里，插件停用/卸载时移除。
+     */
+    val providers: JsonElement? = null,
+
+    /** 前端脚本：仅在前端 WebView 模式注入，兼容酒馆助手那类插件 */
+    val frontend: PluginFrontend? = null,
+)
+
+/** 前端插件定义，仅在前端 WebView 模式生效。 */
+@Serializable
+data class PluginFrontend(
+    val scripts: List<PluginFrontendScript> = emptyList(),
+)
+
+/** 前端脚本：entry 相对插件目录，按声明顺序注入。 */
+@Serializable
+data class PluginFrontendScript(
+    val name: String = "",
+    val entry: String,
+    val id: String = "",
+    val enabled: Boolean = true,
+    val info: String = "",
+    val buttons: List<PluginFrontendButton> = emptyList(),
+) {
+    /** 用于持久化开关的稳定标识。 */
+    fun scriptKey(): String = id.ifBlank { entry }
+}
+
+/** 前端脚本按钮，保留字段供脚本查询。 */
+@Serializable
+data class PluginFrontendButton(
+    val name: String,
+    val visible: Boolean = true,
+)
+
+/**
+ * 插件提示词分段定义
+ */
+@Serializable
+data class PluginPromptSection(
+    /** 分段标识名，用于 config 开关关联（如 "enable_{name}"） */
+    val name: String,
+    /** 显示标签 */
+    val label: String,
+    /** 加密文件引用（"enc:..." 或 "file:..."） */
+    val file: String,
+)
+
+/**
+ * 插件工具定义
+ */
+@Serializable
+data class PluginToolDefinition(
+    /**
+     * 工具名称，将作为函数名导出
+     */
+    val name: String,
+
+    /**
+     * 工具描述，用于 AI 理解工具用途
+     */
+    val description: String,
+
+    /**
+     * 工具参数列表
+     */
+    val parameters: List<PluginToolParameter> = emptyList(),
+)
+
+/**
+ * 插件工具参数定义
+ */
+@Serializable
+data class PluginToolParameter(
+    /**
+     * 参数名称
+     */
+    val name: String,
+
+    /**
+     * 参数类型：string, number, integer, boolean, object, array
+     */
+    val type: String,
+
+    /**
+     * 参数描述
+     */
+    val description: String? = null,
+
+    /**
+     * 是否必填
+     */
+    val required: Boolean = false,
+)
+
+/**
+ * 插件配置字段定义
+ */
+@Serializable
+data class PluginConfigField(
+    /**
+     * 配置项键名
+     */
+    val name: String,
+
+    /**
+     * 配置项类型：string, number, boolean, select, password, model
+     * model 类型会显示模型选择器，保存选中模型的 ID
+     */
+    val type: String,
+
+    /**
+     * 显示标签
+     */
+    val label: String,
+
+    /**
+     * 配置项描述
+     */
+    val description: String? = null,
+
+    /**
+     * 是否必填
+     */
+    val required: Boolean = false,
+
+    /**
+     * 默认值
+     */
+    val default: JsonElement? = null,
+
+    /**
+     * 选项列表（用于 select 类型）
+     */
+    val options: List<ConfigOption>? = null,
+
+    /**
+     * 输入提示
+     */
+    val placeholder: String? = null,
+)
+
+/**
+ * 配置选项
+ */
+@Serializable
+data class ConfigOption(
+    /**
+     * 选项值
+     */
+    val value: String,
+
+    /**
+     * 显示标签
+     */
+    val label: String,
+)

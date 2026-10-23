@@ -1,0 +1,1089 @@
+package me.rerere.rikkahub.data.ai.transformers
+
+import java.security.MessageDigest
+import java.time.Duration
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoUnit
+import java.util.Locale
+import kotlin.random.Random
+import me.rerere.rikkahub.utils.l10n
+
+/**
+ * 宏引擎 2.0 兼容实现（对齐 SillyTavern Macro 2.0 用户可见语义）。
+ *
+ * 支持：
+ * - 递归解析 {{...}}，参数内可嵌套宏
+ * - 作用域块宏：{{if cond}}...{{/if}}、{{trim}}...{{/trim}}、{{//}}...{{//}}
+ * - {{if}} 条件（行内 {{if::cond::content||else}} 与块形式）、{{else}}、! 取反、
+ *   .变量/$变量 简写、裸宏名自动解析、比较运算符（== != > >= < <=）、&& ||、
+ *   # 保留空白标志、延迟解析（只求值选中的分支）
+ * - 变量家族：setvar/getvar/incvar/decvar/addvar/hasvar/deletevar + global 版 + 别名
+ * - 官方实用宏：space/newline/noop/reverse/comment/trim/random/pick/roll/datetimeformat/timeDiff
+ *   /greeting/charFirstMessage/maxResponseTokens/allChatRange/groupNotMuted/notChar
+ *   /isMobile/lastGenerationType/time::UTC±N
+ * - 未知宏一律原样保留（保护 Pebble 模板 {{ message }} 等）
+ */
+/** 宏目录条目：syntax=插入模板，description=中文说明，group=界面分组 */
+data class MacroEntry(
+    val syntax: String,
+    val description: String,
+    val group: String,
+)
+
+class MacroEngine(
+    private val legacy: Map<String, PlaceholderInfo>,
+    private val vars: MacroVars,
+) {
+
+    /** 解析并求值整段文本。任何解析失败都会原样返回输入，绝不吞文本。 */
+    fun substitute(text: String, ctx: PlaceholderCtx): String {
+        if (!text.contains("{")) return text
+        return try {
+            // \{{ 转义：先换成哨兵，解析完再还原为字面 {{
+            val escaped = text.replace("\\{{", ESCAPE_SENTINEL)
+            // 旧单花括号兼容：{cur_date} {char} 等。必须在 parse 之前做，
+            // 且单遍扫描、替换值不再重扫——否则把宏文档粘贴进消息时
+            // （值里含字面 {{lastUserMessage}} 等自引用宏）会把原文反复展开复制
+            var legacyRandomOccurrence = 0
+            val preReplaced = legacyPlaceholderRegex?.replace(escaped) { match ->
+                val key = match.groupValues[1]
+                // 旧单花括号 {random} 走不到 {{random}} 的稳定种子路径（此前总是真随机，
+                // agentic 步循环每步重渲染都会改写前缀、缓存归零）；缓存友好模式下
+                // 对齐 {{random}} 的（对话+内容+位置）种子语义
+                if (key.equals("random", ignoreCase = true) && ctx.assistant.cacheFriendlyRandomMacros) {
+                    legacyStableRandom(ctx, escaped, legacyRandomOccurrence++)
+                } else {
+                    resolveLegacyKey(key, ctx) ?: match.value
+                }
+            } ?: escaped
+            var out = if (preReplaced.contains("{{")) {
+                val nodes = parse(preReplaced)
+                val seedSource = preReplaced
+                evaluate(nodes, EvalState(ctx, seedSource), 0)
+            } else {
+                preReplaced
+            }
+            // 非作用域 {{trim}} 后处理：去除周围的换行（对齐酒馆格式宏）
+            out = trimRegex.replace(out) { "" }
+            out.replace(ESCAPE_SENTINEL, "{{")
+        } catch (_: Exception) {
+            text
+        }
+    }
+
+    /** 非作用域 {{trim}} 后处理：去除周围的换行（对齐酒馆格式宏） */
+    private val trimRegex = Regex("""(?:\r?\n)?\s*\{\{?trim\}\}?\s*(?:\r?\n)?""", RegexOption.IGNORE_CASE)
+
+    /** 旧单花括号 key 匹配：前后不能紧邻花括号，避免吃掉 {{char}} 的内层 */
+    private val legacyPlaceholderRegex: Regex? by lazy {
+        if (legacy.isEmpty()) {
+            null
+        } else {
+            val names = legacy.keys.joinToString("|") { Regex.escape(it) }
+            Regex("(?<!\\{)\\{($names)\\}(?!\\})", RegexOption.IGNORE_CASE)
+        }
+    }
+
+    private fun resolveLegacyKey(key: String, ctx: PlaceholderCtx): String? {
+        // 按用户轮冻结（见 TurnMacroSnapshot）：{{lastMessage}}/{{lastCharMessage}} 实时解析
+        // 会在 agentic 循环第 2 步起解析到本轮新生成的 assistant 消息，改写前缀打断缓存
+        if (ctx.turnFrozen != null &&
+            (key.equals("lastMessage", ignoreCase = true) || key.equals("lastCharMessage", ignoreCase = true))
+        ) {
+            return ctx.turnFrozen.frozenLastCharText
+        }
+        val info = legacy.entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: return null
+        return try {
+            info.value.resolver(ctx)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    // ---------- 语法解析 ----------
+
+    private sealed class Node {
+        data class Text(val text: String) : Node()
+        data class Macro(
+            val raw: String,
+            val name: String,
+            val args: List<List<Node>> = emptyList(),
+            val scopedContent: List<Node>? = null,
+            val preserveWhitespace: Boolean = false,
+            val isElse: Boolean = false,
+            val isClosing: Boolean = false,
+        ) : Node()
+    }
+
+    private fun parse(text: String, depth: Int = 0): List<Node> {
+        if (depth > MAX_DEPTH) return listOf(Node.Text(text))
+        val nodes = mutableListOf<Node>()
+        var i = 0
+        while (i < text.length) {
+            val open = text.indexOf("{{", i)
+            if (open < 0) {
+                if (i < text.length) nodes.add(Node.Text(text.substring(i)))
+                break
+            }
+            if (open > i) nodes.add(Node.Text(text.substring(i, open)))
+            val parsed = tryParseMacro(text, open, depth)
+            if (parsed == null) {
+                // 无法闭合的 {{ —— 原样保留，跳过两个字符避免死循环
+                nodes.add(Node.Text(text.substring(open, minOf(open + 2, text.length))))
+                i = open + 2
+                continue
+            }
+            val (node, nextIndex) = parsed
+            nodes.add(node)
+            i = nextIndex
+        }
+        return nodes
+    }
+
+    /** 从 open（指向 {{）开始解析一个宏，返回节点与下一扫描位置。失败返回 null。 */
+    private fun tryParseMacro(text: String, open: Int, depth: Int): Pair<Node, Int>? {
+        // 找匹配的闭合 }}，跟踪嵌套 {{...}}（参数里可以有宏）
+        var braceDepth = 0
+        var j = open + 2
+        var close = -1
+        while (j < text.length) {
+            if (text.startsWith("{{", j)) {
+                braceDepth++
+                j += 2
+            } else if (text.startsWith("}}", j)) {
+                if (braceDepth == 0) {
+                    close = j
+                    break
+                }
+                braceDepth--
+                j += 2
+            } else {
+                j++
+            }
+        }
+        if (close < 0) return null
+
+        val raw = text.substring(open, close + 2)
+        val head = text.substring(open + 2, close).trim()
+        if (head.isEmpty()) return null
+
+        // {{/name}} 闭合标签。{{//}}/{{// 内容}} 是注释宏本体（块注释 {{//}}...{{///}} 的闭合是 {{///}}，含第三个斜杠）
+        val isCommentMacro = head.startsWith("//") && head.getOrNull(2) != '/'
+        if (head.startsWith("/") && !isCommentMacro) {
+            return Node.Macro(raw = raw, name = head.drop(1).trim().lowercase(), isClosing = true) to close + 2
+        }
+        // {{else}}
+        if (head.equals("else", ignoreCase = true)) {
+            return Node.Macro(raw = raw, name = "else", isElse = true) to close + 2
+        }
+
+        // 宏名：字母数字 _ - / . $（注释宏为 //，变量简写为 .var/$var）
+        val nameMatch = NAME_REGEX.find(head) ?: return null
+        val name = nameMatch.value.lowercase()
+        var rest = head.substring(nameMatch.range.last + 1).trim()
+        var preserveWhitespace = false
+
+        // # 保留空白标志：{{if::#::cond::content}} 或 {{if # cond}} 形式
+        if (rest.startsWith("#")) {
+            preserveWhitespace = true
+            rest = rest.drop(1).trim()
+        }
+
+        // 参数分割（:: 在嵌套宏内部时不计）
+        var args = if (rest.startsWith(":") && !rest.startsWith("::")) {
+            // 旧语法：{{pick:A|B|C}} 单冒号
+            listOf(rest.drop(1).trim())
+        } else {
+            splitArgs(rest)
+        }
+        if (args.firstOrNull() == "#") {
+            preserveWhitespace = true
+            args = args.drop(1)
+        }
+        if (args.isEmpty() && rest.isNotBlank()) {
+            // 旧语法：{{roll 1d20}} 空格
+            val single = rest.trim()
+            if (single.isNotEmpty()) args = listOf(single)
+        }
+
+        // 作用域块：任何宏后面紧跟 {{/name}} 时，内容成为最后一个参数（官方通用 scoped 语法）
+        val block = if (isScopedCandidate(name, rest)) findScopedBlock(text, close + 2, name) else null
+        if (block != null) {
+            val (content, end) = block
+            val processedContent = if (preserveWhitespace) content else content.dedentAndTrim()
+            val contentNodes = parse(processedContent, depth + 1)
+            // if 特例：scopedContent 单独存放（分支逻辑用），不追加到参数
+            val finalArgs = if (name == "if") args else args + processedContent
+            return Node.Macro(
+                raw = raw,
+                name = name,
+                args = finalArgs.map { parse(it, depth + 1) },
+                scopedContent = contentNodes,
+                preserveWhitespace = preserveWhitespace,
+            ) to end
+        }
+
+        return Node.Macro(
+            raw = raw,
+            name = name,
+            args = args.map { parse(it, depth + 1) },
+            preserveWhitespace = preserveWhitespace,
+        ) to close + 2
+    }
+
+    /** 在文本中查找 {{/name}} 并返回块内容（支持同名嵌套块配对）。 */
+    private fun findScopedBlock(text: String, from: Int, name: String): Pair<String, Int>? {
+        var depth = 1
+        var i = from
+        while (i < text.length) {
+            val open = text.indexOf("{{", i)
+            if (open < 0) return null
+            val close = text.indexOf("}}", open)
+            if (close < 0) return null
+            val head = text.substring(open + 2, close).trim()
+            val isClose = head.startsWith("/") && head.drop(1).trim().equals(name, ignoreCase = true)
+            val isOpen = head.substringBefore(" ").substringBefore("::").trim()
+                .equals(name, ignoreCase = true) && isScopedCandidate(name, head)
+            if (isOpen) depth++
+            if (isClose) {
+                depth--
+                if (depth == 0) {
+                    return (text.substring(from, open)) to (close + 2)
+                }
+            }
+            i = close + 2
+        }
+        return null
+    }
+
+    /** 按 :: 分割参数，嵌套 {{...}} 内部的 :: 不计。 */
+    private fun splitArgs(rest: String): List<String> {
+        if (rest.isEmpty()) return emptyList()
+        val parts = mutableListOf<String>()
+        val current = StringBuilder()
+        var depth = 0
+        var i = 0
+        while (i < rest.length) {
+            when {
+                rest.startsWith("{{", i) -> {
+                    depth++
+                    current.append("{{")
+                    i += 2
+                }
+                rest.startsWith("}}", i) -> {
+                    if (depth > 0) depth--
+                    current.append("}}")
+                    i += 2
+                }
+                rest.startsWith("::", i) && depth == 0 -> {
+                    parts.add(current.toString().trim())
+                    current.setLength(0)
+                    i += 2
+                }
+                else -> {
+                    current.append(rest[i])
+                    i++
+                }
+            }
+        }
+        parts.add(current.toString().trim())
+        return parts.filterIndexed { index, s -> !(index == 0 && s.isEmpty()) }
+    }
+
+    /**
+     * 该宏的此形式是否参与作用域块配对（官方语义下部分宏存在自闭合形式）：
+     * - 注释宏 {{// 内容}} / {{comment 内容}}：有参数 = 单行注释，自闭合
+     * - if 宏 {{if::条件::内容}}：顶层参数 >= 2 = 行内 if，自闭合（块 if 只带条件参数）
+     * - 其余宏保持通用 scoped 语法
+     */
+    private fun isScopedCandidate(name: String, rest: String): Boolean {
+        if (name == "//" || name == "comment") {
+            return rest.substringAfter(name).trim().isEmpty()
+        }
+        if (name == "if") {
+            return topLevelSegmentCount(rest) <= 2
+        }
+        return true
+    }
+
+    /** 统计顶层 :: 段数（嵌套 {{...}} 内部的 :: 不计）。 */
+    private fun topLevelSegmentCount(rest: String): Int {
+        if (rest.isEmpty()) return 1
+        var count = 1
+        var depth = 0
+        var i = 0
+        while (i < rest.length) {
+            when {
+                rest.startsWith("{{", i) -> {
+                    depth++
+                    i += 2
+                }
+                rest.startsWith("}}", i) -> {
+                    if (depth > 0) depth--
+                    i += 2
+                }
+                rest.startsWith("::", i) && depth == 0 -> {
+                    count++
+                    i += 2
+                }
+                else -> i++
+            }
+        }
+        return count
+    }
+
+    // ---------- 求值 ----------
+
+    private inner class EvalState(
+        val ctx: PlaceholderCtx,
+        seedSource: String,
+    ) {
+        val contentHash = seedSource.hashCode().toLong()
+        var position = 0
+    }
+
+    private fun evaluate(nodes: List<Node>, state: EvalState, depth: Int): String {
+        if (depth > MAX_DEPTH) {
+            // sealed 分支用 when 穷尽匹配，避免 else 分支无法智能转换出 Macro.raw
+            return nodes.joinToString("") { n ->
+                when (n) {
+                    is Node.Text -> n.text
+                    is Node.Macro -> n.raw
+                }
+            }
+        }
+        val sb = StringBuilder()
+        for (node in nodes) {
+            sb.append(evalNode(node, state, depth))
+        }
+        return sb.toString()
+    }
+
+    private fun evalNode(node: Node, state: EvalState, depth: Int): String {
+        return when (node) {
+            is Node.Text -> node.text
+            is Node.Macro -> {
+                if (node.isClosing || node.isElse) return ""
+                evalMacro(node, state, depth)
+            }
+        }
+    }
+
+    private fun evalMacro(node: Node.Macro, state: EvalState, depth: Int): String {
+        val name = node.name
+        // 变量简写：{{.var}} {{$var}} 及运算符（= ++ -- += -= || ?? ||= ??= == != > >= < <=）
+        if (name.startsWith(".") || name.startsWith("$")) {
+            return evalVarShorthand(node, state)
+        }
+        // 变量副作用优先执行（官方变量宏同语义）
+        if (name in VARIABLE_MACROS) {
+            return evalVariableMacro(node, state)
+        }
+        when (name) {
+            "if" -> return evalIf(node, state, depth)
+            "else" -> return ""
+            "//", "comment" -> return ""
+            "trim" -> {
+                val content = node.scopedContent
+                if (content != null) return evaluate(content, state, depth + 1).trim()
+                return "{{trim}}" // 非作用域：交给后处理删除周围换行
+            }
+        }
+
+        // 参数预求值（if/变量已特殊处理，其余宏参数先解析；
+        // scoped 内容已在解析时追加为最后一个参数，这里不再重复求值）
+        val inlineArgs = node.args.map { evaluate(it, state, depth + 1) }
+        val content = node.scopedContent?.let { evaluate(it, state, depth + 1) }
+        val args = inlineArgs
+
+        return resolveMacroValue(name, args, content, state, depth) ?: node.raw
+    }
+
+    /** 变量简写：{{.var}} {{$var}} 及运算符（官方 Variable Shorthands 全套语义）。 */
+    private fun evalVarShorthand(node: Node.Macro, state: EvalState): String {
+        val global = node.name.startsWith("$")
+        var varName = node.name.drop(1)
+        val chatKey = if (global) null else state.ctx.conversationId?.toString()
+        var raw = node.args.map { evaluate(it, state, 1) }.firstOrNull()?.trim() ?: ""
+        // '-' 属于宏名字符集，{{.counter--}} 会被解析成名为 ".counter--" 的变量；
+        // 参数为空时把粘连在名字尾部的运算符拆出来（仅 "--" 可能发生，++ 不在名字字符集内）
+        if (raw.isEmpty() && varName.endsWith("--")) {
+            raw = "--"
+            varName = varName.removeSuffix("--")
+        }
+        if (raw.isEmpty()) return vars.get(chatKey, varName) ?: ""
+
+        for (op in VAR_SHORTHAND_OPS) {
+            if (raw == op) {
+                return when (op) {
+                    "++" -> vars.inc(chatKey, varName)
+                    "--" -> vars.dec(chatKey, varName)
+                    "=" -> {
+                        vars.set(chatKey, varName, "")
+                        ""
+                    }
+                    "+=" -> {
+                        vars.add(chatKey, varName, "")
+                        ""
+                    }
+                    "-=" -> {
+                        // 无值时保持变量不变（不能把缺失变量错误写成 0）
+                        vars.get(chatKey, varName) ?: ""
+                    }
+                    "||" -> {
+                        val cur = vars.get(chatKey, varName)
+                        if (cur != null && !isFalseValue(cur)) cur else ""
+                    }
+                    "??" -> vars.get(chatKey, varName) ?: ""
+                    "||=" -> {
+                        val cur = vars.get(chatKey, varName)
+                        if (cur == null || isFalseValue(cur)) {
+                            vars.set(chatKey, varName, "")
+                            ""
+                        } else {
+                            cur
+                        }
+                    }
+                    "??=" -> {
+                        val cur = vars.get(chatKey, varName)
+                        if (cur == null) {
+                            vars.set(chatKey, varName, "")
+                            ""
+                        } else {
+                            cur
+                        }
+                    }
+                    "==" -> (vars.get(chatKey, varName).orEmpty() == "").toString()
+                    "!=" -> (vars.get(chatKey, varName).orEmpty() != "").toString()
+                    ">=" -> (compareValues(vars.get(chatKey, varName).orEmpty(), "") >= 0).toString()
+                    "<=" -> (compareValues(vars.get(chatKey, varName).orEmpty(), "") <= 0).toString()
+                    ">" -> (compareValues(vars.get(chatKey, varName).orEmpty(), "") > 0).toString()
+                    "<" -> (compareValues(vars.get(chatKey, varName).orEmpty(), "") < 0).toString()
+                    else -> ""
+                }
+            }
+            if (raw.startsWith(op)) {
+                val value = raw.drop(op.length).trim()
+                return when (op) {
+                    "++" -> vars.inc(chatKey, varName)
+                    "--" -> vars.dec(chatKey, varName)
+                    "=" -> {
+                        vars.set(chatKey, varName, value)
+                        ""
+                    }
+                    "+=" -> {
+                        vars.add(chatKey, varName, value)
+                        ""
+                    }
+                    "-=" -> {
+                        val delta = value.toLongOrNull()
+                        if (delta != null) vars.add(chatKey, varName, (-delta).toString())
+                        ""
+                    }
+                    "||" -> {
+                        val cur = vars.get(chatKey, varName)
+                        if (cur != null && !isFalseValue(cur)) cur else value
+                    }
+                    "??" -> vars.get(chatKey, varName) ?: value
+                    "||=" -> {
+                        val cur = vars.get(chatKey, varName)
+                        if (cur == null || isFalseValue(cur)) {
+                            vars.set(chatKey, varName, value)
+                            value
+                        } else {
+                            cur
+                        }
+                    }
+                    "??=" -> {
+                        val cur = vars.get(chatKey, varName)
+                        if (cur == null) {
+                            vars.set(chatKey, varName, value)
+                            value
+                        } else {
+                            cur
+                        }
+                    }
+                    "==" -> (vars.get(chatKey, varName).orEmpty() == value).toString()
+                    "!=" -> (vars.get(chatKey, varName).orEmpty() != value).toString()
+                    ">=" -> (compareValues(vars.get(chatKey, varName).orEmpty(), value) >= 0).toString()
+                    "<=" -> (compareValues(vars.get(chatKey, varName).orEmpty(), value) <= 0).toString()
+                    ">" -> (compareValues(vars.get(chatKey, varName).orEmpty(), value) > 0).toString()
+                    "<" -> (compareValues(vars.get(chatKey, varName).orEmpty(), value) < 0).toString()
+                    else -> ""
+                }
+            }
+        }
+        return vars.get(chatKey, varName) ?: ""
+    }
+
+    /** 求值已注册宏；未知宏返回 null（调用方原样保留）。 */
+    private fun resolveMacroValue(
+        name: String,
+        args: List<String>,
+        content: String?,
+        state: EvalState,
+        depth: Int,
+    ): String? {
+        // 新官方宏带参数时优先：旧宏忽略参数，避免 {{random::A::B}} / {{time::UTC}} /
+        // {{charFirstMessage::n}} 被同名旧宏遮蔽后永远取不到参数语义
+        // 注意：name 在 parse 时已统一转小写，分支标签必须用小写
+        // 提示词缓存：无参旧宏 {{random}}（1~100 随机数）在缓存友好模式下按稳定种子取值，
+        // 避免历史消息里的随机宏每轮重新掷导致前缀分叉
+        if (name == "random" && args.isEmpty() && state.ctx.assistant.cacheFriendlyRandomMacros) {
+            return (Math.floorMod(stableSeed(state, "random"), 100L) + 1).toString()
+        }
+        if (args.isNotEmpty()) {
+            when (name) {
+                "random" -> return randomPick(parseListArg(args), state)
+                "time" -> return timeMacro(args[0], state.ctx)
+                "charfirstmessage" -> return greetingMacro(args[0], state.ctx)
+            }
+        }
+        // 旧宏（35 个现有宏，大小写不敏感，与官方引擎一致）
+        legacy.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.let { (_, info) ->
+            return try {
+                info.resolver(state.ctx)
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        return when (name) {
+            "space" -> " ".repeat(args.firstOrNull()?.toIntOrNull()?.coerceIn(0, 100) ?: 1)
+            "newline" -> "\n".repeat(args.firstOrNull()?.toIntOrNull()?.coerceIn(0, 100) ?: 1)
+            "noop" -> ""
+            "reverse" -> args.firstOrNull()?.reversed() ?: ""
+            "random" -> randomPick(parseListArg(args), state)
+            "pick" -> stablePick(parseListArg(args), state)
+            "roll" -> rollDice(args.firstOrNull() ?: "", state) ?: ""
+            "datetimeformat" -> formatDateTime(args.firstOrNull() ?: "", state.ctx)
+            "time" -> timeMacro(args.firstOrNull(), state.ctx)
+            "timediff" -> timeDiff(args.getOrNull(0), args.getOrNull(1))
+            "greeting", "charfirstmessage" -> greetingMacro(args.firstOrNull(), state.ctx)
+            "maxresponse", "maxresponsetokens" -> state.ctx.assistant.maxTokens?.toString() ?: ""
+            // {{allchatrange}} 若实时取 lastIndex，agentic 循环每步 +1 会改写前缀；冻结为本轮首步值
+            "allchatrange" -> when {
+                state.ctx.messages.isEmpty() -> ""
+                state.ctx.turnFrozen != null -> "0-${state.ctx.turnFrozen.frozenLastIndex}"
+                else -> "0-${state.ctx.messages.lastIndex}"
+            }
+            "groupnotmuted" -> groupNames(state.ctx, includeMuted = false)
+            "notchar" -> groupNames(state.ctx, includeMuted = true, excludeSelf = true)
+            "ismobile" -> "true"
+            "lastgenerationtype" -> state.ctx.generationType?.value ?: ""
+            else -> null
+        }
+    }
+
+    private fun evalIf(node: Node.Macro, state: EvalState, depth: Int): String {
+        if (node.args.isEmpty()) return node.raw
+        // 条件：只求值条件参数（延迟解析，分支只求值选中的）
+        val rawCondition = evaluate(node.args[0], state, depth + 1)
+        val (inverted, condition) = parseInversion(rawCondition)
+
+        val resolvedCondition = when {
+            condition.matches(VAR_SHORTHAND_REGEX) -> {
+                val prefix = condition[0]
+                val varName = condition.drop(1)
+                if (prefix == '.') {
+                    vars.get(state.ctx.conversationId?.toString(), varName) ?: ""
+                } else {
+                    vars.get(null, varName) ?: ""
+                }
+            }
+            !COMPARE_OPS.any { condition.contains(it) } &&
+                !condition.contains("&&") && !condition.contains("||") &&
+                resolveMacroValue(condition, emptyList(), null, state, depth + 1) != null ->
+                resolveMacroValue(condition, emptyList(), null, state, depth + 1) ?: ""
+            condition.contains("&&") || condition.contains("||") -> evalLogical(condition, state)
+            else -> resolveCompare(condition, state)
+        }
+
+        val isTruthy = !isFalseValue(resolvedCondition)
+        val result = if (inverted) !isTruthy else isTruthy
+
+        // 选择分支：块形式用 scopedContent（已按顶层 else 分割），行内形式参数2
+        val branchNodes: List<Node>? = if (node.scopedContent != null) {
+            val split = splitTopLevelElse(node.scopedContent)
+            if (result) split.first else split.second
+        } else {
+            val contentNodes = node.args.getOrNull(1)
+            if (contentNodes == null) null
+            else {
+                val split = splitInlineElse(contentNodes)
+                if (result) split.first else split.second
+            }
+        }
+        if (branchNodes == null || branchNodes.isEmpty()) return ""
+
+        var out = evaluate(branchNodes, state, depth + 1)
+        if (!node.preserveWhitespace) out = out.trim()
+        return out
+    }
+
+    private fun parseInversion(raw: String): Pair<Boolean, String> {
+        var inverted = false
+        var s = raw.trim()
+        while (s.startsWith("!")) {
+            inverted = !inverted
+            s = s.drop(1).trimStart()
+        }
+        return inverted to s
+    }
+
+    /** 逻辑表达式：|| 与 && 连接（比较优先）。 */
+    private fun evalLogical(condition: String, state: EvalState): String {
+        // 顶层 || 分割
+        val orParts = splitTopLevel(condition, "||")
+        if (orParts.size > 1) {
+            for (part in orParts) {
+                val v = evalAndChain(part.trim(), state)
+                if (!isFalseValue(v)) return "true"
+            }
+            return "false"
+        }
+        return evalAndChain(condition, state)
+    }
+
+    private fun evalAndChain(expr: String, state: EvalState): String {
+        val andParts = splitTopLevel(expr, "&&")
+        if (andParts.size > 1) {
+            for (part in andParts) {
+                val v = resolveCompare(part.trim(), state)
+                if (isFalseValue(v)) return "false"
+            }
+            return "true"
+        }
+        return resolveCompare(expr, state)
+    }
+
+    private fun splitTopLevel(s: String, sep: String): List<String> {
+        val parts = mutableListOf<String>()
+        val cur = StringBuilder()
+        var depth = 0
+        var i = 0
+        while (i < s.length) {
+            when {
+                s.startsWith("{{", i) -> { depth++; cur.append("{{"); i += 2 }
+                s.startsWith("}}", i) -> { if (depth > 0) depth--; cur.append("}}"); i += 2 }
+                s.startsWith(sep, i) && depth == 0 -> { parts.add(cur.toString()); cur.setLength(0); i += sep.length }
+                else -> { cur.append(s[i]); i++ }
+            }
+        }
+        parts.add(cur.toString())
+        return parts
+    }
+
+    /** 比较表达式求值：== != > >= < <=，数值优先，否则字符串。 */
+    private fun resolveCompare(expr: String, state: EvalState): String {
+        val trimmed = expr.trim()
+        for (op in listOf("==", "!=", ">=", "<=", ">", "<")) {
+            val idx = findTopLevelOp(trimmed, op)
+            if (idx >= 0) {
+                val left = trimmed.substring(0, idx).trim()
+                val right = trimmed.substring(idx + op.length).trim()
+                val cmp = compareValues(left, right)
+                val result = when (op) {
+                    "==" -> cmp == 0
+                    "!=" -> cmp != 0
+                    ">=" -> cmp >= 0
+                    "<=" -> cmp <= 0
+                    ">" -> cmp > 0
+                    "<" -> cmp < 0
+                    else -> false
+                }
+                return result.toString()
+            }
+        }
+        return trimmed
+    }
+
+    private fun findTopLevelOp(s: String, op: String): Int {
+        var depth = 0
+        var i = 0
+        while (i < s.length) {
+            when {
+                s.startsWith("{{", i) -> { depth++; i += 2 }
+                s.startsWith("}}", i) -> { if (depth > 0) depth--; i += 2 }
+                s.startsWith(op, i) && depth == 0 -> return i
+                else -> i++
+            }
+        }
+        return -1
+    }
+
+    private fun compareValues(left: String, right: String): Int {
+        val l = left.toDoubleOrNull()
+        val r = right.toDoubleOrNull()
+        return if (l != null && r != null) l.compareTo(r) else left.compareTo(right)
+    }
+
+    private fun isFalseValue(value: String): Boolean {
+        val v = value.trim()
+        if (v.isEmpty()) return true
+        if (v.equals("false", ignoreCase = true)) return true
+        if (v.equals("off", ignoreCase = true)) return true
+        if (v.equals("no", ignoreCase = true)) return true
+        if (v == "0") return true
+        return false
+    }
+
+    /** 官方 scoped 内容处理：去首尾空白 + 移除公共缩进。 */
+    private fun String.dedentAndTrim(): String {
+        val lines = this.split("\n")
+        val indent = lines.filter { it.isNotBlank() }
+            .minOfOrNull { it.takeWhile { c -> c == ' ' || c == '\t' }.length } ?: 0
+        return lines.joinToString("\n") { line ->
+            if (line.isBlank()) "" else line.drop(minOf(indent, line.length))
+        }.trim()
+    }
+
+    /** 在节点列表中按顶层 {{else}} 分割。 */
+    private fun splitTopLevelElse(nodes: List<Node>): Pair<List<Node>, List<Node>> {
+        for (i in nodes.indices) {
+            val n = nodes[i]
+            if (n is Node.Macro && n.isElse) {
+                return nodes.subList(0, i) to nodes.subList(i + 1, nodes.size)
+            }
+        }
+        return nodes to emptyList()
+    }
+
+    /**
+     * 行内 if 分支分割：支持官方行内语法 {{if::条件::A||B}}。
+     * 只处理顶层文本节点中的 ||（嵌套宏内部的 || 属于变量默认值/逻辑或，不分割）。
+     */
+    private fun splitInlineElse(nodes: List<Node>): Pair<List<Node>, List<Node>> {
+        val first = mutableListOf<Node>()
+        val second = mutableListOf<Node>()
+        var found = false
+        for (node in nodes) {
+            if (found) {
+                second.add(node)
+                continue
+            }
+            when (node) {
+                is Node.Macro -> {
+                    if (node.isElse) found = true else first.add(node)
+                }
+                is Node.Text -> {
+                    val idx = node.text.indexOf("||")
+                    if (idx >= 0) {
+                        val before = node.text.substring(0, idx)
+                        val after = node.text.substring(idx + 2)
+                        if (before.isNotEmpty()) first.add(Node.Text(before))
+                        if (after.isNotEmpty()) second.add(Node.Text(after))
+                        found = true
+                    } else {
+                        first.add(node)
+                    }
+                }
+            }
+        }
+        return first to second
+    }
+
+    // ---------- 变量宏 ----------
+
+    private fun evalVariableMacro(node: Node.Macro, state: EvalState): String {
+        val args = node.args.map { evaluate(it, state, 1) }
+        val name = node.name
+        val global = name.contains("global")
+        val varName = args.getOrNull(0) ?: ""
+        val value = args.getOrNull(1) ?: ""
+        val chatKey = if (global) null else state.ctx.conversationId?.toString()
+        // 按用户轮冻结：复用冻结快照的后续 agentic 步骤不再执行变量副作用，
+        // 否则 incvar/addvar 每步重复累加，{{getvar}} 渲染值逐步变化会改写前缀打断缓存
+        if (state.ctx.turnFrozen != null && !state.ctx.allowVarMutations) {
+            return when (name) {
+                "getvar", "getglobalvar" -> vars.get(chatKey, varName) ?: ""
+                "hasvar", "varexists", "hasglobalvar", "globalvarexists" ->
+                    vars.has(chatKey, varName).toString()
+                // inc/dec 首步已执行过，直接回读当前值（与首步渲染结果一致）
+                "incvar", "incglobalvar", "decvar", "decglobalvar" -> vars.get(chatKey, varName) ?: ""
+                else -> ""
+            }
+        }
+        return when (name) {
+            "setvar", "setglobalvar" -> {
+                vars.set(chatKey, varName, value)
+                ""
+            }
+            "getvar", "getglobalvar" -> vars.get(chatKey, varName) ?: ""
+            "incvar", "incglobalvar" -> vars.inc(chatKey, varName)
+            "decvar", "decglobalvar" -> vars.dec(chatKey, varName)
+            "addvar", "addglobalvar" -> {
+                vars.add(chatKey, varName, value)
+                ""
+            }
+            "hasvar", "varexists", "hasglobalvar", "globalvarexists" ->
+                vars.has(chatKey, varName).toString()
+            "deletevar", "flushvar", "deleteglobalvar", "flushglobalvar" -> {
+                vars.delete(chatKey, varName)
+                ""
+            }
+            else -> ""
+        }
+    }
+
+    // ---------- 工具实现 ----------
+
+    /** 兼容旧语法列表：{{random:a|b|c}} / {{pick::A|B|C}} / 逗号分隔。 */
+    private fun parseListArg(args: List<String>): List<String> {
+        if (args.isEmpty()) return emptyList()
+        if (args.size > 1) return args
+        val single = args[0]
+        return when {
+            single.contains("|") -> single.split("|").map { it.trim() }.filter { it.isNotEmpty() }
+            single.contains("::") -> single.split("::").map { it.trim() }.filter { it.isNotEmpty() }
+            single.contains(",") -> single.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            else -> listOf(single.trim())
+        }
+    }
+
+    private fun randomPick(list: List<String>, state: EvalState): String {
+        if (list.isEmpty()) return ""
+        // 提示词缓存：缓存友好模式下 random 与 pick 一样按（对话+内容+位置）稳定取值，
+        // 同一条消息每轮请求渲染结果一致，不打断前缀缓存；关闭后恢复每次随机
+        return if (state.ctx.assistant.cacheFriendlyRandomMacros) {
+            list[stableIndex(state, list.size, "random")]
+        } else {
+            list[Random.nextInt(list.size)]
+        }
+    }
+
+    /** 官方 pick：同一聊天 + 同一位置结果稳定（种子 = chat + 重掷种子 + 内容 hash + 位置）。 */
+    private fun stablePick(list: List<String>, state: EvalState): String {
+        if (list.isEmpty()) return ""
+        return list[stableIndex(state, list.size, "pick")]
+    }
+
+    /**
+     * 稳定随机种子：同一对话 + 同一消息内容 + 同一位置 → 同一结果。
+     * /reroll-pick 修改本对话保留变量 __pick_reroll_seed，从而让所有随机宏换一批结果。
+     */
+    private fun stableSeed(state: EvalState, macro: String): Long {
+        val rerollSeed = vars.get(state.ctx.conversationId?.toString(), "__pick_reroll_seed")?.toLongOrNull() ?: 0L
+        val seed = "${state.ctx.conversationId ?: "global"}|$rerollSeed|${state.contentHash}|${state.position}|$macro"
+        state.position++
+        val hash = MessageDigest.getInstance("MD5").digest(seed.toByteArray())
+        return ((hash[0].toLong() and 0xff) shl 56) or
+            ((hash[1].toLong() and 0xff) shl 48) or
+            ((hash[2].toLong() and 0xff) shl 40) or
+            ((hash[3].toLong() and 0xff) shl 32) or
+            ((hash[4].toLong() and 0xff) shl 24) or
+            ((hash[5].toLong() and 0xff) shl 16) or
+            ((hash[6].toLong() and 0xff) shl 8) or
+            (hash[7].toLong() and 0xff)
+    }
+
+    private fun stableIndex(state: EvalState, size: Int, macro: String): Int =
+        Math.floorMod(stableSeed(state, macro), size.toLong()).toInt()
+
+    /**
+     * 旧单花括号 {random} 的缓存友好取值：与 {{random}} 对齐，
+     * 种子 = 对话 + 重掷种子 + 整段文本 hash + 出现序号。
+     * 同一条消息每步/每轮渲染结果一致，不打断前缀缓存。
+     */
+    private fun legacyStableRandom(ctx: PlaceholderCtx, text: String, occurrence: Int): String {
+        val rerollSeed = vars.get(ctx.conversationId?.toString(), "__pick_reroll_seed")?.toLongOrNull() ?: 0L
+        val seed = "${ctx.conversationId ?: "global"}|$rerollSeed|${text.hashCode()}|$occurrence|legacy_random"
+        val hash = MessageDigest.getInstance("MD5").digest(seed.toByteArray())
+        val value = ((hash[0].toLong() and 0xff) shl 24) or
+            ((hash[1].toLong() and 0xff) shl 16) or
+            ((hash[2].toLong() and 0xff) shl 8) or
+            (hash[3].toLong() and 0xff)
+        return (Math.floorMod(value, 100L) + 1).toString()
+    }
+
+    /** 骰子：NdM±K / NdM（与现有 rollDice 同语义）。 */
+    private fun rollDice(expr: String, state: EvalState): String? {
+        val text = expr.trim().replace(" ", "")
+        if (text.isEmpty()) return null
+        val tokens = Regex("([+-]?\\d*d\\d+|[+-]?\\d+)", RegexOption.IGNORE_CASE).findAll(text).toList()
+        if (tokens.isEmpty() || tokens.joinToString("") { it.value } != text) return null
+        // 提示词缓存：缓存友好模式下同一消息的同一处骰子结果稳定（见 stableSeed）
+        val rng = if (state.ctx.assistant.cacheFriendlyRandomMacros) {
+            Random(stableSeed(state, "roll"))
+        } else {
+            Random
+        }
+        var total = 0
+        for (token in tokens) {
+            val raw = token.value
+            val sign = if (raw.startsWith("-")) -1 else 1
+            val body = raw.drop(1).takeIf { raw.startsWith("+") || raw.startsWith("-") } ?: raw
+            if ('d' in body.lowercase()) {
+                val parts = body.split(Regex("[dD]"))
+                val count = parts.getOrNull(0)?.toIntOrNull() ?: 1
+                val sides = parts.getOrNull(1)?.toIntOrNull() ?: return null
+                if (count <= 0 || sides <= 0 || count > 1000 || sides > 100000) return null
+                repeat(count) { total += sign * (rng.nextInt(sides) + 1) }
+            } else {
+                total += sign * (body.toIntOrNull() ?: return null)
+            }
+        }
+        return total.toString()
+    }
+
+    /** moment.js 格式 → java.time 格式（常见 token 映射）。 */
+    private fun formatDateTime(format: String, ctx: PlaceholderCtx): String {
+        if (format.isEmpty()) return ""
+        val mapped = format
+            .replace("YYYY", "yyyy")
+            .replace("YY", "yy")
+            .replace("DD", "dd")
+            .replace("D", "d")
+            .replace("HH", "HH")
+            .replace("mm", "mm")
+            .replace("ss", "ss")
+            .replace("A", "a")
+            .replace("dddd", "EEEE")
+            .replace("ddd", "EEE")
+            .replace("LLLL", l10n("yyyy年M月d日 EEEE", "EEEE, MMM d, yyyy"))
+            .replace("LLL", l10n("yyyy年M月d日", "MMM d, yyyy"))
+            .replace("LL", l10n("yyyy年M月d日", "MMM d, yyyy"))
+        return try {
+            // 精确到秒的实时时间在 agentic 循环每步都不同（改写前缀打断缓存）；
+            // 冻结为本轮首步的时间点（cacheFriendlyTimeMacros 开启时已对齐 5 分钟）
+            DateTimeFormatter.ofPattern(mapped, Locale.getDefault())
+                .format(ctx.turnFrozen?.frozenTime ?: LocalDateTime.now())
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun timeMacro(offsetSpec: String?, ctx: PlaceholderCtx): String {
+        if (offsetSpec.isNullOrBlank()) {
+            // 无参 {{time}} 走冻结时间点，避免每步重取改写前缀
+            val base = ctx.turnFrozen?.frozenTime?.toLocalTime()
+                ?: java.time.LocalTime.now().truncatedTo(ChronoUnit.MINUTES)
+            return base.format(DateTimeFormatter.ofPattern("HH:mm"))
+        }
+        val match = Regex("^UTC([+-]\\d+)$", RegexOption.IGNORE_CASE).find(offsetSpec.trim())
+        if (match == null) return timeMacro(null, ctx)
+        val offset = match.groupValues[1].toIntOrNull() ?: return timeMacro(null, ctx)
+        val now = ctx.turnFrozen?.frozenTime
+            ?.atZone(java.time.ZoneId.systemDefault())?.toInstant()
+            ?: java.time.Instant.now()
+        val zoned = now.atOffset(java.time.ZoneOffset.ofHours(offset))
+        return zoned.format(DateTimeFormatter.ofPattern("HH:mm"))
+    }
+
+    private fun timeDiff(left: String?, right: String?): String {
+        if (left.isNullOrBlank() || right.isNullOrBlank()) return ""
+        val a = parseTime(left) ?: return ""
+        val b = parseTime(right) ?: return ""
+        val diff = Duration.between(a, b).abs()
+        return when {
+            diff.toDays() >= 365 -> l10n("${diff.toDays() / 365}年", "${diff.toDays() / 365}y")
+            diff.toDays() >= 30 -> l10n("${diff.toDays() / 30}个月", "${diff.toDays() / 30}mo")
+            diff.toDays() >= 1 -> l10n("${diff.toDays()}天", "${diff.toDays()}d")
+            diff.toHours() >= 1 -> l10n("${diff.toHours()}小时", "${diff.toHours()}h")
+            diff.toMinutes() >= 1 -> l10n("${diff.toMinutes()}分钟", "${diff.toMinutes()}m")
+            else -> l10n("${diff.seconds}秒", "${diff.seconds}s")
+        }
+    }
+
+    private fun parseTime(s: String): LocalDateTime? {
+        val t = s.trim()
+        val formats = listOf(
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"),
+            DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+        )
+        for (f in formats) {
+            try {
+                return LocalDateTime.parse(t, f)
+            } catch (_: DateTimeParseException) {
+            }
+        }
+        try {
+            return java.time.LocalDate.parse(t).atStartOfDay()
+        } catch (_: DateTimeParseException) {
+        }
+        return null
+    }
+
+    private fun greetingMacro(indexArg: String?, ctx: PlaceholderCtx): String {
+        val tav = ctx.assistant.tavernData ?: return ""
+        val index = indexArg?.trim()?.toIntOrNull() ?: 0
+        return when {
+            index <= 0 -> tav.firstMessage
+            else -> tav.alternateGreetings.getOrNull(index - 1) ?: ""
+        }
+    }
+
+    private fun groupNames(ctx: PlaceholderCtx, includeMuted: Boolean, excludeSelf: Boolean = false): String {
+        val settings = ctx.settings
+        val group = settings.groupChats.firstOrNull { ctx.assistant.id in it.memberIds } ?: return ""
+        return group.memberIds
+            .filter { id -> id != ctx.assistant.id || !excludeSelf }
+            .filter { id -> includeMuted || id !in group.disabledMemberIds }
+            .mapNotNull { id -> settings.assistants.firstOrNull { it.id == id }?.name }
+            .joinToString(", ")
+    }
+
+    companion object {
+        /** 引擎 2.0 宏目录：界面宏列表与本实现共用，新增/删除宏时在此登记即可自动显示 */
+        val macroCatalog: List<MacroEntry> = listOf(
+            MacroEntry("setvar::变量名::值", l10n("设置本对话变量", "Set a conversation variable"), l10n("变量", "Variables")),
+            MacroEntry("getvar::变量名", l10n("读取本对话变量", "Read a conversation variable"), l10n("变量", "Variables")),
+            MacroEntry("incvar::变量名", l10n("变量+1", "Increment variable"), l10n("变量", "Variables")),
+            MacroEntry("decvar::变量名", l10n("变量-1", "Decrement variable"), l10n("变量", "Variables")),
+            MacroEntry("addvar::变量名::值", l10n("变量加值", "Add to variable"), l10n("变量", "Variables")),
+            MacroEntry("hasvar::变量名", l10n("判断变量是否存在", "Check whether a variable exists"), l10n("变量", "Variables")),
+            MacroEntry("flushvar::变量名", l10n("删除变量", "Delete variable"), l10n("变量", "Variables")),
+            MacroEntry("setglobalvar::变量名::值", l10n("设置全局变量", "Set a global variable"), l10n("变量", "Variables")),
+            MacroEntry("getglobalvar::变量名", l10n("读取全局变量", "Read a global variable"), l10n("变量", "Variables")),
+            MacroEntry(".变量名", l10n("变量简写读取", "Shorthand variable read"), l10n("变量", "Variables")),
+            MacroEntry(".变量名++", l10n("变量简写自增", "Shorthand variable increment"), l10n("变量", "Variables")),
+            MacroEntry("if::条件::内容", l10n("条件分支（可用{{else}}）", "Conditional branch (supports {{else}})"), l10n("条件", "Conditionals")),
+            MacroEntry("// 注释", l10n("注释（不发送）", "Comment (not sent)"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("pick::A::B::C", l10n("稳定随机选一", "Stable random pick"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("roll::2d6+1", l10n("掷骰子", "Roll dice"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("random::A::B::C", l10n("随机选一（缓存友好时按消息稳定）", "Random pick (stable per message in cache-friendly mode)"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("space::N", l10n("N个空格", "N spaces"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("newline::N", l10n("N个换行", "N newlines"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("noop", l10n("空", "Empty"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("reverse::文本", l10n("反转文本", "Reverse text"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("allChatRange", l10n("消息范围", "Message range"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("groupNotMuted", l10n("群聊未禁言成员", "Unmuted group members"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("notChar", l10n("除自己外成员", "Members other than self"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("isMobile", l10n("是否手机端", "Whether on mobile"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("lastGenerationType", l10n("上次生成类型", "Last generation type"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("maxResponse", l10n("最大回复token", "Max response tokens"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("greeting::N", l10n("第N条开场白", "Nth greeting"), l10n("随机与工具", "Random & Utilities")),
+            MacroEntry("time::UTC+8", l10n("指定时区时间", "Time in a given timezone"), l10n("时间", "Time")),
+            MacroEntry("datetimeformat::yyyy-MM-dd HH:mm", l10n("自定义时间格式", "Custom time format"), l10n("时间", "Time")),
+            MacroEntry("timeDiff::时间A::时间B", l10n("时间差", "Time difference"), l10n("时间", "Time")),
+        )
+
+        private const val MAX_DEPTH = 32
+        private const val ESCAPE_SENTINEL = "\u0000ESCAPED_LBRACE\u0000"
+        // 官方宏名/变量名规则：字母（含 Unicode，如中文）、数字、_、-（简写允许 . 和 $ 前缀）
+        private val NAME_REGEX = Regex("""[\p{L}\p{N}_\-/.\$]+""")
+        private val VAR_SHORTHAND_REGEX = Regex("""^[.\$][\p{L}\p{N}_\-]+$""")
+        private val COMPARE_OPS = setOf("==", "!=", ">=", "<=", ">", "<")
+        private val VAR_SHORTHAND_OPS = listOf(
+            "||=", "??=", "++", "--", "+=", "-=", "==", "!=", ">=", "<=", "||", "??", ">", "<", "=",
+        )
+        private val VARIABLE_MACROS = setOf(
+            "setvar", "getvar", "incvar", "decvar", "addvar", "hasvar", "deletevar", "varexists", "flushvar",
+            "setglobalvar", "getglobalvar", "incglobalvar", "decglobalvar", "addglobalvar",
+            "hasglobalvar", "deleteglobalvar", "globalvarexists", "flushglobalvar",
+        )
+    }
+}
+
+/** 变量存取接口：local 以 chatKey 为作用域，global 全局。 */
+interface MacroVars {
+    fun get(chatKey: String?, name: String): String?
+    fun set(chatKey: String?, name: String, value: String)
+    fun inc(chatKey: String?, name: String): String
+    fun dec(chatKey: String?, name: String): String
+    fun add(chatKey: String?, name: String, value: String)
+    fun has(chatKey: String?, name: String): Boolean
+    fun delete(chatKey: String?, name: String)
+}

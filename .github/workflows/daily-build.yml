@@ -1,0 +1,218 @@
+name: Daily Build
+
+on:
+  # 每天 UTC 09:00、18:00 触发（北京时间 17:00、次日 02:00）
+  schedule:
+    - cron: '0 9,18 * * *'
+  # 也支持手动触发
+  workflow_dispatch:
+
+jobs:
+  # 检查过去 24 小时内是否有新提交，没有则跳过构建，避免重复打包
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for recent commits
+        id: check
+        run: |
+          # 手动触发时无条件构建
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 定时触发：仅当过去 24 小时内有新提交才构建
+          if [ -n "$(git log --since='24 hours ago' --oneline)" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "过去 24 小时无新提交，跳过构建"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 发布 Release 需要写权限
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive # 拉取子模块
+
+      # 与 Build APK 同一道防护：AGP 隐式下载 NDK 失败会随机打断构建。
+      # 版本取自 gradle.properties，与模块 ndkVersion 同源。
+      - name: Setup Android native toolchain
+        uses: ./.github/actions/setup-android-native
+
+      # 与 Android Studio 自带的 JetBrains Runtime 21 保持一致
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'jetbrains'
+          java-version: '21'
+        env:
+          # jetbrains 安装器通过 GitHub API 查询版本，带上 token 避免被限流
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # web 模块的 preBuild 会执行 `pnpm run build` 构建前端，必须准备好 Node + pnpm
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
+
+      # gradle 的 buildWebUi 任务只跑 build 不跑 install，需在此提前安装依赖
+      - name: Install web-ui dependencies
+        working-directory: web-ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      - name: Prepare build files
+        run: |
+          # 签名配置：优先用仓库 secret，未配置时退回与 Build APK 一致的调试密钥。
+          # 仓库迁移后旧 secret 不会跟着走，这里必须能自我兜底，否则 nightly 每晚必失败。
+          if [ -n "${{ secrets.KEY_BASE64 }}" ]; then
+            echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
+            echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
+          else
+            cat > local.properties << 'EOF'
+          storeFile=app.key
+          storePassword=android
+          keyAlias=androiddebugkey
+          keyPassword=android
+          EOF
+          fi
+
+          # google-services.json 缺省时补一个空壳：Firebase 默认关闭，
+          # 只有 -Prikkahub.enableFirebase=true 才会真正读取它
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          elif [ ! -f app/google-services.json ]; then
+            echo '{}' > app/google-services.json
+          fi
+
+      - name: Gradle Build
+        run: |
+          chmod +x gradlew
+          # 重新生成 update.json，保证「关于页 → 检查更新」拿到的版本号与下载链接
+          # 都和本次构建一致；未变化时不产生 diff，后面的提交步骤会自然跳过。
+          #
+          # 注意 downloads 必须一起重写：这个文件是 GitHub API 拉不通时的兜底源
+          # （国内网络很常见），链接写死就会把用户导向过期安装包。
+          export REL_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export REL_REPO="MiaoWuNYA/rikkahub-sillytavern-android"
+          python3 - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path("update.json")
+          data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+          # 这里**不再改动 version / changelog / downloads**，只刷新构建时间。
+          #
+          # 之前每次构建都会把 version 改成 "2.5.6.MMDD" 并把 changelog 覆写成
+          # "Nightly auto-build (日期) / 每日自动构建（日期）"，带来三个问题：
+          #
+          #   1. 用户看不到这次到底改了什么
+          #   2. 那段文案含「每日自动构建」，会被 App 的 UpdateChecker.isNightly
+          #      整条过滤掉，更新提示永远不出现
+          #   3. 版本号多出一段，同样会被 isNightly 的「版本段比本地多」规则命中
+          #
+          # 现在 update.json 恒定描述**正式版**：同一份发布说明、同一个下载链接。
+          # 于是装了自动构建包的用户看到的是正式版的介绍，点进去就是正式版
+          # 安装包，直接被引导到稳定渠道。
+          #
+          # 注意：这个文件不再由本工作流产生改动，下面的提交步骤会自然跳过。
+          data["publishedAt"] = os.environ["REL_DATE"]
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          ./gradlew assembleRelease
+
+      # 先提交 update.json 再发布：nightly 的镜像/更新检查都以分支上的这个文件为准
+      - name: Commit update.json
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          if git diff --cached --quiet; then
+            echo "update.json 无变化，无需提交"
+          else
+            git commit -m "chore: nightly 更新 update.json"
+          fi
+
+          # 竞态防护：本步骤的提交发生在 checkout 之后十几分钟（构建耗时），
+          # 期间若有新提交推到远端，裸 git push 会被拒绝：
+          #
+          #     ! [rejected] huadeng -> huadeng (fetch first)
+          #
+          # 2026-10-14 14:27 那次定时构建就因此失败，APK 白构建一遍。
+          # 改成「先 rebase 再推」，最多重试三轮：rebase 与 push 之间仍可能
+          # 被别的推送抢先，重试即可收敛。
+          #
+          # -X theirs：本步骤只提交 update.json，因此 rebase 唯一的冲突来源
+          # 就是远端也改过 update.json（另一个 nightly、或手工提交）。
+          # 此时应当以本次构建写入的时间戳为准——它最新，也正是要发布的内容。
+          # 注意 rebase 的 ours/theirs 与 merge 相反，theirs 指「被重放的提交」。
+          #
+          # 只 rebase 不 merge，避免在分支上留下无意义的合并提交。
+          for attempt in 1 2 3; do
+            echo "── push 尝试 $attempt ──"
+            if ! git pull --rebase --autostash -X theirs origin "$GITHUB_REF_NAME"; then
+              echo "::warning::rebase 失败，已中止（避免把未解决的冲突推上去）"
+              git rebase --abort 2>/dev/null || true
+              exit 1
+            fi
+
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "推送成功（第 $attempt 次尝试）"
+              exit 0
+            fi
+
+            echo "::warning::第 $attempt 次推送被拒（远端有新提交），拉取后重试"
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::连续 3 次推送均被拒绝，远端分支可能正被高频写入"
+          exit 1
+
+      # 先把 APK 改成与 update.json 中 downloads[].name 完全一致的固定名字：
+      # nightly 是覆盖式预发布，固定文件名可让下载直链长期有效，
+      # 也避免每次构建都往同一个 release 里堆积新的 asset。
+      - name: Rename APK
+        run: |
+          set -e
+          f=$(ls app/build/outputs/apk/release/*.apk)
+          mv "$f" "app/build/outputs/apk/release/rikkahub-plus-nightly-arm64-v8a.apk"
+          ls -lh app/build/outputs/apk/release/
+
+      # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压
+      - name: Publish nightly prerelease
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: nightly            # 固定 tag，每晚覆盖同一个「最新每日构建」
+          name: Nightly Build
+          prerelease: true
+          body: |
+            Nightly auto-build (commit `${{ github.sha }}`) / 自动每日构建（commit `${{ github.sha }}`）
+
+            > ⚠️ Development build — may be unstable, for testing only. / 开发版本，可能不稳定，仅供测试。
+          files: app/build/outputs/apk/release/rikkahub-plus-nightly-arm64-v8a.apk

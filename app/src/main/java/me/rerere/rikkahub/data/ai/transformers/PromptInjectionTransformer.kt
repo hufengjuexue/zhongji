@@ -1,0 +1,1212 @@
+package me.rerere.rikkahub.data.ai.transformers
+
+import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.provider.EmbeddingGenerationParams
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessageAnnotation
+import me.rerere.rikkahub.data.ai.VectorStoreCache
+import me.rerere.rikkahub.data.ai.resolveEmbeddingModel
+import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.AuthorNotePosition
+import me.rerere.rikkahub.data.model.InjectionPosition
+import me.rerere.rikkahub.data.model.PromptInjection
+import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.TavernBookEntry
+import me.rerere.rikkahub.data.model.TavernCharacterData
+import me.rerere.rikkahub.data.model.extractContextForMatching
+import me.rerere.rikkahub.data.model.isTriggered
+import me.rerere.rikkahub.data.model.matchedKeyScore
+import me.rerere.rikkahub.ui.pages.assistant.detail.mapSelectiveLogic
+import me.rerere.rikkahub.ui.pages.assistant.detail.mapTavernPosition
+import me.rerere.rikkahub.ui.pages.assistant.detail.mapTavernRole
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
+import kotlin.uuid.Uuid
+import kotlin.random.Random
+import me.rerere.rikkahub.utils.l10n
+
+/**
+ * 提示词注入转换器
+ *
+ * 根据 Assistant 关联的 ModeInjection 和 Lorebook 进行提示词注入
+ */
+object PromptInjectionTransformer : InputMessageTransformer, KoinComponent {
+
+    private val providerManager: ProviderManager by inject()
+
+    // 粘性追踪：assistantId:conversationId → (injectionId → 剩余轮数)
+    // ConcurrentHashMap：单例 transformer 被并发生成共享，普通 HashMap 会丢条目/CME
+    private val stickyTracker = java.util.concurrent.ConcurrentHashMap<String, MutableMap<Uuid, Int>>()
+    // 冷却追踪：assistantId:conversationId → (injectionId → 剩余冷却轮数)
+    private val cooldownTracker = java.util.concurrent.ConcurrentHashMap<String, MutableMap<Uuid, Int>>()
+    // 已推进过的用户轮（agentic 步骤去重）
+    private val lastTickedUserTurn = java.util.concurrent.ConcurrentHashMap<String, String>()
+    // 按用户轮冻结的世界书注入：agentic 工具循环每步重跑本 transformer，若每步重扫
+    // 增长的消息列表，激活集合/概率掷点/尾部锚点都会漂移，前缀缓存每步归零。
+    // key = assistantId:conversationId，value = (lastUserMsgId, 冻结数据)
+    private val frozenTurnInjections =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String, FrozenTurnInjection>>()
+    // 冻结缓存上限（超出清空，防长期驻留内存）：每条目只有几 KB，64 个会话绰绰有余
+    private const val MAX_FROZEN_TURNS = 64
+
+    private class FrozenTurnInjection(
+        val injections: List<PromptInjection>,
+        val anchors: Map<String, String>,
+        val fingerprint: Int,
+    )
+
+    // 绑定的预设/世界书（含启用状态与内容）指纹：改动后当前轮立即重算，而非等新会话
+    private fun injectionFingerprint(ctx: TransformerContext): Int {
+        val assistant = ctx.assistant
+        val settings = ctx.settings
+        var h = assistant.modeInjectionIds.hashCode()
+        h = 31 * h + assistant.lorebookIds.hashCode()
+        for (id in assistant.modeInjectionIds) {
+            val injection = settings.modeInjections.firstOrNull { it.id == id } ?: continue
+            h = 31 * h + injection.hashCode()
+        }
+        for (id in assistant.lorebookIds) {
+            val book = settings.lorebooks.firstOrNull { it.id == id } ?: continue
+            h = 31 * h + book.hashCode()
+        }
+        h = 31 * h + assistant.tavernData.hashCode()
+        return h
+    }
+
+    override suspend fun transform(
+        ctx: TransformerContext,
+        messages: List<UIMessage>,
+    ): List<UIMessage> {
+        // 官方把 sticky/cooldown 存在 chat_metadata（按对话），这里也必须按对话隔离，
+        // 避免 A 对话的粘性/冷却泄漏到同一助手的 B 对话
+        val key = "${ctx.assistant.id}:${ctx.conversationId ?: "no-conversation"}"
+
+        val lastUserMsgId = messages.lastOrNull { it.role == MessageRole.USER }?.id?.toString()
+        val fingerprint = injectionFingerprint(ctx)
+        val frozen = lastUserMsgId?.let { id ->
+            frozenTurnInjections[key]?.takeIf { it.first == id && it.second.fingerprint == fingerprint }?.second
+        }
+
+        // sticky/cooldown 按用户轮推进（对齐酒馆 chat_metadata 语义）。agentic 工具循环每步
+        // 都会重跑本 transformer，不按轮去重的话 sticky=3 一轮就走完 3 步
+        val alreadyTicked = lastUserMsgId != null && run {
+            if (lastTickedUserTurn.size >= MAX_FROZEN_TURNS) lastTickedUserTurn.clear()
+            lastTickedUserTurn.put(key, lastUserMsgId) == lastUserMsgId
+        }
+
+        // 激活集合已冻结时跳过向量检索（查询文本每步变化，重算只会白烧嵌入 API）
+        val vectorActivatedIds = if (frozen != null) {
+            emptySet()
+        } else {
+            resolveVectorActivations(ctx.context, ctx, messages)
+        }
+
+        val anchors = java.util.concurrent.ConcurrentHashMap<String, String>()
+        if (frozen != null) anchors.putAll(frozen.anchors)
+
+        val result = transformMessages(
+            messages = messages,
+            assistant = ctx.assistant,
+            modeInjections = ctx.settings.modeInjections,
+            lorebooks = ctx.settings.lorebooks,
+            conversationModeInjectionIds = ctx.conversationModeInjectionIds,
+            conversationLorebookIds = ctx.conversationLorebookIds,
+            activeStickyEntries = stickyTracker.getOrPut(key) { java.util.concurrent.ConcurrentHashMap() },
+            cooldownEntries = cooldownTracker.getOrPut(key) { java.util.concurrent.ConcurrentHashMap() },
+            authorNotePosition = ctx.settings.authorNotePosition,
+            authorNoteDepth = ctx.settings.authorNoteDepth,
+            worldInfoBudget = ctx.settings.worldInfoBudget,
+            worldInfoBudgetCap = ctx.settings.worldInfoBudgetCap,
+            worldInfoMinActivations = ctx.settings.worldInfoMinActivations,
+            worldInfoMinActivationsDepthMax = ctx.settings.worldInfoMinActivationsDepthMax,
+            worldInfoRecursive = ctx.settings.worldInfoRecursive,
+            worldInfoMaxRecursionSteps = ctx.settings.worldInfoMaxRecursionSteps,
+            worldInfoDepth = ctx.settings.worldInfoDepth,
+            worldInfoCharacterStrategy = ctx.settings.worldInfoCharacterStrategy,
+            worldInfoOverflowAlert = ctx.settings.worldInfoOverflowAlert,
+            worldInfoUseGroupScoring = ctx.settings.worldInfoUseGroupScoring,
+            generationType = ctx.generationType,
+            onOverflow = { ctx.processingStatus?.value = l10n("世界书预算已满，部分条目未注入", "World book budget is full; some entries were not injected") },
+            personaDescription = ctx.settings.personas
+                .firstOrNull { p -> p.id == ctx.settings.activePersonaId && p.enabled }
+                ?.description ?: "",
+            vectorActivatedIds = vectorActivatedIds,
+            tickState = !alreadyTicked,
+            frozenInjections = frozen?.injections,
+            anchors = anchors,
+            onResolved = { resolved ->
+                // 本轮首次计算：冻结激活集合与尾部锚点，供本轮后续 agentic 步骤复用
+                if (frozen == null && lastUserMsgId != null) {
+                    if (frozenTurnInjections.size >= MAX_FROZEN_TURNS) frozenTurnInjections.clear()
+                    frozenTurnInjections[key] = lastUserMsgId to
+                        FrozenTurnInjection(resolved, anchors.toMap(), fingerprint)
+                }
+            },
+        )
+
+        return result
+    }
+
+    /**
+     * 官方 Vector Storage 检索：
+     * - 查询向量 = 最近 N 条非系统消息文本（官方用聊天记录做检索）
+     * - vectorized 条目按 (嵌入模型, 内容) 缓存向量，内容不变不重复调用嵌入接口
+     * - 余弦相似度 >= 阈值即激活
+     * 任一环节失败（未配置模型/接口不支持/请求失败）静默降级为空集合，不影响关键词路径。
+     */
+    private suspend fun resolveVectorActivations(
+        context: Context,
+        ctx: TransformerContext,
+        messages: List<UIMessage>,
+    ): Set<Uuid> = withContext(Dispatchers.IO) {
+        runCatching {
+            val settings = ctx.settings
+            if (!settings.vectorStorageEnabled) return@runCatching emptySet<Uuid>()
+            // 未显式配置嵌入模型时自动回退（快速模型所在提供商优先）
+            val (providerSetting, model) = settings.resolveEmbeddingModel()
+                ?: return@runCatching emptySet()
+
+            // 与 collectInjections 相同的书绑定过滤，只检索已绑定的书。
+            // 角色卡内嵌书不在绑定列表里，单独从卡片构建（官方模型：内嵌书始终随卡生效）
+            val effectiveLorebookIds = ctx.assistant.lorebookIds
+            val vectorizedEntries = (
+                settings.lorebooks
+                    .filter { it.enabled && it.id in effectiveLorebookIds }
+                    .flatMap { it.entries } +
+                    buildCharacterBookEntries(ctx.assistant.tavernData)
+                ).filter { it.enabled && it.vectorized }
+            if (vectorizedEntries.isEmpty()) return@runCatching emptySet()
+
+            val query = messages.filter { it.role != MessageRole.SYSTEM }
+                .takeLast(settings.vectorStorageScanDepth.coerceAtLeast(1))
+                .joinToString("\n") { it.toText() }
+            if (query.isBlank()) return@runCatching emptySet()
+
+            val providerHandler = providerManager.getProviderByType(providerSetting)
+            // 单次读取：每条目一次磁盘 IO（get 两次 ×几百条目 = 每轮几百次读）
+            val vectorsByKey = vectorizedEntries.associate {
+                cacheKey(model.id, it.content) to VectorStoreCache.get(context, cacheKey(model.id, it.content))
+            }.toMutableMap()
+            val uncached = vectorizedEntries.filter { vectorsByKey[cacheKey(model.id, it.content)] == null }
+            // 查询向量
+            val queryVector = runCatching {
+                providerHandler.generateEmbedding(
+                    providerSetting = providerSetting,
+                    params = EmbeddingGenerationParams(model = model, input = listOf(query)),
+                ).embeddings.firstOrNull()?.toFloatArray()
+            }.getOrElse {
+                // 负缓存：请求超限/失败时短 TTL 内不再重发同一批（否则每轮重复付费且永远失败）
+                embedFailureUntil = System.currentTimeMillis() + EMBED_FAILURE_TTL_MS
+                null
+            } ?: return@runCatching emptySet()
+            // 分批嵌入未缓存条目：一次塞几百条会超供应商单请求上限，整批失败且什么都缓存不了；
+            // 分批可让部分成功先落盘
+            if (System.currentTimeMillis() >= embedFailureUntil) {
+                uncached.chunked(EMBED_BATCH_SIZE).forEach { batch ->
+                    runCatching {
+                        providerHandler.generateEmbedding(
+                            providerSetting = providerSetting,
+                            params = EmbeddingGenerationParams(
+                                model = model,
+                                input = batch.map { it.content },
+                            ),
+                        )
+                    }.onSuccess { result ->
+                        batch.forEachIndexed { index, entry ->
+                            result.embeddings.getOrNull(index)?.let {
+                                VectorStoreCache.put(context, cacheKey(model.id, entry.content), it.toFloatArray())
+                                // 同轮写入快照：新嵌入的条目本轮即可参与激活，不用等下一轮
+                                vectorsByKey[cacheKey(model.id, entry.content)] = it.toFloatArray()
+                            }
+                        }
+                    }.onFailure { embedFailureUntil = System.currentTimeMillis() + EMBED_FAILURE_TTL_MS }
+                }
+            }
+
+            vectorizedEntries.mapNotNull { entry ->
+                val entryVector = vectorsByKey[cacheKey(model.id, entry.content)]
+                    ?: return@mapNotNull null
+                val similarity = VectorStoreCache.cosineSimilarity(queryVector, entryVector)
+                if (similarity >= settings.vectorStorageThreshold) entry.id else null
+            }.toSet()
+        }.getOrElse { emptySet() }.also {
+            if (it.isNotEmpty()) {
+                android.util.Log.d("WorldInfo", "vector storage activated ${it.size} entries")
+            }
+        }
+    }
+
+    private fun cacheKey(modelId: Uuid, content: String): String = "$modelId\n${content.trim()}"
+
+    /** 单次嵌入请求的条目上限：部分供应商对 input 数组有条数/token 限制 */
+    private const val EMBED_BATCH_SIZE = 64
+
+    /** 嵌入请求失败后的负缓存窗口，窗口内不再重发（避免每轮重复失败+重复计费） */
+    private const val EMBED_FAILURE_TTL_MS = 60_000L
+
+    @Volatile
+    private var embedFailureUntil = 0L
+}
+
+/**
+ * 角色卡内嵌世界书 → RegexInjection 列表。
+ *
+ * 官方模型（world-info.js）：角色卡的 character_book 属于 characterLore，始终随卡生效，
+ * 与全局/会话世界书合并扫描，互不覆盖。这里直接从卡片构建，不走"物化成独立外置书"，
+ * 从结构上杜绝内嵌书与全局书互相覆盖。
+ *
+ * 同一卡片的同一条目在多次调用间需要稳定 id（sticky/cooldown/向量激活按 id 追踪），
+ * 用卡内 entry.id + 内容哈希生成，保证跨轮一致。
+ */
+internal fun buildCharacterBookEntries(tav: TavernCharacterData?): List<PromptInjection.RegexInjection> {
+    if (tav == null) return emptyList()
+    val entries = mutableListOf<PromptInjection.RegexInjection>()
+    // 内嵌世界书条目
+    tav.embeddedBook?.let { book ->
+        entries.addAll(book.entries.map { tavernEntryToRegexInjection(it) })
+    }
+    // PHI（post_history_instructions）→ 官方行为：聊天历史末尾之后追加（user 消息）
+    if (tav.postHistoryInstructions.isNotBlank()) {
+        entries.add(
+            PromptInjection.RegexInjection(
+                id = stableCharacterEntryId("phi", tav.postHistoryInstructions),
+                name = l10n("历史后续指令", "Post-history instructions"),
+                enabled = true,
+                priority = 0,
+                position = InjectionPosition.AFTER_DIALOG,
+                content = tav.postHistoryInstructions,
+                constantActive = true,
+            )
+        )
+    }
+    // 官方深度提示（extensions.depth_prompt）→ 按深度/角色注入对话（默认深度4、system）
+    if (tav.depthPrompt.isNotBlank()) {
+        entries.add(
+            PromptInjection.RegexInjection(
+                id = stableCharacterEntryId("depth", tav.depthPrompt),
+                name = l10n("深度提示", "Depth prompt"),
+                enabled = true,
+                priority = 0,
+                position = InjectionPosition.AT_DEPTH,
+                injectDepth = tav.depthPromptDepth,
+                content = tav.depthPrompt,
+                constantActive = true,
+                role = mapTavernRole(tav.depthPromptRole),
+            )
+        )
+    }
+    return entries
+}
+
+/** 卡内条目 → RegexInjection（id 稳定，保证 sticky/cooldown 跨轮生效） */
+private fun tavernEntryToRegexInjection(entry: TavernBookEntry): PromptInjection.RegexInjection {
+    return PromptInjection.RegexInjection(
+        id = stableCharacterEntryId("entry:${entry.id}", entry.content),
+        name = entry.comment.ifEmpty { entry.keys.firstOrNull() ?: "Entry ${entry.id}" },
+        enabled = !entry.disable,
+        priority = entry.priority,
+        position = mapTavernPosition(entry.position),
+        injectDepth = entry.depth,
+        content = entry.content,
+        role = mapTavernRole(entry.role),
+        keywords = entry.keys,
+        secondaryKeys = entry.secondaryKeys,
+        useRegex = entry.useRegex,
+        caseSensitive = entry.caseSensitive,
+        matchWholeWords = entry.matchWholeWords,
+        excludeRecursion = entry.excludeRecursion,
+        preventRecursion = entry.preventRecursion,
+        delayUntilRecursion = entry.delayUntilRecursion,
+        scanDepth = entry.scanDepth,
+        constantActive = entry.constant,
+        selective = entry.selective,
+        selectiveLogic = mapSelectiveLogic(entry.selectiveLogic),
+        group = entry.group,
+        probability = entry.probability,
+        sticky = entry.sticky,
+        cooldown = entry.cooldown,
+        delay = entry.delay,
+        groupWeight = entry.groupWeight,
+        groupOverride = entry.groupOverride,
+        useProbability = entry.useProbability,
+        inclusionGroup = entry.inclusionGroup,
+        useGroupScoring = entry.useGroupScoring,
+        groupPriority = entry.groupPriority,
+        automationId = entry.automationId,
+        displayIndex = entry.displayIndex,
+        displayPosition = entry.displayPosition,
+        triggers = entry.triggers,
+        matchPersonaDescription = entry.matchPersonaDescription,
+        matchCharacterDescription = entry.matchCharacterDescription,
+        matchCharacterPersonality = entry.matchCharacterPersonality,
+        matchCharacterDepthPrompt = entry.matchCharacterDepthPrompt,
+        matchScenario = entry.matchScenario,
+        matchCreatorNotes = entry.matchCreatorNotes,
+        ignoreBudget = entry.ignoreBudget,
+    )
+}
+
+/**
+ * 卡内条目在排序时借用的占位书：只用于 world_info_character_strategy 的 isCharacterBook 判定，
+ * 不会作为"外置绑定书"被引用。
+ */
+private val CHARACTER_BOOK_PLACEHOLDER = Lorebook(name = "character_book", isCharacterBook = true)
+
+/**
+ * 卡内条目的稳定 id：以 (卡内 key, 内容) 哈希生成，同一卡同一条目每次得到同一个 id。
+ * 注意与"导入时物化的外置书"条目的随机 id 不同，故迁移时必须删除旧的物化书，
+ * 否则同一份内容会以两个 id 注入两次。
+ */
+private fun stableCharacterEntryId(key: String, content: String): Uuid {
+    val h = (key.hashCode().toLong() shl 32) or (content.hashCode().toLong() and 0xFFFFFFFFL)
+    val h2 = (h * 31 + content.length).toLong()
+    return Uuid.fromLongs(h, h2)
+}
+
+/**
+ * 核心注入逻辑（可测试的纯函数）
+ */
+internal fun transformMessages(
+    messages: List<UIMessage>,
+    assistant: Assistant,
+    modeInjections: List<PromptInjection.ModeInjection>,
+    lorebooks: List<Lorebook>,
+    conversationModeInjectionIds: Set<Uuid> = emptySet(),
+    conversationLorebookIds: Set<Uuid> = emptySet(),
+    activeStickyEntries: MutableMap<Uuid, Int> = mutableMapOf(),
+    cooldownEntries: MutableMap<Uuid, Int> = mutableMapOf(),
+    authorNotePosition: AuthorNotePosition = AuthorNotePosition.IN_CHAT,
+    authorNoteDepth: Int = 4,
+    tickState: Boolean = true,
+    worldInfoBudget: Int = 25,
+    worldInfoBudgetCap: Int = 0,
+    worldInfoMinActivations: Int = 0,
+    worldInfoMinActivationsDepthMax: Int = 0,
+    worldInfoRecursive: Boolean = false,
+    worldInfoMaxRecursionSteps: Int = 0,
+    worldInfoDepth: Int = 2,
+    worldInfoCharacterStrategy: Int = 1,
+    worldInfoOverflowAlert: Boolean = false,
+    worldInfoUseGroupScoring: Boolean = false,
+    generationType: me.rerere.rikkahub.data.model.GenerationType = me.rerere.rikkahub.data.model.GenerationType.NORMAL,
+    personaDescription: String = "",
+    onOverflow: () -> Unit = {},
+    vectorActivatedIds: Set<Uuid> = emptySet(),
+    frozenInjections: List<PromptInjection>? = null,
+    anchors: java.util.concurrent.ConcurrentHashMap<String, String>? = null,
+    onResolved: ((List<PromptInjection>) -> Unit)? = null,
+): List<UIMessage> {
+    // 收集所有需要注入的内容（按用户轮冻结时直接复用首轮扫描结果）
+    val injections = frozenInjections ?: collectInjections(
+        messages = messages,
+        assistant = assistant,
+        modeInjections = modeInjections,
+        lorebooks = lorebooks,
+        conversationModeInjectionIds = conversationModeInjectionIds,
+        conversationLorebookIds = conversationLorebookIds,
+        activeStickyEntries = activeStickyEntries,
+        cooldownEntries = cooldownEntries,
+        worldInfoBudget = worldInfoBudget,
+        worldInfoBudgetCap = worldInfoBudgetCap,
+        worldInfoMinActivations = worldInfoMinActivations,
+        worldInfoMinActivationsDepthMax = worldInfoMinActivationsDepthMax,
+        worldInfoRecursive = worldInfoRecursive,
+        worldInfoMaxRecursionSteps = worldInfoMaxRecursionSteps,
+        worldInfoDepth = worldInfoDepth,
+        worldInfoCharacterStrategy = worldInfoCharacterStrategy,
+        worldInfoOverflowAlert = worldInfoOverflowAlert,
+        worldInfoUseGroupScoring = worldInfoUseGroupScoring,
+        generationType = generationType,
+        personaDescription = personaDescription,
+        onOverflow = onOverflow,
+        vectorActivatedIds = vectorActivatedIds,
+    )
+
+    if (injections.isEmpty()) {
+        // 无注入时仍要推进粘性和冷却状态
+        if (tickState) {
+            tickSticky(activeStickyEntries, cooldownEntries, emptyList())
+            tickCooldowns(cooldownEntries)
+        }
+        return messages
+    }
+
+    // 解析 AUTHOR_NOTE 到实际位置（对已解析的冻结注入是幂等的）
+    val resolvedInjections = injections.map { injection ->
+        if (injection.position == InjectionPosition.AUTHOR_NOTE) {
+            when (authorNotePosition) {
+                AuthorNotePosition.IN_CHAT -> when (injection) {
+                    is PromptInjection.RegexInjection -> injection.copy(
+                        position = InjectionPosition.AT_DEPTH,
+                        injectDepth = authorNoteDepth,
+                    )
+                    is PromptInjection.ModeInjection -> injection.copy(
+                        position = InjectionPosition.AT_DEPTH,
+                    )
+                }
+                // After Main Prompt / Story String：角色卡之后、对话之前
+                AuthorNotePosition.IN_PROMPT -> when (injection) {
+                    is PromptInjection.RegexInjection -> injection.copy(position = InjectionPosition.ANTAGONIZE)
+                    is PromptInjection.ModeInjection -> injection.copy(position = InjectionPosition.ANTAGONIZE)
+                }
+                // Before Main Prompt / Story String：提示词最前面
+                AuthorNotePosition.BEFORE_PROMPT -> when (injection) {
+                    is PromptInjection.RegexInjection -> injection.copy(position = InjectionPosition.BEFORE_SYSTEM_PROMPT)
+                    is PromptInjection.ModeInjection -> injection.copy(position = InjectionPosition.BEFORE_SYSTEM_PROMPT)
+                }
+            }
+        } else {
+            injection
+        }
+    }
+
+    // 按位置分组。官方构建提示词时按 order 降序遍历 + unshift（world-info.js sortFn + WIBeforeEntries.unshift），
+    // 最终注入顺序 = order 升序（先写的在前），这里直接按 priority 升序对齐
+    val byPosition = resolvedInjections
+        .sortedBy { it.priority }
+        .groupBy { it.position }
+
+    // 应用注入（尾部相对位置按锚点消息冻结，见 applyInjections 注释）
+    val result = applyInjections(messages, byPosition, anchors)
+    onResolved?.invoke(resolvedInjections)
+    android.util.Log.d(
+        "WorldInfo",
+        "applied: msgs ${messages.size} -> ${result.size} " +
+            "(+${result.count { it.isSynthetic }} synthetic), " +
+            "injected content ~${injections.sumOf { estimateTokens(it.content) }} tokens",
+    )
+
+    // 推进粘性和冷却
+    if (tickState) {
+        tickSticky(activeStickyEntries, cooldownEntries, injections.filterIsInstance<PromptInjection.RegexInjection>())
+        tickCooldowns(cooldownEntries)
+    }
+
+    return result
+}
+
+/**
+ * 收集需要注入的内容
+ */
+internal fun collectInjections(
+    messages: List<UIMessage>,
+    assistant: Assistant,
+    modeInjections: List<PromptInjection.ModeInjection>,
+    lorebooks: List<Lorebook>,
+    conversationModeInjectionIds: Set<Uuid> = emptySet(),
+    conversationLorebookIds: Set<Uuid> = emptySet(),
+    activeStickyEntries: MutableMap<Uuid, Int> = mutableMapOf(),
+    cooldownEntries: MutableMap<Uuid, Int> = mutableMapOf(),
+    worldInfoBudget: Int = 25,
+    worldInfoBudgetCap: Int = 0,
+    worldInfoMinActivations: Int = 0,
+    worldInfoMinActivationsDepthMax: Int = 0,
+    worldInfoRecursive: Boolean = false,
+    worldInfoMaxRecursionSteps: Int = 0,
+    worldInfoDepth: Int = 2,
+    worldInfoCharacterStrategy: Int = 1,
+    worldInfoOverflowAlert: Boolean = false,
+    worldInfoUseGroupScoring: Boolean = false,
+    generationType: me.rerere.rikkahub.data.model.GenerationType = me.rerere.rikkahub.data.model.GenerationType.NORMAL,
+    personaDescription: String = "",
+    onOverflow: () -> Unit = {},
+    vectorActivatedIds: Set<Uuid> = emptySet(),
+): List<PromptInjection> {
+    val injections = mutableListOf<PromptInjection>()
+    // 绑定跟随助手自身，会话级绑定已废弃（见 PreferenceStoreV4Migration）
+    val effectiveModeInjectionIds = assistant.modeInjectionIds
+    val effectiveLorebookIds = assistant.lorebookIds
+
+    // 1. 获取关联的 ModeInjection
+    modeInjections
+        .filter { it.enabled && effectiveModeInjectionIds.contains(it.id) }
+        .forEach { injections.add(it) }
+
+    // 2. 获取关联的 Lorebook 中被触发的 RegexInjection。
+    //    官方模型（world-info.js checkWorldInfo）：characterLore（角色卡内嵌书）+ globalLore
+    //    （绑定的外置书）合并成一个列表统一扫描，两者始终同时生效、互不覆盖。
+    //    内嵌书直接从卡片构建（不物化成外置书），所以不可能与全局书互相改写。
+    val boundLorebooks = lorebooks.filter {
+        it.enabled && effectiveLorebookIds.contains(it.id)
+    }
+    // 角色卡内嵌书始终生效，不受绑定开关影响（解绑外置书不影响卡内书）
+    val characterEntries = buildCharacterBookEntries(assistant.tavernData)
+    android.util.Log.d(
+        "WorldInfo",
+        "assistant=${assistant.name}(${assistant.id}) allowConv=${assistant.allowConversationPromptInjection} " +
+            "assistantBooks=${assistant.lorebookIds.size} convBooks=${conversationLorebookIds.size} " +
+            "effective=${effectiveLorebookIds.size} allBooks=${lorebooks.size} " +
+            "boundBooks=${boundLorebooks.map { it.name to it.entries.size }} " +
+            "characterEntries=${characterEntries.size}",
+    )
+    if (boundLorebooks.isNotEmpty() || characterEntries.isNotEmpty()) {
+        // 提取上下文用于匹配（只取非 SYSTEM 消息）
+        val nonSystemMessages = messages.filter { it.role != MessageRole.SYSTEM }
+        // 官方 failedProbabilityChecks：本次扫描中概率未通过的条目，后续递归/补扫不再重新掷
+        val failedProbabilityIds = mutableSetOf<Uuid>()
+        // 官方 match_* 开关：按条目决定哪些角色卡字段纳入扫描（默认只扫聊天）
+        val tav = assistant.tavernData
+        fun buildCharScanContext(entry: PromptInjection.RegexInjection): String = buildString {
+            if (tav == null) return@buildString
+            if (entry.matchCharacterDescription && tav.description.isNotBlank()) appendLine(tav.description)
+            if (entry.matchCharacterPersonality && tav.personality.isNotBlank()) appendLine(tav.personality)
+            if (entry.matchScenario && tav.scenario.isNotBlank()) appendLine(tav.scenario)
+            if (entry.matchCreatorNotes && tav.creatorNotes.isNotBlank()) appendLine(tav.creatorNotes)
+            if (entry.matchCharacterDepthPrompt && tav.depthPrompt.isNotBlank()) appendLine(tav.depthPrompt)
+            if (entry.matchPersonaDescription && personaDescription.isNotBlank()) appendLine(personaDescription)
+        }.trim()
+
+        // 官方 getSortedEntries：所有选中书的条目合并成一个列表，按策略排序。
+        // 排序顺序影响扫描顺序（概率/预算检查顺序），官方 sortFn = (a, b) => b.order - a.order（order 降序）
+        // 内嵌书条目按 isCharacterBook=true 参与官方排序策略
+        val sortedEntries = (
+            boundLorebooks.flatMap { book -> book.entries.map { entry -> book to entry } } +
+                characterEntries.map { CHARACTER_BOOK_PLACEHOLDER to it }
+            ).let { pairs ->
+                when (worldInfoCharacterStrategy) {
+                    // 0 = evenly：全局与角色卡条目混排（官方 [...globalLore, ...characterLore].sort(sortFn)）
+                    0 -> pairs.sortedWith(compareByDescending { it.second.priority })
+                    // 1 = character_first：角色卡条目在前
+                    1 -> pairs.sortedWith(
+                        compareByDescending<Pair<Lorebook, PromptInjection.RegexInjection>> { it.first.isCharacterBook }
+                            .thenByDescending { it.second.priority }
+                    )
+                    // 2 = global_first：全局条目在前
+                    else -> pairs.sortedWith(
+                        compareBy<Pair<Lorebook, PromptInjection.RegexInjection>> { it.first.isCharacterBook }
+                            .thenByDescending { it.second.priority }
+                    )
+                }
+            }
+
+        // 官方 checkWorldInfo 单循环共享状态：
+        // allActivatedEntries（Map，key=world.uid 去重）、递归缓冲、failedProbabilityChecks、skew、预算
+        val activatedEntries = mutableListOf<PromptInjection.RegexInjection>()
+        val knownIds = mutableSetOf<Uuid>()
+        var recursionContext = ""
+        var skew = 0
+        var currentLevel = 0
+        var count = 0
+        // 官方 scan_state：INITIAL / RECURSION / MIN_ACTIVATIONS（官方 world_info_scan_type 枚举）
+        var scanState = 0 // 0=INITIAL 1=RECURSION 2=MIN_ACTIVATIONS
+        // 官方 availableRecursionDelayLevels：全部条目的 delay_until_recursion 去重升序，逐级开放
+        val availableLevels = sortedEntries
+            .map { it.second.delayUntilRecursion }
+            .filter { it > 0 }
+            .distinct()
+            .sorted()
+            .toMutableList()
+        // 本地不再按官方世界书预算（world_info_budget）裁剪条目：预算会把短对话的条目全部挤掉，
+        // 表现为世界书"随缘生效"。命中的条目全部注入，预算相关参数仅作导入兼容保留。
+
+        // 官方 while (scanState)：INITIAL → (RECURSION / MIN_ACTIVATIONS / 层级开放) 循环
+        // max_recursion_steps 语义（官方）：只对 RECURSION 轮计数，循环开头检查 count >= 上限则停止
+        // （INITIAL 轮不占步数）；0 = 不限制
+        while (worldInfoMaxRecursionSteps <= 0 || count < worldInfoMaxRecursionSteps) {
+            val isRecursion = scanState == 1
+            if (isRecursion) count++
+            val newlyTriggered = mutableListOf<PromptInjection.RegexInjection>()
+            // 触发时的关键词匹配分（酒馆 use_group_scoring 用）
+            val triggeredScores = mutableMapOf<Uuid, Int>()
+
+            for ((lorebook, entry) in sortedEntries) {
+                // 官方：已激活条目和概率失败过的条目直接跳过
+                if (knownIds.contains(entry.id) || failedProbabilityIds.contains(entry.id)) continue
+
+                // 官方：disable 条目跳过（在 triggers 过滤之前；官方 disable 字段导入后映射为 enabled）
+                if (!entry.enabled) continue
+
+                // 生成类型过滤（酒馆 triggers）
+                if (entry.triggers.isNotEmpty() && generationType.value !in entry.triggers) continue
+
+                // 官方：delay 中的条目跳过（在 cooldown 之前，无豁免）
+                if (entry.delay > 0 && nonSystemMessages.size < entry.delay) continue
+
+                // 冷却中的条目跳过（官方 isCooldown && !isSticky：粘性豁免）
+                if (cooldownEntries.containsKey(entry.id) && !activeStickyEntries.containsKey(entry.id)) continue
+
+                // 官方：非递归扫描跳过所有 delay_until_recursion 条目（粘性豁免）
+                if (entry.delayUntilRecursion > 0 &&
+                    !isRecursion &&
+                    !activeStickyEntries.containsKey(entry.id)
+                ) {
+                    continue
+                }
+
+                // 官方：递归扫描只放行层级 <= 当前开放层级的条目（粘性豁免）
+                if (isRecursion &&
+                    entry.delayUntilRecursion > currentLevel &&
+                    !activeStickyEntries.containsKey(entry.id)
+                ) {
+                    continue
+                }
+
+                // 官方：exclude_recursion 条目在递归扫描中被跳过（官方还要求全局递归开关开启；
+                // 全局递归关时 delay_until_recursion 层级开放也走 RECURSION 状态，但官方不视其为递归，不排除）
+                if (isRecursion && worldInfoRecursive && entry.excludeRecursion && !activeStickyEntries.containsKey(entry.id)) continue
+
+                // 官方：constant / 激活中 sticky 条目直接加入（constant 在前，sticky 在后）
+                if (entry.constantActive || activeStickyEntries.containsKey(entry.id)) {
+                    newlyTriggered.add(entry)
+                    continue
+                }
+
+                // 官方 vectorized：向量检索命中的条目直接激活；未命中但有主关键词的条目仍走关键词匹配
+                if (entry.vectorized) {
+                    if (entry.id in vectorActivatedIds) {
+                        newlyTriggered.add(entry)
+                        triggeredScores[entry.id] = 1
+                        continue
+                    }
+                    if (entry.keywords.isEmpty()) continue
+                }
+
+                // 官方 WorldInfoBuffer.get：条目 scanDepth 优先，否则全局深度 + skew；
+                // 官方 startDepth 恒为 0（advanceScan 只增 skew），min_activations 推进时整段重扫
+                val depth = entry.scanDepth ?: (worldInfoDepth + skew)
+                val chatContext = extractContextForMatching(nonSystemMessages, depth, 0)
+                // 官方 match_*：只把该条目开启的角色卡字段纳入扫描
+                val entryCharScan = buildCharScanContext(entry)
+                val context = buildString {
+                    if (entryCharScan.isNotEmpty()) {
+                        append(entryCharScan)
+                        appendLine()
+                    }
+                    // 官方 buffer.get：递归缓冲拼入除 MIN_ACTIVATIONS 外的所有扫描
+                    if (scanState != 2 && recursionContext.isNotEmpty()) {
+                        append(recursionContext)
+                        appendLine()
+                    }
+                    append(chatContext)
+                }
+                if (entry.isTriggered(context, rollProbability = false)) {
+                    newlyTriggered.add(entry)
+                    triggeredScores[entry.id] = entry.matchedKeyScore(context)
+                }
+            }
+
+            // 官方：组选后逐条掷概率 + 预算（newEntries.sort：粘性优先，再按 sortedEntries 顺序）
+            val found = selectGroupWinners(
+                newlyTriggered = newlyTriggered,
+                triggeredScores = triggeredScores,
+                activeStickyEntries = activeStickyEntries,
+                alreadyActivated = activatedEntries,
+                globalUseGroupScoring = worldInfoUseGroupScoring,
+            )
+            val accepted = mutableListOf<PromptInjection.RegexInjection>()
+            for (entry in found.sortedWith(
+                compareByDescending<PromptInjection.RegexInjection> { activeStickyEntries.containsKey(it.id) }
+                    .thenByDescending { it.priority }
+            )) {
+                // 官方 verifyProbability：useProbability 且 <100 才掷；sticky 免掷；失败记入 failedProbabilityChecks
+                if (entry.useProbability && entry.probability < 100 && !activeStickyEntries.containsKey(entry.id)) {
+                    if (Random.nextInt(100) >= entry.probability) {
+                        failedProbabilityIds.add(entry.id)
+                        continue
+                    }
+                }
+                accepted.add(entry)
+            }
+
+            val newOnes = accepted.filter { it.id !in knownIds }
+            newOnes.forEach { knownIds.add(it.id) }
+            activatedEntries.addAll(newOnes)
+
+            // 官方 successfulNewEntriesForRecursion：prevent_recursion 条目的内容不进递归缓冲，逐轮累积
+            val newRecursionText = newOnes
+                .filter { !it.preventRecursion }
+                .joinToString("\n") { it.content }
+            if (newRecursionText.isNotBlank()) {
+                recursionContext = listOf(recursionContext, newRecursionText)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
+            }
+
+            // 官方状态机：
+            // 1. 还有未开放的 delay_until_recursion 层级 → 先开放下一级，本轮递归扫描即按新层级放行
+            //    （官方要求全局递归开关开启，delay_until_recursion 才生效）
+            var nextScanState = -1 // -1 = 无下一步（停止）
+            if (worldInfoRecursive && availableLevels.isNotEmpty()) {
+                nextScanState = 1
+                currentLevel = availableLevels.removeAt(0)
+            }
+            // 2. 本轮有成功新条目（不含 prevent_recursion）且未溢出 → 递归扫描
+            if (nextScanState == -1 && worldInfoRecursive && newRecursionText.isNotBlank()) {
+                nextScanState = 1
+            }
+            // 3. min_activations 扫描中且有递归缓冲 → 先递归一次（官方 buffer.hasRecurse() 分支）
+            if (nextScanState == -1 && worldInfoRecursive &&
+                scanState == 2 && recursionContext.isNotBlank()
+            ) {
+                nextScanState = 1
+            }
+            // 4. min_activations 未满足 → 扫描深度 +1 重扫（官方 buffer.advanceScan），
+            //    深度超限（min_activations_depth_max 或全部消息）才停；min 扫描不带递归缓冲
+            val minNotSatisfied = worldInfoMinActivations > 0 && activatedEntries.size < worldInfoMinActivations
+            val overMaxDepth = (worldInfoMinActivationsDepthMax > 0 &&
+                worldInfoDepth + skew > worldInfoMinActivationsDepthMax) ||
+                (worldInfoDepth + skew > nonSystemMessages.size)
+            if (nextScanState == -1 && minNotSatisfied && !overMaxDepth) {
+                nextScanState = 2
+                skew++
+            }
+            if (nextScanState == -1) break
+            scanState = nextScanState
+        }
+
+        for (entry in activatedEntries) {
+            injections.add(entry)
+            handleStickyCooldown(entry, activeStickyEntries, cooldownEntries)
+        }
+        android.util.Log.d(
+            "WorldInfo",
+            "scan done: activated=${activatedEntries.size} entries, " +
+                "tokens=${activatedEntries.sumOf { estimateTokens(it.content) }} " +
+                "msgs=${messages.size}",
+        )
+    }
+
+    return injections
+}
+
+/**
+ * 官方 filterByInclusionGroups 的本地实现：
+ * 1. 同组内有粘性条目 → 只保留粘性条目（官方 filterGroupsByTimedEffects）
+ * 2. 本次运行已有同组条目被激活 → 整组跳过（官方 allActivatedEntries 检查）
+ * 3. group_override 条目 → 取优先级（order）最高的
+ * 4. use_group_scoring 生效 → 移除分数低于组内最高分的条目（官方仅移除非最高分，未开启评分的条目保留）
+ * 5. 剩余条目按 group_weight 加权随机选 1 条
+ *
+ * 分组跨全部 Lorebook（官方 global/character/chat/persona 世界书共同参与分组）。
+ */
+private fun selectGroupWinners(
+    newlyTriggered: List<PromptInjection.RegexInjection>,
+    triggeredScores: Map<Uuid, Int>,
+    activeStickyEntries: Map<Uuid, Int>,
+    alreadyActivated: List<PromptInjection.RegexInjection>,
+    globalUseGroupScoring: Boolean = false,
+): List<PromptInjection.RegexInjection> {
+    if (newlyTriggered.isEmpty()) return emptyList()
+
+    val grouped = newlyTriggered
+        .filter { it.group.isNotBlank() || it.inclusionGroup.isNotBlank() }
+        .flatMap { entry ->
+            val labels = buildList {
+                if (entry.group.isNotBlank()) add(entry.group)
+                entry.inclusionGroup.split(",").map { it.trim() }.filter { it.isNotEmpty() }.let { addAll(it) }
+            }.distinct()
+            labels.map { label -> label to entry }
+        }
+        .groupBy({ it.first }, { it.second })
+    val ungrouped = newlyTriggered.filter { it.group.isBlank() && it.inclusionGroup.isBlank() }
+    val activated = mutableListOf<PromptInjection.RegexInjection>()
+    activated.addAll(ungrouped)
+
+    for ((_, entries) in grouped) {
+        // 官方 filterGroupsByTimedEffects：组内粘性条目胜出，非粘性全部移除
+        val stickyEntries = entries.filter { activeStickyEntries.containsKey(it.id) }
+        if (stickyEntries.isNotEmpty()) {
+            activated.addAll(stickyEntries)
+            continue
+        }
+
+        // 官方：该组标签在本次扫描中已激活过任何条目 → 其余条目全部移除
+        // （官方按 group 标签比对 allActivatedEntries，即使上轮的胜者本轮不再命中也要拦下）
+        val alreadyActivatedLabels = alreadyActivated.flatMap { entry ->
+            buildList {
+                if (entry.group.isNotBlank()) add(entry.group)
+                entry.inclusionGroup.split(",").map { it.trim() }.filter { it.isNotEmpty() }.let { addAll(it) }
+            }.distinct()
+        }.toSet()
+        if (entries.any { entry ->
+                buildList {
+                    if (entry.group.isNotBlank()) add(entry.group)
+                    entry.inclusionGroup.split(",").map { it.trim() }.filter { it.isNotEmpty() }.let { addAll(it) }
+                }.any { it in alreadyActivatedLabels }
+            }
+        ) continue
+
+        // 官方 filterGroupsByScoring：全局 use_group_scoring 与条目开关取或
+        // 先移除“参与评分且分数低于组内最高”的条目（未参与评分的条目保留，随后仍参与 override/加权随机）
+        val isScored = { entry: PromptInjection.RegexInjection -> entry.useGroupScoring || globalUseGroupScoring }
+        val scored = entries.filter(isScored)
+        val survivors = if (scored.isNotEmpty()) {
+            val maxScore = scored.maxOf { triggeredScores[it.id] ?: 0 }
+            entries.filter { !isScored(it) || (triggeredScores[it.id] ?: 0) == maxScore }
+        } else {
+            entries
+        }
+
+        // 官方 groupOverride：在评分幸存者中取 order（优先级）最高的覆盖条目
+        val overrides = survivors.filter { it.groupOverride || it.groupPriority }
+        val finalCandidates = if (overrides.isNotEmpty()) {
+            listOf(overrides.maxByOrNull { it.priority } ?: overrides.first())
+        } else {
+            survivors
+        }
+
+        // 官方：加权随机选 1 条
+        val totalWeight = finalCandidates.sumOf { it.groupWeight.toLong() }
+        val selected = if (totalWeight <= 0) {
+            finalCandidates.firstOrNull()
+        } else {
+            var roll = Random.nextLong(totalWeight)
+            var picked: PromptInjection.RegexInjection? = null
+            for (entry in finalCandidates) {
+                roll -= entry.groupWeight.toLong()
+                if (roll < 0) {
+                    picked = entry
+                    break
+                }
+            }
+            picked ?: finalCandidates.first()
+        }
+        selected?.let { activated.add(it) }
+    }
+    return activated
+}
+
+/** 估算文本 token 数：中日韩字符按 1 token，其余字符按 4 字符 1 token（近似） */
+internal fun estimateTokens(text: String): Int {
+    if (text.isEmpty()) return 0
+    var cjk = 0
+    var other = 0
+    for (ch in text) {
+        if (ch.code in 0x4E00..0x9FFF || ch.code in 0x3040..0x30FF || ch.code in 0xAC00..0xD7AF) {
+            cjk++
+        } else {
+            other++
+        }
+    }
+    return cjk + (other + 3) / 4
+}
+
+/** 处理粘性和冷却状态 */
+private fun handleStickyCooldown(
+    entry: PromptInjection.RegexInjection,
+    activeStickyEntries: MutableMap<Uuid, Int>,
+    cooldownEntries: MutableMap<Uuid, Int>,
+) {
+    // 官方 setTimedEffectOfType：效果已存在时不重置计数（重复激活不延长粘性）
+    if (entry.sticky > 0 && !activeStickyEntries.containsKey(entry.id)) {
+        activeStickyEntries[entry.id] = entry.sticky
+    }
+    if (entry.cooldown > 0 && !cooldownEntries.containsKey(entry.id)) {
+        cooldownEntries[entry.id] = entry.cooldown
+    }
+}
+
+/** 推进粘性计数器：每次调用减1，到0时若条目有cooldown则自动进入冷却 */
+private fun tickSticky(activeStickyEntries: MutableMap<Uuid, Int>, cooldownTracker: MutableMap<Uuid, Int>, entries: List<PromptInjection.RegexInjection>) {
+    val entriesById = entries.associateBy { it.id }
+    val toRemove = mutableListOf<Uuid>()
+    for ((id, remaining) in activeStickyEntries) {
+        if (remaining <= 1) {
+            toRemove.add(id)
+            // sticky 到期 → 自动设 cooldown（对齐酒馆）
+            val entry = entriesById[id]
+            if (entry != null && entry.cooldown > 0) {
+                cooldownTracker[id] = entry.cooldown
+            }
+        } else {
+            activeStickyEntries[id] = remaining - 1
+        }
+    }
+    toRemove.forEach { activeStickyEntries.remove(it) }
+}
+
+/** 推进冷却计数器：每次调用减1，到0移除 */
+private fun tickCooldowns(cooldownEntries: MutableMap<Uuid, Int>) {
+    val toRemove = mutableListOf<Uuid>()
+    for ((id, remaining) in cooldownEntries) {
+        if (remaining <= 1) {
+            toRemove.add(id)
+        } else {
+            cooldownEntries[id] = remaining - 1
+        }
+    }
+    toRemove.forEach { cooldownEntries.remove(it) }
+}
+
+/**
+ * 应用注入到消息列表
+ *
+ * [anchors]：尾部相对位置（BOTTOM_OF_CHAT / AFTER_DIALOG / AT_DEPTH）的锚点缓存，
+ * 按 "before/after:消息id" 记录插入参照消息。这些位置按列表长度动态计算时，agentic
+ * 工具循环每步都会把注入点往后推移一格，token 流每步在注入点分叉、前缀缓存全灭；
+ * 首轮记录锚定消息 id，后续步骤按 id 复位插入点。锚点消息被裁剪时退回动态计算。
+ */
+internal fun applyInjections(
+    messages: List<UIMessage>,
+    byPosition: Map<InjectionPosition, List<PromptInjection>>,
+    anchors: java.util.concurrent.ConcurrentHashMap<String, String>? = null,
+): List<UIMessage> {
+    val result = messages.toMutableList()
+
+    // 尾部相对位置解析：优先复用锚点，否则按动态计算结果记录锚点
+    fun resolveTailIndex(computedIndex: Int, positionKey: String): Int {
+        if (anchors == null) return computedIndex
+        val existing = anchors[positionKey]
+        if (existing != null) {
+            val mode = existing.substringBefore(':')
+            val id = existing.substringAfter(':')
+            val idx = result.indexOfFirst { it.id.toString() == id }
+            return if (idx >= 0) {
+                if (mode == "after") idx + 1 else idx
+            } else {
+                computedIndex // 锚点消息已被裁剪，退回动态计算
+            }
+        }
+        if (result.isEmpty()) return computedIndex
+        val mode = if (computedIndex >= result.size) "after" else "before"
+        val anchorIdx = if (mode == "after") result.size - 1 else computedIndex
+        result.getOrNull(anchorIdx)?.let { anchors[positionKey] = "$mode:${it.id}" }
+        return computedIndex
+    }
+
+    // 示例消息索引（角色卡 mes_example 解析出的消息，带 ExampleMessage 标记）
+    val exampleIndices = result.indices.filter { idx ->
+        result[idx].annotations.any { it is UIMessageAnnotation.ExampleMessage }
+    }
+    // 无示例消息时退化为系统消息之后（官方 story string 之后）
+    val fallbackAfterSystem = result.indexOfFirst { it.role == MessageRole.SYSTEM }
+        .let { if (it >= 0) it + 1 else 0 }
+
+    // 角色卡消息锚点（官方独立消息，CharacterCardData 标记）
+    val cardIndices = result.indices.filter { idx ->
+        result[idx].annotations.any { it is UIMessageAnnotation.CharacterCardData }
+    }
+
+    // 处理 BEFORE_CHARACTER：主提示之后（官方 promptManagerDefaultPromptOrder：main → ↑Char → 人设 → 角色卡字段）
+    val beforeCharInjections = byPosition[InjectionPosition.BEFORE_CHARACTER]
+    if (!beforeCharInjections.isNullOrEmpty()) {
+        var insertIndex = result.indexOfFirst { it.role == MessageRole.SYSTEM }
+            .let { if (it >= 0) it + 1 else 0 }
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(beforeCharInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 AFTER_CHARACTER：角色卡消息之后（官方 ↓Char）
+    val afterCharInjections = byPosition[InjectionPosition.AFTER_CHARACTER]
+    if (!afterCharInjections.isNullOrEmpty()) {
+        val currentCardIndices = result.indices.filter { idx ->
+            result[idx].annotations.any { it is UIMessageAnnotation.CharacterCardData }
+        }
+        var insertIndex = if (currentCardIndices.isNotEmpty()) currentCardIndices.last() + 1 else fallbackAfterSystem
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(afterCharInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 EM_TOP：第一条示例消息之前
+    val emTopInjections = byPosition[InjectionPosition.EM_TOP]
+    if (!emTopInjections.isNullOrEmpty()) {
+        var insertIndex = if (exampleIndices.isNotEmpty()) exampleIndices.first() else fallbackAfterSystem
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(emTopInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 EM_BOTTOM：最后一条示例消息之后
+    val emBottomInjections = byPosition[InjectionPosition.EM_BOTTOM]
+    if (!emBottomInjections.isNullOrEmpty()) {
+        // EM_TOP 插入后重新定位示例消息（插入内容不带标记，索引可能已变化）
+        val currentExampleIndices = result.indices.filter { idx ->
+            result[idx].annotations.any { it is UIMessageAnnotation.ExampleMessage }
+        }
+        var insertIndex = if (currentExampleIndices.isNotEmpty()) currentExampleIndices.last() + 1 else fallbackAfterSystem
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(emBottomInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 找到系统消息的索引（通常是第一条）
+    val systemIndex = result.indexOfFirst { it.role == MessageRole.SYSTEM }
+
+    // 处理 BEFORE_SYSTEM_PROMPT 和 AFTER_SYSTEM_PROMPT
+    if (systemIndex >= 0) {
+        val beforeContent = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT]
+            ?.joinToString("\n") { it.content } ?: ""
+        val afterContent = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT]
+            ?.joinToString("\n") { it.content } ?: ""
+
+        if (beforeContent.isNotEmpty() || afterContent.isNotEmpty()) {
+            val systemMessage = result[systemIndex]
+            val originalText = systemMessage.parts
+                .filterIsInstance<UIMessagePart.Text>()
+                .joinToString("") { it.text }
+
+            val newText = buildString {
+                if (beforeContent.isNotEmpty()) {
+                    append(beforeContent)
+                    appendLine()
+                }
+                append(originalText)
+                if (afterContent.isNotEmpty()) {
+                    appendLine()
+                    append(afterContent)
+                }
+            }
+
+            result[systemIndex] = systemMessage.copy(
+                parts = listOf(UIMessagePart.Text(newText)),
+                isSynthetic = true,
+            )
+        }
+    } else {
+        // 没有系统消息时，创建一个新的系统消息
+        val beforeContent = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT]
+            ?.joinToString("\n") { it.content } ?: ""
+        val afterContent = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT]
+            ?.joinToString("\n") { it.content } ?: ""
+
+        val combinedContent = buildString {
+            if (beforeContent.isNotEmpty()) {
+                append(beforeContent)
+                if (afterContent.isNotEmpty()) appendLine()
+            }
+            if (afterContent.isNotEmpty()) {
+                append(afterContent)
+            }
+        }
+
+        if (combinedContent.isNotEmpty()) {
+            result.add(0, UIMessage.system(combinedContent).copy(isSynthetic = true))
+        }
+    }
+
+    // 处理 ANTAGONIZE：角色卡（系统消息）之后、第一条对话消息之前
+    val antagonizeInjections = byPosition[InjectionPosition.ANTAGONIZE]
+    if (!antagonizeInjections.isNullOrEmpty()) {
+        var insertIndex = result.indexOfFirst { it.role != MessageRole.SYSTEM }
+            .takeIf { it >= 0 } ?: result.size
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(antagonizeInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 TOP_OF_CHAT：在第一条用户消息之前插入
+    val topInjections = byPosition[InjectionPosition.TOP_OF_CHAT]
+    if (!topInjections.isNullOrEmpty()) {
+        // 重新计算索引（因为可能插入了系统消息）
+        var insertIndex = result.indexOfFirst { it.role == MessageRole.USER }
+            .takeIf { it >= 0 } ?: result.size
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(topInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 BOTTOM_OF_CHAT：在最后一条消息之前插入
+    val bottomInjections = byPosition[InjectionPosition.BOTTOM_OF_CHAT]
+    if (!bottomInjections.isNullOrEmpty()) {
+        var insertIndex = resolveTailIndex((result.size - 1).coerceAtLeast(0), "bottom_of_chat")
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(bottomInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 AFTER_DIALOG：在最后一条 AI 回复之后插入
+    val afterDialogInjections = byPosition[InjectionPosition.AFTER_DIALOG]
+    if (!afterDialogInjections.isNullOrEmpty()) {
+        val lastAssistantIndex = result.indexOfLast { it.role == MessageRole.ASSISTANT }
+        val computed = if (lastAssistantIndex >= 0) lastAssistantIndex + 1 else result.size
+        var insertIndex = resolveTailIndex(computed, "after_dialog")
+        insertIndex = findSafeInsertIndex(result, insertIndex)
+        createMergedInjectionMessages(afterDialogInjections).forEach { message ->
+            result.add(insertIndex, message)
+            insertIndex++
+        }
+    }
+
+    // 处理 AT_DEPTH：在指定深度位置插入（从最新消息往前数）
+    // 按 injectDepth 分组，相同深度的合并，按深度从大到小处理（避免索引变化问题）
+    val atDepthInjections = byPosition[InjectionPosition.AT_DEPTH]
+    if (!atDepthInjections.isNullOrEmpty()) {
+        val byDepth = atDepthInjections.groupBy { it.injectDepth }
+        byDepth.keys.sortedDescending().forEach { depth ->
+            val injections = byDepth[depth] ?: return@forEach
+            // 计算插入位置：result.size - depth，但要确保在有效范围内
+            // depth=1 表示在最后一条消息之前，depth=2 表示在倒数第二条之前...
+            var insertIndex = resolveTailIndex(
+                (result.size - depth).coerceIn(0, result.size),
+                "at_depth_$depth",
+            )
+            insertIndex = findSafeInsertIndex(result, insertIndex)
+            createMergedInjectionMessages(injections).forEach { message ->
+                result.add(insertIndex, message)
+                insertIndex++
+            }
+        }
+    }
+
+    return result
+}
+
+/**
+ * 将同一 role 的注入合并成消息列表
+ * 按 role 分组后合并内容，返回合并后的消息列表
+ */
+private fun createMergedInjectionMessages(injections: List<PromptInjection>): List<UIMessage> {
+    return injections
+        .groupBy { it.role }
+        .map { (role, grouped) ->
+            val mergedContent = grouped.joinToString("\n") { it.content }
+            when (role) {
+                MessageRole.ASSISTANT -> UIMessage.assistant(mergedContent)
+                MessageRole.SYSTEM -> UIMessage.system(mergedContent)
+                else -> UIMessage.user(mergedContent)
+            }.copy(
+                isSynthetic = true,
+            )
+        }
+}
+
+/**
+ * 查找安全的插入位置，避免注入到 USER → ASSISTANT(含Tool) 之间
+ *
+ * 某些提供商（如 deepseek）要求 USER 之后紧跟带工具的 ASSISTANT，
+ * 在两者之间插入消息会导致报错或破坏推理连续性。
+ */
+internal fun findSafeInsertIndex(messages: List<UIMessage>, targetIndex: Int): Int {
+    var index = targetIndex.coerceIn(0, messages.size)
+
+    // 向前查找，直到找到一个安全的位置
+    while (index > 0) {
+        val prevMessage = messages.getOrNull(index - 1)
+        val currentMessage = messages.getOrNull(index)
+
+        // 不能插入到 USER → ASSISTANT(含Tool) 之间
+        val isPrevUser = prevMessage?.role == MessageRole.USER
+        val isCurrentAssistantWithTools = currentMessage?.role == MessageRole.ASSISTANT
+            && currentMessage.getTools().isNotEmpty()
+
+        if (isPrevUser && isCurrentAssistantWithTools) {
+            index--
+        } else {
+            break
+        }
+    }
+
+    return index
+}

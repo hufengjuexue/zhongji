@@ -1,0 +1,316 @@
+package me.rerere.rikkahub.data.ai.tools
+
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import me.rerere.ai.core.InputSchema
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.Tool
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
+import me.rerere.rikkahub.data.db.fts.MessageSearchResult
+import me.rerere.rikkahub.data.db.fts.MessageSearchSort
+import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.JsonInstantPretty
+import me.rerere.rikkahub.utils.toLocalDate
+import kotlin.uuid.Uuid
+
+/**
+ * Tools that let the assistant query the user's past conversations on demand, instead of
+ * statically injecting recent chats into the system prompt (which would break prompt caching).
+ */
+fun createConversationTools(
+    conversationRepo: ConversationRepository,
+    assistantId: Uuid,
+): List<Tool> = listOf(
+    Tool(
+        name = "recent_chats",
+        description = """
+            List the user's recent conversations with you to understand their preferences and ongoing topics.
+            Returns conversation titles and the date of last activity, ordered by pinned first then most recently updated.
+            Use this when you need quick context about what the user has been discussing lately.
+            Only titles and dates are returned; use `conversation_search` to look up the actual content.
+        """.trimIndent(),
+        parameters = {
+            InputSchema.Obj(
+                properties = buildJsonObject {
+                    put("limit", buildJsonObject {
+                        put("type", "integer")
+                        put(
+                            "description",
+                            "Maximum number of recent conversations to return (default: 10, max: 30)"
+                        )
+                    })
+                }
+            )
+        },
+        execute = {
+            val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 10).coerceIn(1, 30)
+            val recent = conversationRepo.getRecentConversations(
+                assistantId = assistantId,
+                limit = limit,
+            )
+            val payload = buildJsonArray {
+                recent.forEach { conversation ->
+                    add(buildJsonObject {
+                        put("id", conversation.id.toString())
+                        put("title", conversation.title.ifBlank { "Untitled" })
+                        put("last_chat", conversation.updateAt.toLocalDate())
+                    })
+                }
+            }
+            listOf(UIMessagePart.Text(JsonInstant.encodeToString(payload)))
+        }
+    ),
+    conversationSearchTool { query -> conversationRepo.searchMessages(query, MessageSearchSort.RELEVANCE) },
+)
+
+private fun conversationSearchTool(search: suspend (query: String) -> List<MessageSearchResult>) = Tool(
+    name = "conversation_search",
+    description = """
+        Full-text search across the user's past conversations to recall specific information they mentioned before.
+        Use focused keywords. Run multiple searches with different keywords if needed.
+        Each result includes the conversation title, a snippet with matched keywords wrapped in [brackets], and the date.
+    """.trimIndent(),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Keywords to search for in past conversation messages")
+                })
+                put("limit", buildJsonObject {
+                    put("type", "integer")
+                    put(
+                        "description",
+                        "Maximum number of results to return (default: 15, max: 50)"
+                    )
+                })
+            },
+            required = listOf("query")
+        )
+    },
+    execute = {
+        val query = it.jsonObject["query"]?.jsonPrimitive?.contentOrNull
+            ?: error("query is required")
+        val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 15).coerceIn(1, 50)
+        val results = search(query).take(limit)
+        val payload = buildJsonArray {
+            results.forEach { result ->
+                add(buildJsonObject {
+                    put("conversation_id", result.conversationId)
+                    put("title", result.title.ifBlank { "Untitled" })
+                    put("snippet", result.snippet)
+                    put("date", result.updateAt.toLocalDate())
+                })
+            }
+        }
+        listOf(UIMessagePart.Text(JsonInstantPretty.encodeToString(payload)))
+    }
+)
+
+private const val READ_DEFAULT_LIMIT = 20
+private const val READ_MAX_LIMIT = 40
+private const val READ_MESSAGE_LENGTH = 12_000
+
+/**
+ * 给后台记忆整理用的对话查询工具，只能看到 [assistantIds] 这些助手的对话：
+ * 独立记忆库的助手不该读到别的助手的对话内容。
+ */
+fun createMemoryConversationTools(
+    conversationRepo: ConversationRepository,
+    assistantIds: Set<Uuid>,
+): List<Tool> = listOf(
+    conversationSearchTool { query -> conversationRepo.searchMessagesOfAssistants(query, assistantIds) },
+    Tool(
+        name = "conversation_read",
+        description = """
+            Read the messages of one conversation in full, by position.
+            Use it when a message you were given was cut off, or a search snippet needs its surrounding context.
+            Positions are the #numbers shown next to each message.
+        """.trimIndent(),
+        parameters = {
+            InputSchema.Obj(
+                properties = buildJsonObject {
+                    put("conversation_id", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Id of the conversation")
+                    })
+                    put("offset", buildJsonObject {
+                        put("type", "integer")
+                        put("description", "Position of the first message to return (default: 0)")
+                    })
+                    put("limit", buildJsonObject {
+                        put("type", "integer")
+                        put(
+                            "description",
+                            "Maximum number of messages to return (default: $READ_DEFAULT_LIMIT, max: $READ_MAX_LIMIT)"
+                        )
+                    })
+                },
+                required = listOf("conversation_id")
+            )
+        },
+        execute = {
+            val args = it.jsonObject
+            val conversation = args["conversation_id"]?.jsonPrimitive?.contentOrNull
+                ?.let { id -> runCatching { Uuid.parse(id) }.getOrNull() }
+                ?.let { id -> conversationRepo.getConversationById(id) }
+                ?.takeIf { conversation -> conversation.assistantId in assistantIds }
+                ?: error("conversation not found")
+            val offset = (args["offset"]?.jsonPrimitive?.intOrNull ?: 0).coerceAtLeast(0)
+            val limit = (args["limit"]?.jsonPrimitive?.intOrNull ?: READ_DEFAULT_LIMIT).coerceIn(1, READ_MAX_LIMIT)
+            val messages = conversation.dialogueMessages()
+            val payload = buildJsonObject {
+                put("title", conversation.title.ifBlank { "Untitled" })
+                put("total", messages.size)
+                put("messages", buildJsonArray {
+                    messages.drop(offset).take(limit).forEachIndexed { index, message ->
+                        add(buildJsonObject {
+                            put("position", offset + index)
+                            put("role", message.role.name)
+                            put("date", message.createdAt.date.toString())
+                            put("text", message.toText().take(READ_MESSAGE_LENGTH))
+                        })
+                    }
+                })
+            }
+            listOf(UIMessagePart.Text(JsonInstant.encodeToString(payload)))
+        }
+    ),
+)
+
+/**
+ * 取回被上下文裁剪省略的历史消息原文（瞬态内容裁剪的配套工具）。
+ * 占位说明里带有消息 ID，AI 需要原文时按 ID 调用本工具。
+ *
+ * @param supportsImageInput 当前模型是否支持图片输入。支持时图片以真实 Image 部件回灌（模型
+ *   能看到像素）；不支持时改回灌 OCR 文本——否则 provider 层会把图片直接丢弃成一句占位符，
+ *   AI 依然拿不到任何内容。
+ */
+fun createHistoryMessageTool(
+    conversationRepo: ConversationRepository,
+    conversationId: Uuid,
+    supportsImageInput: Boolean = true,
+): Tool = Tool(
+    name = "read_history_message",
+    description = """
+        Retrieve the original content of a past message in the current conversation by its message ID.
+        Use it when a placeholder in the history says content was omitted (omitted images, web search
+        results, media attachments) and you need the original text/content again.
+        Images in the retrieved message are returned as real images you can see directly.
+    """.trimIndent(),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("message_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "The message ID shown in the omission placeholder")
+                })
+            },
+            required = listOf("message_id")
+        )
+    },
+    execute = { args ->
+        val messageId = args.jsonObject["message_id"]?.jsonPrimitive?.contentOrNull
+            ?: error("message_id is required")
+        val targetId = runCatching { Uuid.parse(messageId) }
+            .getOrElse { error("invalid message_id: $messageId") }
+        val conversation = conversationRepo.getConversationById(conversationId)
+            ?: error("conversation not found")
+        val message = conversation.currentMessages.firstOrNull { it.id == targetId }
+            ?: error("message not found in current conversation: $messageId")
+
+        val images = message.parts.filterIsInstance<UIMessagePart.Image>()
+        // 支持视觉的模型直接回灌真实图片；不支持的模型跑一次 OCR 换成文字。
+        // 不这样做的话 provider 层会把图片替换成一句"当前模型不支持图片输入"的占位符，
+        // AI 取回的仍然只有路径字符串——这正是"压缩后取不回图片"的根因。
+        val imageParts = if (supportsImageInput) {
+            images.take(MAX_RETRIEVED_IMAGES)
+        } else {
+            images.take(MAX_RETRIEVED_IMAGES).map { UIMessagePart.Text(OcrTransformer.performOcr(it)) }
+        }
+
+        buildHistoryMessageResult(messageId, message, imageParts)
+    }
+)
+
+/**
+ * 组装 read_history_message 的返回部件。
+ *
+ * 文本部件序列化成 JSON 文本；图片不能只留一个 URL 字符串——必须以真实
+ * [UIMessagePart.Image] 部件回灌，模型才能看到像素（非视觉模型由调用方预先换成 OCR 文本）。
+ * 抽成纯函数便于单测覆盖。
+ */
+internal fun buildHistoryMessageResult(
+    messageId: String,
+    message: UIMessage,
+    imageParts: List<UIMessagePart>,
+): List<UIMessagePart> {
+    val payload = buildJsonObject {
+            put("message_id", messageId)
+            put("role", message.role.name)
+            if (message.name != null) put("name", message.name.orEmpty())
+            put("parts", buildJsonArray {
+                message.parts.forEach { part ->
+                    when (part) {
+                        is UIMessagePart.Text -> add(buildJsonObject {
+                            put("type", "text")
+                            put("text", part.text.truncateForToolResult())
+                        })
+                        is UIMessagePart.Image -> add(buildJsonObject {
+                            put("type", "image")
+                            // data: URI 是整段 base64（可达数 MB），塞进 JSON 文本会吃掉裁剪省下的全部
+                            // token；真正的像素改由 imageParts 以图片部件回灌
+                            put("url", if (part.url.startsWith("data:")) "[inline base64 image]" else part.url)
+                        })
+                        is UIMessagePart.Video -> add(buildJsonObject {
+                            put("type", "video")
+                            put("url", if (part.url.startsWith("data:")) "[inline base64 video omitted]" else part.url)
+                        })
+                        is UIMessagePart.Audio -> add(buildJsonObject {
+                            put("type", "audio")
+                            put("url", if (part.url.startsWith("data:")) "[inline base64 audio omitted]" else part.url)
+                        })
+                        is UIMessagePart.Document -> add(buildJsonObject {
+                            put("type", "document")
+                            put("file_name", part.fileName)
+                            put("url", if (part.url.startsWith("data:")) "[inline base64 document omitted]" else part.url)
+                        })
+                        is UIMessagePart.Tool -> add(buildJsonObject {
+                            put("type", "tool_result")
+                            put("tool_name", part.toolName)
+                            put("tool_input", part.input.truncateForToolResult(2_000))
+                            put("output", part.output.joinToString("\n") { outputPart ->
+                                (outputPart as? UIMessagePart.Text)?.text.orEmpty()
+                            }.truncateForToolResult())
+                        })
+                        is UIMessagePart.ServerTool -> add(buildJsonObject {
+                            put("type", "server_tool_result")
+                            put("tool_name", part.toolName)
+                            put("output", part.output?.toString().orEmpty().truncateForToolResult())
+                        })
+                        else -> add(buildJsonObject {
+                            put("type", part::class.simpleName?.lowercase().orEmpty())
+                        })
+                    }
+                }
+            })
+    }
+
+    return listOf(UIMessagePart.Text(JsonInstant.encodeToString(payload))) + imageParts
+}
+
+/** 单次取回最多回灌的图片数，防止一条含大量图片的历史消息把上下文撑爆 */
+private const val MAX_RETRIEVED_IMAGES = 4
+
+/** 当前分支上用户和助手的消息，位置编号以这个列表为准 */
+internal fun Conversation.dialogueMessages(): List<UIMessage> =
+    currentMessages.filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }

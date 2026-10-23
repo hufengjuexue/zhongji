@@ -1,0 +1,1063 @@
+package me.rerere.rikkahub.data.model
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.provider.CustomBody
+import me.rerere.ai.provider.CustomHeader
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.ai.tools.LocalToolOption
+import me.rerere.rikkahub.utils.SimpleCache
+import java.util.concurrent.TimeUnit
+import kotlin.uuid.Uuid
+
+// 界面 WebView 化：自动识别 / 总是 WebView / 总是原生
+@Serializable
+enum class FrontendCardMode {
+    AUTO,
+    ALWAYS,
+    NEVER,
+}
+
+@Serializable
+data class Assistant(
+    val id: Uuid = Uuid.random(),
+    val chatModelId: Uuid? = null, // 如果为null, 使用全局默认模型
+    val name: String = "",
+    val avatar: Avatar = Avatar.Dummy,
+    val useAssistantAvatar: Boolean = false, // 使用助手头像替代模型头像
+    val tags: List<Uuid> = emptyList(),
+    val systemPrompt: String = "",
+    val temperature: Float? = null,
+    val topP: Float? = null,
+    val topK: Int? = null,
+    // 上下文消息条数上限, 超出后阶梯式截断; 0 表示不限制
+    val contextMessageLimit: Int = 0,
+    val streamOutput: Boolean = true,
+    // 防空回复（针对 Gemini）：系统提示词移入对话流 + 空回复自动微扰重试
+    val enableAntiEmptyResponse: Boolean = false,
+    // 中转站兼容：修复 Gemini 经 OpenAI 兼容中转时 reasoning
+    val enableProxyFix: Boolean = false,
+    // 记忆功能默认开启：记忆让 AI 更了解用户
+    val enableMemory: Boolean = true,
+    val useGlobalMemory: Boolean = false, // 使用全局共享记忆而非助手隔离记忆
+    // 上下文滚动压缩：达到阈值后自动把早期对话压缩为摘要（保留原文，仅请求时替换前缀）
+    // 默认关闭：入口已从设置里移除，无法再关闭，故对所有助手统一停用。
+    // 该字段仅为兼容旧数据保留，设置归一化时会强制置 false。
+    val enableRollingContextCompression: Boolean = false,
+    // 触发压缩的 token 阈值；0 表示按模型上下文窗口自动计算
+    val rollingContextCompressionThresholdTokens: Int = 0,
+    val autoConsolidateMemory: Boolean = true, // 对话停下来后在后台自动整理记忆; 关闭后只能手动整理
+    val enableRecentChatsReference: Boolean = false,
+    val messageTemplate: String = "{{ message }}",
+    val contextTemplate: String = DEFAULT_CONTEXT_TEMPLATE, // 上下文组装模板（ADF风格）
+    val presetMessages: List<UIMessage> = emptyList(),
+    val mergeGreetings: Boolean = false,
+    // 导入的角色卡自带前端（HTML 卡片）时置位：聊天页据此直接进前端模式。
+    val frontendCardPreferred: Boolean = false,
+    // 界面 WebView 化：默认自动识别（开场白/角色世界书含网页时切换）
+    val frontendCardMode: FrontendCardMode = FrontendCardMode.AUTO,
+    val quickMessageIds: Set<Uuid> = emptySet(),
+    val regexes: List<AssistantRegex> = emptyList(),
+    val reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+    val maxTokens: Int? = null,
+    val customHeaders: List<CustomHeader> = emptyList(),
+    val customBodies: List<CustomBody> = emptyList(),
+    val mcpServers: Set<Uuid> = emptySet(),
+    // 新建助手的默认工具集。
+    //
+    // 判断标准是「日常对话里会不会真的用到」：读文件、算数、跑脚本、
+    // 对比两版文本，这些在普通聊天和角色扮演里都常出现。
+    // 逆向分析、图像生成、设备控制这类要么已移除，要么属于特定场景，
+    // 不放进默认集——装了却默认关闭，等于模型永远不知道有这个东西。
+    val localTools: List<LocalToolOption> = listOf(
+        LocalToolOption.TimeInfo,
+        LocalToolOption.FileTools,
+        LocalToolOption.ShellTools,
+        LocalToolOption.TaskTools,
+        LocalToolOption.Calculator,
+        LocalToolOption.AskUser,
+        LocalToolOption.Clipboard,
+        LocalToolOption.PythonEngine,
+        LocalToolOption.DiffText,
+        // 上游自带的图表渲染（原生 Compose，直接显示在聊天里）。
+        // 之前只在 UI 里有开关、默认不开，等于装了模型也看不到。
+        LocalToolOption.ChartDisplay,
+        // 让模型能把本地图片直接显示在聊天里，而不是只能描述「我生成了一张图」。
+        LocalToolOption.ShowImage,
+        // 写代码后先静态检查一遍，比写完直接跑更容易发现低级错误。
+        LocalToolOption.CodeCheck,
+    ),
+    val enableWebSearch: Boolean = false, // 网络搜索开关(每个助手独立)
+    val workspaceId: Uuid? = null,
+    val background: String? = null, // 聊天页背景图地址(本地文件 URI 或网络 URL), 为 null 时无背景
+    val backgroundOpacity: Float = 1.0f, // 背景图不透明度(0~1)
+    val useGradientBackground: Boolean = false, // 开启后聊天页使用动态渐变背景
+    val modeInjectionIds: Set<Uuid> = emptySet(),      // 关联的模式注入 ID
+    val lorebookIds: Set<Uuid> = emptySet(),            // 关联的 Lorebook ID
+    val enabledSkills: Set<String> = emptySet(),        // 启用的 skill 名称列表
+    val enableTimeReminder: Boolean = false,            // 时间间隔提醒注入
+    val cacheFriendlyTimeMacros: Boolean = true,        // 缓存友好时间宏：{{time}} 等按 5 分钟粒度取值，减少前缀缓存失效
+    val cacheFriendlyRandomMacros: Boolean = true,      // 缓存友好随机宏：{{random}}/{{roll}} 按消息稳定取值，减少前缀缓存失效
+    val timeReminderIntervalMinutes: Int = 60,          // 时间提醒间隔（分钟，至少 1 分钟）
+    val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
+    val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
+    val tavernData: TavernCharacterData? = null,       // 酒馆角色卡结构化数据（从PNG/JSON导入时填充）
+    val enableParallelToolExecution: Boolean = true,    // 并行执行多个工具调用
+    val toolRecurringLimit: Int = 8,                    // 单批同工具调用上限
+    val totalStepsLimit: Int = 256,                     // 总工具调用轮数上限
+    val toolExecTimeout: Int = 120,                     // 单工具执行超时(秒)
+    val jsTimeout: Int = 15,                            // JavaScript引擎超时(秒)
+    val shellTimeout: Int = 60,                         // Shell命令超时(秒)
+    val talkativeness: Float = 0.5f,                    // 群聊发言倾向 (0-1)，酒馆对齐
+    val enableAutoCompact: Boolean = true,               // 自动压缩对话历史（token过多时）
+    val enableAutoMemoryExtract: Boolean = true,          // [新增] 自动从对话提取记忆（独立开关，不依赖 enableMemory）
+    val autoMemoryExtractInterval: Int = 5,                // 每 N 轮对话提取一次记忆
+    // 跨窗口生活流：同一助手在不同对话间的近期经历共享（SharedPreferenc
+    // 默认关闭：注入内容易被 AI 当成本轮话题
+    val enableCrossWindowMemory: Boolean = false,
+    // 超过阈值字符后后台压缩旧的生活流前缀为摘要
+    val enableCrossWindowMemoryCompression: Boolean = true,
+    val crossWindowMemoryCompressionThresholdChars: Int = 12000,
+    // 压缩时保留的最近原文条数
+    val crossWindowMemoryTailEntries: Int = 16,
+)
+
+@Serializable
+data class QuickMessage(
+    val id: Uuid = Uuid.random(),
+    val title: String = "",
+    val content: String = "",
+)
+
+@Serializable
+enum class AssistantAffectScope {
+    USER,
+    ASSISTANT,
+}
+
+@Serializable
+data class AssistantRegex(
+    val id: Uuid,
+    val name: String = "",
+    val enabled: Boolean = true,
+    val findRegex: String = "", // 正则表达式
+    val replaceString: String = "", // 替换字符串
+    val affectingScope: Set<AssistantAffectScope> = setOf(),
+    val visualOnly: Boolean = false, // 仅显示层生效；false = 显示与提示词两层都生效（对齐酒馆 markdownOnly/promptOnly 语义）
+    // 酒馆 promptOnly：只改「发送给 AI」的内容，显示用原文。
+    // 单靠 visualOnly 无法表达三态
+    // 按数组顺序先清掉占位标签，后续注入 HTML 的显示脚本再也匹配不到，
+    // 卡片整体不渲染。默认 false：老数据行为不变。
+    val promptOnly: Boolean = false,
+    // 官方酒馆深度过滤：1 = 最新一条消息
+    val minDepth: Int = 0,
+    val maxDepth: Int = 0,
+)
+
+/** 全局正则分组的来源，决定分组在页面上的归类与是否可删除。 */
+@Serializable
+enum class RegexGroupSource {
+    /** 用户手动新建/导入的脚本，落在「自定义」文件夹，始终存在、不可删除。 */
+    CUSTOM,
+
+    /** 从酒馆预设导入，文件夹名取自预设文件。 */
+    PRESET,
+}
+
+/**
+ * 全局消息正则的分组（页面上的「文件夹」）。
+ *
+ * 手动导入/新建的脚本进 [RegexGroupSource.CUSTOM] 分组；导入酒馆预设时按预设名
+ * 新建一个 [RegexGroupSource.PRESET] 分组。分组内正则按列表顺序执行。
+ */
+@Serializable
+data class RegexGroup(
+    val id: Uuid = Uuid.random(),
+    val name: String = "",
+    val source: RegexGroupSource = RegexGroupSource.CUSTOM,
+    val regexes: List<AssistantRegex> = emptyList(),
+)
+
+// 流式输出时每个chunk都会调用replaceRegexes
+// 否则长回复期间会重复编译上万次；编译失败也缓存，避免反复构造异常
+private val regexCache = SimpleCache.builder<String, Result<Regex>>()
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build()
+
+private fun compileRegexCached(pattern: String): Regex? {
+    regexCache.getIfPresent(pattern)?.let { return it.getOrNull() }
+    val result = runCatching {
+        // 官方酒馆脚本支持 /pattern/flags 内联形式（如 /(?<=x)y/
+        val slashForm = Regex("""^/(.*)/([a-z]*)$""", RegexOption.DOT_MATCHES_ALL).matchEntire(pattern)
+        if (slashForm != null) {
+            val body = slashForm.groupValues[1]
+            val flagChars = slashForm.groupValues[2]
+            var options = 0
+            for (c in flagChars) {
+                options = when (c) {
+                    'i' -> options or RegexOption.IGNORE_CASE.value
+                    'm' -> options or RegexOption.MULTILINE.value
+                    's' -> options or RegexOption.DOT_MATCHES_ALL.value
+                    'x' -> options or RegexOption.COMMENTS.value
+                    'u', 'y', 'g', 'd' -> options // JS 独有/默认标志，忽略
+                    else -> throw IllegalArgumentException("Unknown regex flag: $c")
+                }
+            }
+            // options 是 Pattern 位标志（Int）
+            val optionSet = RegexOption.entries.filter { options and it.value != 0 }.toSet()
+            Regex(body, optionSet)
+        } else {
+            Regex(pattern)
+        }
+    }.onFailure { it.printStackTrace() }
+    regexCache.put(pattern, result)
+    return result.getOrNull()
+}
+
+fun String.replaceRegexes(
+    assistant: Assistant?,
+    scope: AssistantAffectScope,
+    visual: Boolean = false,
+    depth: Int = 0, // 官方酒馆深度语义：1 = 最新一条消息；0/未知 = 不按深度过滤
+): String = replaceRegexes(assistant?.regexes.orEmpty(), scope, visual, depth)
+
+/** 对用户输入的文本应用助手作用于用户消息的正则替换 */
+fun List<UIMessagePart>.replaceUserRegexes(assistant: Assistant): List<UIMessagePart> = map { part ->
+    if (part is UIMessagePart.Text) {
+        part.copy(text = part.text.replaceRegexes(assistant, AssistantAffectScope.USER, visual = false))
+    } else {
+        part
+    }
+}
+
+/** 对一组正则依次应用（角色卡正则 + 全局正则合并后走这里） */
+fun String.replaceRegexes(
+    regexes: List<AssistantRegex>,
+    scope: AssistantAffectScope,
+    visual: Boolean = false,
+    depth: Int = 0,
+): String {
+    if (regexes.isEmpty()) return this
+    return regexes.fold(this) { acc, regex ->
+        val depthOk = depth <= 0 || ((regex.minDepth <= 0 || depth >= regex.minDepth) &&
+            (regex.maxDepth <= 0 || depth <= regex.maxDepth))
+        // 层级语义（对齐官方酒馆 markdownOnly/promptOnly 三态）：
+        //   markdownOnly=true         → 仅显示层
+        // promptOnly=true           → 仅提示词层（显示层必须放
+        //   两者都 false（酒馆默认）    → 两层都生效
+        val layerOk = when {
+            regex.promptOnly -> !visual
+            regex.visualOnly -> visual
+            else -> true
+        }
+        if (regex.enabled && depthOk && layerOk && regex.affectingScope.contains(scope)) {
+            replaceWithRegex(acc, regex)
+        } else {
+            acc
+        }
+    }
+}
+
+// {{match}} 替换结果同样缓存：流式期间每个chunk每条消息都会调用
+private val matchReplacementCache = SimpleCache.builder<String, String>()
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build()
+
+private fun resolveReplacement(replaceString: String): String {
+    matchReplacementCache.getIfPresent(replaceString)?.let { return it }
+    // 官方酒馆：替换字符串里的 {{match}}（不区分大小写）= 当前完整匹配
+    // 不能用 Regex 编译：Android ICU 对裸 }} 抛语法错误（桌面 
+    val replacement = replaceString.replace("{{match}}", "$0", ignoreCase = true)
+    matchReplacementCache.put(replaceString, replacement)
+    return replacement
+}
+
+private fun replaceWithRegex(input: String, regex: AssistantRegex): String {
+    val compiled = compileRegexCached(regex.findRegex)
+    val replacement = resolveReplacement(regex.replaceString)
+    if (compiled != null) {
+        try {
+            return input.replace(regex = compiled, replacement = replacement)
+        } catch (e: Exception) {
+            // 走降级路径：见 applyReplacementManually 的说明
+            return applyReplacementManually(input, compiled, replacement) ?: input
+        }
+    }
+    // 编译失败：尝试变长 lookbehind 模拟（官方 JS 引擎支持
+    val simulated = VariableLookbehind.replace(input, regex.findRegex, replacement)
+    return simulated ?: input
+}
+
+/**
+ * 逐匹配手动应用替换串。
+ *
+ * 为什么需要它：Kotlin 的 `Regex.replace` 把替换串里的 `$` 一概当作组引用，
+ * 遇到 `$1` 之外的写法会抛 `IllegalArgumentException: Illegal group reference`。
+ * 而酒馆正则的替换串常常是**整段 HTML 文档**，里面 `$` 属于 CSS/JS 语法——
+ * 典型如 JS 模板字符串 `${i + 4}`、`${characterName}`，它们不是组引用。
+ *
+ * 实测一张 iPhone UI 卡：findRegex 命中 3253 字符，
+ * 替换串 157901 字符里含 110 处 `${...}`，标准 replace 直接抛异常；
+ * 而旧代码在 catch 里 `return input`，于是**静默地什么都不替换**，
+ * 表现为「卡的正则明明解析成功、也匹配到了，但标签原样显示成纯文本」。
+ *
+ * 官方酒馆跑在 JS 引擎上，`String.replace` 对不存在的命名组不会抛异常
+ * （替换为空串），所以同一张卡在酒馆里正常。这里用同样的语义兜底。
+ */
+private fun applyReplacementManually(input: String, compiled: Regex, replacement: String): String? {
+    return runCatching {
+        val out = StringBuilder()
+        var last = 0
+        for (m in compiled.findAll(input)) {
+            out.append(input, last, m.range.first)
+            out.append(VariableLookbehind.applyReplacement(m, replacement))
+            last = m.range.last + 1
+        }
+        // 注意：不要写成 out.append(input, last)。
+        // Kotlin 对 StringBuilder 没有 (CharSequence,
+        // 两参调用会被解析成 append(input) + append(last)，
+        // 即「把整段原文再追加一遍，末尾拼上偏移量」，
+        // 实测产出形如 "...</mainbody>3253" 的脏数据（3253 就是
+        out.append(input.substring(last))
+        out.toString()
+    }.getOrNull()
+}
+
+/**
+ * 变长 lookbehind 模拟（官方酒馆正则脚本常用 (?<=...) 变长断言，JS 支持而 java.util.regex 只支持固定长度）。
+ *
+ * 策略（只处理模式开头的 lookbehind，官方脚本的变长断言几乎都在开头）：
+ * 1. 提取开头的 (?<=P) / (?<!P)，P 内不允许捕获组（移除后 $N 编号会错乱）
+ * 2. 剩余主体编译，逐匹配验证"匹配位置之前的前缀以 P 结尾 / 不以 P 结尾"
+ * 3. 验证通过的匹配手动应用替换字符串（支持 $N / ${name} / $& 引用）
+ */
+private object VariableLookbehind {
+    fun replace(input: String, pattern: String, replacement: String): String? {
+        val leading = extractLeadingLookbehinds(pattern) ?: return null
+        val (assertions, body) = leading
+        if (body.isEmpty()) return null
+        val bodyRegex = runCatching { Regex(body) }.getOrNull() ?: return null
+        val compiledAssertions = assertions.map { (negative, p) ->
+            val compiled = runCatching { Regex(p) }.getOrNull() ?: return null
+            Triple(negative, compiled, p)
+        }
+
+        val out = StringBuilder()
+        var last = 0
+        for (m in bodyRegex.findAll(input)) {
+            val pass = compiledAssertions.all { (negative, compiled, _) ->
+                val prefixOk = prefixEndsWith(input, m.range.first, compiled)
+                if (negative) !prefixOk else prefixOk
+            }
+            if (!pass) continue
+            out.append(input, last, m.range.first)
+            out.append(applyReplacement(m, replacement))
+            last = m.range.last + 1
+        }
+        out.append(input, last)
+        return out.toString()
+    }
+
+    /** 前缀 input[0..end) 是否存在以 end 结束的匹配（即 lookbehind 断言成立）。 */
+    private fun prefixEndsWith(input: String, end: Int, compiled: Regex): Boolean {
+        for (m in compiled.findAll(input)) {
+            if (m.range.first > end) return false
+            if (m.range.last + 1 == end) return true
+        }
+        return false
+    }
+
+    /** 提取模式开头的 (?<=P) / (?<!P) 断言；P 内不允许捕获组或嵌套断言。 */
+    private fun extractLeadingLookbehinds(pattern: String): Pair<List<Pair<Boolean, String>>, String>? {
+        val assertions = mutableListOf<Pair<Boolean, String>>()
+        var rest = pattern
+        while (true) {
+            if (!rest.startsWith("(?<")) break
+            val negative = rest.startsWith("(?<!", 0)
+            if (!negative && !rest.startsWith("(?<=", 0)) break
+            val openLen = if (negative) 4 else 4
+            // 扫描 P 到配对的 )（括号配对、跳过转义与字符类）
+            var depth = 0
+            var i = openLen
+            var inClass = false
+            while (i < rest.length) {
+                val c = rest[i]
+                if (c == '\\') {
+                    i += 2
+                    continue
+                }
+                if (c == '[') inClass = true
+                if (c == ']') inClass = false
+                if (!inClass) {
+                    if (c == '(') depth++
+                    if (c == ')') {
+                        if (depth == 0) break
+                        depth--
+                    }
+                }
+                i++
+            }
+            if (i >= rest.length) return null
+            val p = rest.substring(openLen, i)
+            if (p.isEmpty() || !isSafeAssertionBody(p)) return null
+            assertions.add(negative to p)
+            rest = rest.substring(i + 1)
+        }
+        return if (assertions.isEmpty()) null else assertions to rest
+    }
+
+    /** 断言体安全：无捕获组（裸 (）、无嵌套 lookbehind、无未配对括号。 */
+    private fun isSafeAssertionBody(p: String): Boolean {
+        var i = 0
+        var inClass = false
+        while (i < p.length) {
+            val c = p[i]
+            if (c == '\\') {
+                i += 2
+                continue
+            }
+            if (c == '[') inClass = true
+            if (c == ']') inClass = false
+            if (!inClass) {
+                if (c == '(') {
+                    if (i + 1 < p.length && p[i + 1] == '?') {
+                        // (?: (?= (?! (?<= (?<! (?<name —— 都不是捕获组
+                        val special = p.substring(i, minOf(i + 4, p.length))
+                        if (special.startsWith("(?<") && !special.startsWith("(?<=") && !special.startsWith("(?<!")) {
+                            // (?<name> 命名捕获组，也排除
+                            return false
+                        }
+                    } else {
+                        return false
+                    }
+                }
+            }
+            i++
+        }
+        return true
+    }
+
+    /**
+     * 按名字取捕获组，组不存在时返回 null。
+     *
+     * Kotlin 的 `MatchResult.groups[name]` 对未定义的名字会抛
+     * `IllegalArgumentException: No group with name <x>`，而不是返回 null。
+     * 酒馆正则的替换串常是整段 HTML 文档，里面的 `${i + 4}`、`${characterName}`
+     * 属于 JS 模板字符串而非组引用；JS 引擎遇到不存在的组会静默替换成空串。
+     * 不对齐这个语义，整条替换就会被异常打断，卡片渲染不出来。
+     */
+    private fun safeNamedGroup(m: MatchResult, name: String): String? = try {
+        m.groups[name]?.value
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    /** 手动应用替换字符串：$N、${name}、$&（=$0）、\$ 与 \\ 转义。 */
+    internal fun applyReplacement(m: MatchResult, replacement: String): String {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < replacement.length) {
+            val c = replacement[i]
+            when {
+                // 反斜杠只在转义「对替换有特殊含义的字符」时才是转义符，
+                // 其余一律原样保留。此前无条件把 \X 折叠成 X，会把替换串里的
+                // JS 正则字面量毁掉：`/</Status>/gi` 被写成 `/</Statu
+                // —— 反斜杠一丢，正则字面量提前闭合，整段 <script>
+                // 直接 SyntaxError，卡片内容渲染为空。
+                // 酒馆跑在 JS 上，只有 \$ 与 \\ 是真转义，其它反斜杠原样透传。
+                c == '\\' && i + 1 < replacement.length &&
+                    (replacement[i + 1] == '$' || replacement[i + 1] == '\\') -> {
+                    sb.append(replacement[i + 1])
+                    i += 2
+                }
+                c == '$' && i + 1 < replacement.length && replacement[i + 1] == '{' -> {
+                    val close = replacement.indexOf('}', i)
+                    if (close > 0) {
+                        val name = replacement.substring(i + 2, close)
+                        // m.groups[name] 对不存在的名字会抛 IllegalArgument
+                        // （"No group with name <x>"）
+                        // 替换串常是整段 HTML，里面的 ${i + 4} 属于 JS 模板字符串，
+                        // 不是组引用；JS 引擎遇到不存在的组会静默替换为空串，
+                        // 这里对齐同样的语义，否则整条替换会被异常打断。
+                        sb.append(safeNamedGroup(m, name) ?: "")
+                        i = close + 1
+                    } else {
+                        sb.append('$')
+                        i++
+                    }
+                }
+                c == '$' && i + 1 < replacement.length && replacement[i + 1] == '&' -> {
+                    sb.append(m.groupValues.getOrElse(0) { "" })
+                    i += 2
+                }
+                c == '$' -> {
+                    var j = i + 1
+                    while (j < replacement.length && replacement[j].isDigit()) j++
+                    if (j > i + 1) {
+                        val g = replacement.substring(i + 1, j).toIntOrNull() ?: 0
+                        sb.append(if (g < m.groupValues.size) m.groupValues[g] else "")
+                        i = j
+                    } else {
+                        sb.append('$')
+                        i++
+                    }
+                }
+                else -> {
+                    sb.append(c)
+                    i++
+                }
+            }
+        }
+        return sb.toString()
+    }
+}
+
+/**
+ * 注入位置
+ */
+@Serializable
+enum class InjectionPosition {
+    @SerialName("before_system_prompt")
+    BEFORE_SYSTEM_PROMPT, // 系统提示词之前
+
+    @SerialName("after_system_prompt")
+    AFTER_SYSTEM_PROMPT, // 系统提示词之后（最常用）
+
+    @SerialName("before_character")
+    BEFORE_CHARACTER,       // 角色卡信息之前（酒馆 before_char）
+
+    @SerialName("after_character")
+    AFTER_CHARACTER,        // 角色卡信息之后（酒馆 after_char）
+
+    @SerialName("antagonize")
+    ANTAGONIZE,             // 对抗位：角色卡与对话之间（酒馆 antagonize）
+
+    @SerialName("top_of_chat")
+    TOP_OF_CHAT, // 对话最开头（第一条用户消息之前）
+
+    @SerialName("bottom_of_chat")
+    BOTTOM_OF_CHAT, // 最新消息之前（当前用户输入之前）
+
+    @SerialName("after_dialog")
+    AFTER_DIALOG,           // 最近一条 AI 回复之后（酒馆 after_dialog）
+
+    @SerialName("at_depth")
+    AT_DEPTH,               // 在指定深度位置插入（从最新消息往前数）
+
+    @SerialName("author_note")
+    AUTHOR_NOTE,            // Author's Note 位置（由用户设置决定，不固定）
+
+    @SerialName("em_top")
+    EM_TOP,                 // 官方 EMTop：示例消息之前
+
+    @SerialName("em_bottom")
+    EM_BOTTOM,              // 官方 EMBottom：示例消息之后
+}
+
+/**
+ * 提示词注入
+ *
+ * - ModeInjection: 基于模式开关的注入（如学习模式）
+ * - RegexInjection: 基于正则匹配的注入（Lorebook）
+ */
+@Serializable
+sealed class PromptInjection {
+    abstract val id: Uuid
+    abstract val name: String
+    abstract val enabled: Boolean
+    abstract val priority: Int
+    abstract val position: InjectionPosition
+    abstract val content: String
+    abstract val injectDepth: Int // 当 position 为 AT_DEPTH 时使用，表示从最新消息往前数的位置
+    abstract val role: MessageRole // 注入角色：USER 或 ASSISTANT
+
+    /**
+     * 模式注入 - 基于开关状态触发
+     */
+    @Serializable
+    @SerialName("mode")
+    data class ModeInjection(
+        override val id: Uuid = Uuid.random(),
+        override val name: String = "",
+        override val enabled: Boolean = true,
+        override val priority: Int = 0,
+        override val position: InjectionPosition = InjectionPosition.AFTER_SYSTEM_PROMPT,
+        override val content: String = "",
+        override val injectDepth: Int = 4,
+        override val role: MessageRole = MessageRole.USER,
+    ) : PromptInjection()
+
+    /**
+     * 正则注入 - 基于内容匹配触发（世界书）
+     */
+    @Serializable
+    @SerialName("regex")
+    data class RegexInjection(
+        override val id: Uuid = Uuid.random(),
+        override val name: String = "",
+        override val enabled: Boolean = true,
+        override val priority: Int = 0,
+        override val position: InjectionPosition = InjectionPosition.AFTER_SYSTEM_PROMPT,
+        override val content: String = "",
+        override val injectDepth: Int = 4,
+        override val role: MessageRole = MessageRole.USER,
+        val keywords: List<String> = emptyList(),       // 主触发关键词
+        val secondaryKeys: List<String> = emptyList(), // 二级触发关键词
+        val useRegex: Boolean = false,                  // 是否使用正则匹配
+        val caseSensitive: Boolean = false,             // 大小写敏感
+        val matchWholeWords: Boolean = false,           // 整词匹配（酒馆 match_whole_words）
+        val scanDepth: Int? = null,                     // 扫描最近N条消息；null = 用全局默认（官方 world_info_depth=2）
+        val constantActive: Boolean = false,            // 常驻激活（无需匹配）
+        val selective: Boolean = false,                 // 是否启用二级关键词逻辑
+        val selectiveLogic: SelectiveLogic = SelectiveLogic.AND_ANY, // 触发逻辑
+        val group: String = "",                         // 分组标签（同组条目互斥时只激活一个）
+        val groupWeight: Int = 100,                     // 同组权重（随机选择时使用）
+        val groupOverride: Boolean = false,             // 是否覆盖同组其他条目
+        val probability: Int = 100,                     // 触发概率 0-100
+        val sticky: Int = 0,                         // 激活后持续保留N轮（0=不粘）
+        val cooldown: Int = 0,                          // 冷却轮数（0=无冷却）
+        val delay: Int = 0,                             // 延迟激活轮数（0=立即，酒馆 extensions.delay）
+        val excludeRecursion: Boolean = false,          // 内容不参与递归扫描（酒馆 extensions.exclude_recursion）
+        val preventRecursion: Boolean = false,          // 禁止被递归触发（酒馆 extensions.prevent_recursion）
+        // 官方 extensions.delay_until_recursion：true
+        @Serializable(with = DelayUntilRecursionSerializer::class)
+        val delayUntilRecursion: Int = 0,
+        val useProbability: Boolean = true,              // 是否启用概率过滤（false=忽略probability直接触发）
+        val inclusionGroup: String = "",                 // 本地遗留字段（官方无此字段；官方分组用顶层 group 逗号分隔）
+        val useGroupScoring: Boolean = false,            // 酒馆 extensions.use_group_scoring（按匹配关键词数选组胜者）
+        val vectorized: Boolean = false,                 // 酒馆 vectorized：向量检索激活（需在全局设置配置嵌入模型）
+        val groupPriority: Boolean = false,              // 本地遗留字段（官方无此字段；官方优先用 group_override）
+        val automationId: String = "",                   // 酒馆 extensions.automation_id（本App暂不执行，仅保留）
+        val displayIndex: Int = 0,                       // 酒馆 display_index（展示顺序）
+        val displayPosition: Int = 0,                    // 酒馆 display_position（展示位置）
+        val triggers: List<String> = emptyList(),        // 酒馆 triggers（生成类型过滤，本App暂不执行）
+        val matchPersonaDescription: Boolean = false,    // 酒馆 extensions.match_persona_description
+        val matchCharacterDescription: Boolean = false,  // 酒馆 extensions.match_character_description
+        val matchCharacterPersonality: Boolean = false,  // 酒馆 extensions.match_character_personality
+        val matchCharacterDepthPrompt: Boolean = false,  // 酒馆 extensions.match_character_depth_prompt
+        val matchScenario: Boolean = false,              // 酒馆 extensions.match_scenario
+        val matchCreatorNotes: Boolean = false,          // 酒馆 extensions.match_creator_notes
+        val ignoreBudget: Boolean = false,               // 酒馆 extensions.ignore_budget
+    ) : PromptInjection()
+}
+
+/**
+ * selectiveLogic 触发逻辑
+ */
+@Serializable
+enum class SelectiveLogic {
+    @SerialName("and_any")
+    AND_ANY,      // 官方 0：主关键词命中 + 任一二级关键词命中（默认）
+    @SerialName("and_all")
+    AND_ALL,      // 官方 3：主关键词命中 + 全部二级关键词命中
+    @SerialName("or_any")
+    OR_ANY,       // 本地遗留扩展（官方无此模式）
+    @SerialName("not_any")
+    NOT_ANY,      // 官方 2：主关键词命中 + 没有任何二级关键词命中
+    @SerialName("not_all")
+    NOT_ALL,      // 官方 1：主关键词命中 + 二级关键词非全部命中
+}
+
+/**
+ * 官方 extensions.delay_until_recursion 序列化：接受 true/false、数字层级（1/2/3…）与字符串，
+ * 统一存成 Int（0=关闭，N=第 N 级）。
+ */
+object DelayUntilRecursionSerializer : kotlinx.serialization.KSerializer<Int> {
+    override val descriptor = kotlinx.serialization.descriptors.PrimitiveSerialDescriptor(
+        "DelayUntilRecursion",
+        kotlinx.serialization.descriptors.PrimitiveKind.INT,
+    )
+
+    override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: Int) {
+        encoder.encodeInt(value)
+    }
+
+    override fun deserialize(decoder: kotlinx.serialization.encoding.Decoder): Int {
+        val element = (decoder as? kotlinx.serialization.json.JsonDecoder)
+            ?.decodeJsonElement()
+            ?: return decoder.decodeInt()
+        val content = element.jsonPrimitive.contentOrNull ?: return 0
+        content.toBooleanStrictOrNull()?.let { return if (it) 1 else 0 }
+        return content.toIntOrNull() ?: 0
+    }
+}
+
+/**
+ * Lorebook - 组织管理多个 RegexInjection
+ */
+@Serializable
+data class Lorebook(
+    val id: Uuid = Uuid.random(),
+    val name: String = "",
+    val description: String = "",
+    val enabled: Boolean = true,
+    val entries: List<PromptInjection.RegexInjection> = emptyList(),
+    // 是否来自角色卡内嵌世界书（官方 world_info_character_str
+    val isCharacterBook: Boolean = false,
+)
+
+/**
+ * 检查 RegexInjection 是否被触发
+ *
+ * @param context 要扫描的上下文文本
+ * @return 是否触发
+ */
+fun PromptInjection.RegexInjection.isTriggered(
+    context: String,
+    activeSticky: Boolean = false,
+    rollProbability: Boolean = true,
+): Boolean {
+    if (!enabled) return false
+
+    // 粘性条目在激活后持续生效
+    if (sticky > 0 && activeSticky) return true
+
+    // 概率过滤（useProbability=false 时跳过
+    if (rollProbability) {
+        val effectiveProb = if (useProbability) probability else 100
+        if (effectiveProb < 100 && kotlin.random.Random.nextInt(100) >= effectiveProb) return false
+    }
+
+    // 官方：constant 条目无需关键词即可激活（概率已参与）
+    if (constantActive) return true
+
+    // 没有关键词 → 不触发
+    if (keywords.isEmpty() && secondaryKeys.isEmpty()) return false
+
+    if (selective) {
+        // 官方 checkWorldInfo：必须先命中任意主关键词，否则直接跳过
+        // （NOT_ANY / NOT_ALL 也必须以主关键词命中为前提
+        if (keywords.isEmpty()) return false
+        val anyPrimary = keywords.any { keyMatches(it, context, useRegex, caseSensitive, matchWholeWords) }
+        if (!anyPrimary) return false
+
+        // 官方：无二级关键词时，命中主关键词即激活（selectiveLogic 不再参与
+        if (secondaryKeys.isEmpty()) return true
+
+        val anySecondary = secondaryKeys.any { keyMatches(it, context, useRegex, caseSensitive, matchWholeWords) }
+        val allSecondary = secondaryKeys.all { keyMatches(it, context, useRegex, caseSensitive, matchWholeWords) }
+
+        return when (selectiveLogic) {
+            // 官方 AND_ANY：主关键词命中 + 任一二级关键词命中
+            SelectiveLogic.AND_ANY -> anySecondary
+            // 官方 AND_ALL：主关键词命中 + 全部二级关键词命中
+            SelectiveLogic.AND_ALL -> allSecondary
+            // 官方 NOT_ANY：主关键词命中 + 没有任何二级关键词命中
+            SelectiveLogic.NOT_ANY -> !anySecondary
+            // 官方 NOT_ALL：主关键词命中 + 二级关键词非全部命中
+            SelectiveLogic.NOT_ALL -> !allSecondary
+            // 本地遗留扩展（官方无此模式）：主关键词已命中即可
+            SelectiveLogic.OR_ANY -> true
+        }
+    } else {
+        // 非选择性模式：只检查主关键词
+        if (keywords.isEmpty()) return false
+        return keywords.any { keyMatches(it, context, useRegex, caseSensitive, matchWholeWords) }
+    }
+}
+
+/** 酒馆 use_group_scoring 用：统计匹配到的关键词数（主关键词1条=1分，二级按逻辑计分） */
+fun PromptInjection.RegexInjection.matchedKeyScore(context: String): Int {
+    if (!enabled) return 0
+    val primaryMatches = keywords.count { keyMatches(it, context, useRegex, caseSensitive, matchWholeWords) }
+    if (!selective) return primaryMatches
+    val secondaryMatches = secondaryKeys.count { keyMatches(it, context, useRegex, caseSensitive, matchWholeWords) }
+    return when (selectiveLogic) {
+        SelectiveLogic.AND_ANY -> primaryMatches + secondaryMatches
+        SelectiveLogic.AND_ALL -> if (secondaryKeys.isEmpty() || secondaryMatches == secondaryKeys.size) {
+            primaryMatches + secondaryMatches
+        } else {
+            primaryMatches
+        }
+        SelectiveLogic.NOT_ANY, SelectiveLogic.NOT_ALL -> primaryMatches
+        SelectiveLogic.OR_ANY -> primaryMatches + secondaryMatches
+    }
+}
+
+/** 单个关键词匹配 */
+private fun keyMatches(
+    key: String,
+    context: String,
+    useRegex: Boolean,
+    caseSensitive: Boolean,
+    matchWholeWords: Boolean,
+): Boolean {
+    // 官方 matchKeys：先按 parseRegexFromString 识别 
+    val officialRegex = parseRegexFromString(key)
+    if (officialRegex != null) {
+        return officialRegex.containsMatchIn(context)
+    }
+
+    return if (useRegex) {
+        try {
+            val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
+            val pattern = if (matchWholeWords) "\\b(?:${key.trim().trim('^', '$')})\\b" else key
+            Regex(pattern, options).containsMatchIn(context)
+        } catch (_: Exception) { false }
+    } else {
+        val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
+        val pattern = if (matchWholeWords) "\\b${Regex.escape(key)}\\b" else Regex.escape(key)
+        try {
+            Regex(pattern, options).containsMatchIn(context)
+        } catch (_: Exception) { false }
+    }
+}
+
+/**
+ * 官方 parseRegexFromString 的 Kotlin 版本：
+ * 形如 /pattern/flags（flags ∈ gimsuy）且模式内没有未转义斜杠时按正则处理。
+ * Kotlin Regex 无 g/u/y 标志，忽略（containsMatchIn 天然全局；u=unicode 默认；y=sticky 不适用）。
+ */
+private fun parseRegexFromString(input: String): Regex? {
+    val match = Regex("^/([\\w\\W]+?)/([gimsuy]*)$").find(input) ?: return null
+    val pattern = match.groupValues[1]
+    val flags = match.groupValues[2]
+    // 模式里出现未转义斜杠 → 官方视为非法正则，按普通文本处理
+    if (Regex("(^|[^\\\\])/").containsMatchIn(pattern)) return null
+    val unescaped = pattern.replace("\\/", "/")
+    return try {
+        val options = buildSet {
+            if ('i' in flags) add(RegexOption.IGNORE_CASE)
+            if ('m' in flags) add(RegexOption.MULTILINE)
+            if ('s' in flags) add(RegexOption.DOT_MATCHES_ALL)
+        }
+        Regex(unescaped, options)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/**
+ * 从消息列表中提取用于匹配的上下文文本
+ *
+ * @param messages 消息列表
+ * @param scanDepth 扫描深度（最近N条消息）
+ * @param startDepth 已扫过的旧层数（官方 WorldInfoBuffer slice(startDepth, depth)：跳过最靠近开头的 startDepth 条消息）
+ * @return 拼接的文本内容
+ */
+fun extractContextForMatching(
+    messages: List<UIMessage>,
+    scanDepth: Int,
+    startDepth: Int = 0,
+): String {
+    if (scanDepth <= startDepth) return ""
+    return messages
+        .takeLast(scanDepth)
+        .dropLast(startDepth)
+        .joinToString("\n") { it.toText() }
+}
+
+/**
+ * 获取所有被触发的注入，按优先级排序
+ *
+ * @param injections 所有注入规则
+ * @param context 上下文文本
+ * @return 被触发的注入列表，按优先级降序排列
+ */
+fun getTriggeredInjections(
+    injections: List<PromptInjection.RegexInjection>,
+    context: String
+): List<PromptInjection.RegexInjection> {
+    return injections
+        .filter { it.isTriggered(context) }
+        .sortedByDescending { it.priority }
+}
+
+/**
+ * 默认上下文模板 — ADF 风格宏
+ * 可用宏: {{system}}, {{description}}, {{personality}}, {{scenario}},
+ *          {{mesExamples}}, {{char}}, {{user}}, {{persona}}
+ * 结构与官方 SillyTavern 默认 Story String 对齐（mes_example 独立作为示例消息注入）
+ */
+val DEFAULT_CONTEXT_TEMPLATE = """
+{{system}}
+
+{{description}}
+
+{{char}}'s personality: {{personality}}
+
+Scenario: {{scenario}}
+
+{{persona}}
+""".trim()
+
+/**
+ * 根据上下文模板组装 system prompt
+ * 展开 ADF 风格宏: {{char}}, {{user}}, {{description}}, {{personality}},
+ *   {{scenario}}, {{mesExamples}}, {{system}}
+ */
+fun Assistant.assembleContext(
+    userName: String,
+    personaDesc: String,
+): String {
+    val template = this.contextTemplate.ifBlank { DEFAULT_CONTEXT_TEMPLATE }
+    val tav = this.tavernData
+    return template
+        .replace("{{char}}", this.name)
+        .replace("{{user}}", userName)
+        .replace("{{persona}}", personaDesc)
+        .replace("{{system}}", tav?.systemPrompt ?: this.systemPrompt.take(200))
+        .replace("{{description}}", tav?.description ?: "")
+        .replace("{{personality}}", tav?.personality ?: "")
+        .replace("{{scenario}}", tav?.scenario ?: "")
+        .replace("{{mesExamples}}", tav?.mesExample ?: "")
+        .replace("{{original}}", this.systemPrompt)
+}
+
+/**
+ * 官方 Chat Completion 结构拆分 — 主提示消息（对应官方 main prompt / system_prompt）
+ */
+fun Assistant.assembleMainPrompt(): String {
+    return tavernData?.systemPrompt?.takeIf { it.isNotBlank() } ?: systemPrompt
+}
+
+/**
+ * 官方 Chat Completion 结构拆分 — 角色卡字段消息（对应官方 charDescription/charPersonality/scenario 独立 system 消息，
+ * promptManagerDefaultPromptOrder 顺序：描述 → 性格 → 场景）。
+ * 每字段独立一条消息，世界书 before/after_char 锚点（CharacterCardData 标记）才能精确落在官方位置。
+ * 性格内容对齐官方默认 personality_format = {{personality}}（纯文本，无前缀）。
+ */
+fun Assistant.assembleCharacterCardMessages(): List<UIMessage> {
+    val tav = this.tavernData ?: return emptyList()
+    return buildList {
+        tav.description.takeIf { it.isNotBlank() }?.let {
+            add(
+                UIMessage(
+                    role = MessageRole.SYSTEM,
+                    parts = listOf(UIMessagePart.Text(it)),
+                    annotations = listOf(UIMessageAnnotation.CharacterCardData),
+                )
+            )
+        }
+        tav.personality.takeIf { it.isNotBlank() }?.let {
+            add(
+                UIMessage(
+                    role = MessageRole.SYSTEM,
+                    parts = listOf(UIMessagePart.Text(it)),
+                    annotations = listOf(UIMessageAnnotation.CharacterCardData),
+                )
+            )
+        }
+        tav.scenario.takeIf { it.isNotBlank() }?.let {
+            add(
+                UIMessage(
+                    role = MessageRole.SYSTEM,
+                    parts = listOf(UIMessagePart.Text(it)),
+                    annotations = listOf(UIMessageAnnotation.CharacterCardData),
+                )
+            )
+        }
+    }
+}
+
+/**
+ * 解析角色卡 mes_example 为示例消息（对齐官方 parseMesExamples + parseExampleIntoIndividual）：
+ * - 按 <START> 分块
+ * - 块内按 "{{user}}:" / "{{char}}:" 前缀行切分 user/assistant 消息
+ * - 官方跳过块首的 "This is how X should talk" 说明行
+ */
+fun Assistant.buildExampleMessages(userName: String): List<UIMessage> {
+    val raw = this.tavernData?.mesExample ?: return emptyList()
+    if (raw.isBlank() || raw.trim().equals("<START>", ignoreCase = true)) return emptyList()
+
+    val text = if (!raw.trimStart().startsWith("<START>", ignoreCase = true)) {
+        "<START>\n" + raw.trim()
+    } else {
+        raw
+    }
+    val blocks = Regex("<START>", RegexOption.IGNORE_CASE).split(text).drop(1)
+
+    return blocks.flatMap { block ->
+        parseExampleBlock(block, charName = this.name, userName = userName)
+    }
+}
+
+private fun parseExampleBlock(block: String, charName: String, userName: String): List<UIMessage> {
+    val lines = block.trim().lines()
+    // 官方跳过第一行（如 "This is how {bot name} should
+    val startIndex = if (lines.firstOrNull()?.contains("should talk", ignoreCase = true) == true) 1 else 0
+
+    val result = mutableListOf<UIMessage>()
+    val currentLines = mutableListOf<String>()
+    var currentRole: MessageRole? = null
+
+    fun flush() {
+        val role = currentRole ?: return
+        val content = currentLines.joinToString("\n").trim()
+        if (content.isNotBlank()) {
+            val isUser = role == MessageRole.USER
+            result.add(
+                UIMessage(
+                    role = if (isUser) MessageRole.USER else MessageRole.ASSISTANT,
+                    parts = listOf(UIMessagePart.Text(content)),
+                    annotations = listOf(UIMessageAnnotation.ExampleMessage),
+                )
+            )
+        }
+        currentLines.clear()
+    }
+
+    for (i in startIndex until lines.size) {
+        val line = lines[i]
+        val isUserLine = line.startsWith("$userName:")
+        val isCharLine = line.startsWith("$charName:")
+        if (isUserLine || isCharLine) {
+            flush()
+            currentRole = if (isUserLine) MessageRole.USER else MessageRole.ASSISTANT
+            currentLines.add(line.substringAfter(':'))
+        } else {
+            currentLines.add(line)
+        }
+    }
+    flush()
+    return result
+}
+
+/**
+ * 新版本引入的工具，需要为已有助手补齐的那部分。
+ *
+ * 背景：Assistant.localTools 是持久化字段，老用户的配置里早就存了旧列表，
+ * 反序列化时不会走默认值。结果是新工具装了、注册好了，但模型永远看不到它——
+ * 「引入了资源却实际没被使用」的典型形态。
+ */
+val DEFAULT_NEW_LOCAL_TOOLS: List<LocalToolOption> = listOf(
+    LocalToolOption.PythonEngine,
+    LocalToolOption.DiffText,
+    LocalToolOption.ChartDisplay,
+    LocalToolOption.ShowImage,
+    LocalToolOption.CodeCheck,
+)
+
+/**
+ * 「这个版本之前就存在」的工具全集，用于判断哪些是新增的。
+ *
+ * 补齐规则刻意收窄：只有当助手启用的工具「全部」落在这个集合里，
+ * 才认为用户没有主动调整过工具集，于是把新工具补上。
+ * 一旦用户自己动过（关掉了某个老工具，或开过新工具外的选项），就完全不碰——
+ * 避免把用户明确关掉的东西偷偷打开，那比「工具没生效」糟糕得多。
+ */
+val LEGACY_LOCAL_TOOLS: Set<LocalToolOption> = setOf(
+    LocalToolOption.TimeInfo,
+    LocalToolOption.FileTools,
+    LocalToolOption.ShellTools,
+    LocalToolOption.TaskTools,
+    LocalToolOption.Calculator,
+    LocalToolOption.AskUser,
+    LocalToolOption.Clipboard,
+)
+
+/**
+ * 把新工具补进已有助手的配置。见 LEGACY_LOCAL_TOOLS 的说明。
+ */
+fun Assistant.withNewLocalTools(): Assistant {
+    if (localTools.isNotEmpty() && !LEGACY_LOCAL_TOOLS.containsAll(localTools)) return this
+    val missing = DEFAULT_NEW_LOCAL_TOOLS.filterNot { it in localTools }
+    if (missing.isEmpty()) return this
+    return copy(localTools = localTools + missing)
+}
