@@ -180,6 +180,7 @@ object VideoCallArchiveRuntime : KoinComponent {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val chatService: ChatService by inject()
+    private val appContext: Context by inject()
     private var archiveJob: Job? = null
     private var activeConversationId: String? = null
 

@@ -22,7 +22,7 @@ private const val TAG = "MemoryVectorTail"
 
 /**
  * 记忆库自动 Embedding 尾部注入转换器：
- * - profile.md 与 preferences.md 已在头部常驻，本转换器专门对其余记忆文件（如 /topics/*.md）按语义段落切块并向量化；
+ * - profile.md 与 preferences.md 已在头部常驻，本转换器专门对其余记忆文件（如 topics 目录下的 md）按语义段落切块并向量化；
  * - 每轮自动用最新用户输入做 Embedding 相似度检索，将命中的 Top-K 记忆片段以独立 synthetic system 消息注入到最后一条 User 消息之前；
  * - 同一用户轮（agentic 工具多步循环）内冻结首次召回结果，保护前缀缓存不分叉，且与世界书、MCP 工具完全正交共存。
  */
