@@ -2,7 +2,7 @@
 <resources>
   <string name="about_page_author_repo">作者仓库</string>
   <string name="about_page_author_repo_desc">本定制版的源码仓库</string>
-  <string name="about_page_custom_build">华灯定制版 %1$s / %2$s</string>
+  <string name="about_page_custom_build">终极 RP 定制版 %1$s / %2$s</string>
   <string name="about_page_github">Github</string>
   <string name="about_page_license">License</string>
   <string name="about_page_system">系统</string>
@@ -10,7 +10,7 @@
   <string name="about_page_version">版本</string>
   <string name="about_page_website">官网</string>
   <string name="add">添加</string>
-  <string name="app_name">华灯</string>
+  <string name="app_name">终极 RP</string>
   <string name="asr_button_content_description">语音识别</string>
   <string name="asr_button_stop">停止</string>
   <string name="asr_step_hotwords_placeholder">热词1, 热词2, 热词3</string>

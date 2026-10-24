@@ -2,7 +2,7 @@
 <resources>
   <string name="about_page_author_repo">作者倉庫</string>
   <string name="about_page_author_repo_desc">本定製版的原始碼倉庫</string>
-  <string name="about_page_custom_build">華燈定製版 %1$s / %2$s</string>
+  <string name="about_page_custom_build">終極 RP 定製版 %1$s / %2$s</string>
   <string name="about_page_github">Github</string>
   <string name="about_page_license">授權條款</string>
   <string name="about_page_system">系統</string>
@@ -10,7 +10,7 @@
   <string name="about_page_version">版本</string>
   <string name="about_page_website">官網</string>
   <string name="add">添加</string>
-  <string name="app_name">華燈</string>
+  <string name="app_name">終極 RP</string>
   <string name="asr_button_content_description">語音辨識</string>
   <string name="asr_button_stop">停止</string>
   <string name="asr_step_hotwords_placeholder">熱詞1, 熱詞2, 熱詞3</string>

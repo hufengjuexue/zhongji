@@ -2,7 +2,7 @@
 <resources>
   <string name="about_page_author_repo">Author\'s Repo</string>
   <string name="about_page_author_repo_desc">Source code of this customized build</string>
-  <string name="about_page_custom_build">Huadeng Custom Build %1$s / %2$s</string>
+  <string name="about_page_custom_build">ZhongJi RP Custom Build %1$s / %2$s</string>
   <string name="about_page_github">Github</string>
   <string name="about_page_license">License</string>
   <string name="about_page_system">System</string>
@@ -10,7 +10,7 @@
   <string name="about_page_version">Version</string>
   <string name="about_page_website">Website</string>
   <string name="add">Add</string>
-  <string name="app_name">Lantern</string>
+  <string name="app_name">ZhongJi RP</string>
   <string name="asr_button_content_description">Speech Recognition</string>
   <string name="asr_button_stop">Stop</string>
   <string name="asr_step_hotwords_placeholder">hotword1, hotword2, hotword3</string>

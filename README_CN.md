@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="docs/huadeng-icon.png" width="96" alt="华灯图标"/>
+<img src="docs/app-icon.png" width="96" alt="终极 RP 图标"/>
 
-# RikkaHub Plus · 华灯
+# 终极 RP · ZhongJi
 
-### 安卓上的 **AI 聊天客户端**
+### 安卓上的 **AI 深度聊天客户端**
 ### 兼为 **SillyTavern（酒馆）兼容端**
 
 **开箱即聊 · 提示词缓存省 token · 记忆不失忆 · 角色卡 / 世界书 / 预设按酒馆官方语义一键导入**
