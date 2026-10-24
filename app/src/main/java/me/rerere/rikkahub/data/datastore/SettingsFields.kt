@@ -109,6 +109,21 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
             decode = { name -> ReasoningLevel.entries.find { it.name == name } ?: ReasoningLevel.AUTO },
         ),
         SettingsField(
+            MEMORY_MODEL,
+            Settings::memoryModelId,
+            { copy(memoryModelId = it) },
+            // 没设置时不存这个 key
+            encode = { it?.toString() },
+            decode = { Uuid.parse(it) },
+        ),
+        SettingsField(
+            MEMORY_MODEL_REASONING_LEVEL,
+            Settings::memoryModelReasoningLevel,
+            { copy(memoryModelReasoningLevel = it) },
+            encode = { it.name },
+            decode = { name -> ReasoningLevel.entries.find { it.name == name } ?: ReasoningLevel.AUTO },
+        ),
+        SettingsField(
             TITLE_REASONING_LEVEL, Settings::titleReasoningLevel, { copy(titleReasoningLevel = it) },
             encode = { it.name },
             decode = { name -> ReasoningLevel.entries.find { it.name == name } ?: ReasoningLevel.OFF },

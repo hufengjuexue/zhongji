@@ -1,12 +1,12 @@
 {
-  "version": "1.0.0",
-  "versionCode": 1,
-  "publishedAt": "2026-10-24T13:00:36Z",
-  "changelog": "终极 RP (ZhongJi RP) · v1.0.0 创世首发正式版：\n\n1. 【独立生态】全新独立包名 me.rerere.zhongji，与原版华灯完美双开共存，数据零冲突\n2. 【首创机制】记忆向量尾部注入机制 (MemoryVectorTailTransformer)，100% 保护商用大模型 Prefix Prompt Caching\n3. 【视觉焕新】全套岩仓玲音 (Lain) 高清自适应图标与『终极 RP』品牌全面就绪\n4. 【底层净化】物理拔除 3 处底层反 RP 规训惩罚与道德说教锁，剔除签名限制\n5. 【极致稳定】微创排查修复 12 处 Compose 运行时崩溃隐患",
+  "version": "1.0.1",
+  "versionCode": 2,
+  "publishedAt": "2026-10-24T16:00:00Z",
+  "changelog": "终极 RP (ZhongJi RP) · v1.0.1：\n\n1. 【记忆模型】新增记忆整理专属模型与独立推理强度配置，前台沉浸演戏与后台静默记忆整理彻底解耦\n2. 【手感质变】修复停止生成后立即追发新消息卡死在暂停队列的严重体验 Bug\n3. 【听感提升】TTS 语音朗读重构为 AST 纯文本清洗，杜绝误念 HTML 标签与误删尖括号正文\n4. 【渲染修复】修复公式包含小于号 '<' 时被误当 HTML 标签导致截断损坏的问题\n5. 【交互防崩】修复快速连击返回键空栈崩溃，修复收藏模型拖拽排序重绘抽搐\n6. 【平滑交互】引入 SwipeToDelete 侧滑删除平滑结算与 Gradle 并行 IDE 同步加速",
   "downloads": [
     {
-      "name": "zhongji-rp-1.0.0-arm64-v8a.apk",
-      "url": "https://github.com/hufengjuexue/zhongji/releases/download/v1.0.0/zhongji-rp-1.0.0-arm64-v8a.apk",
+      "name": "zhongji-rp-1.0.1-arm64-v8a.apk",
+      "url": "https://github.com/hufengjuexue/zhongji/releases/download/v1.0.1/zhongji-rp-1.0.1-arm64-v8a.apk",
       "size": "约 108 MB"
     }
   ]

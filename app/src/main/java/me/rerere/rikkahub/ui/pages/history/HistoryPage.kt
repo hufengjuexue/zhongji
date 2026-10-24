@@ -5,6 +5,7 @@ import me.rerere.hugeicons.stroke.Pin
 import me.rerere.hugeicons.stroke.PinOff
 import me.rerere.hugeicons.stroke.GlobalSearch
 import me.rerere.hugeicons.stroke.Delete01
+import me.rerere.rikkahub.ui.components.ui.SwipeToDelete
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -171,46 +172,10 @@ private fun SwipeableConversationItem(
     onTogglePin: () -> Unit = {},
     onClick: () -> Unit = {},
 ) {
-    val positionThreshold = SwipeToDismissBoxDefaults.positionalThreshold
-    val dismissState = remember {
-        SwipeToDismissBoxState(
-            initialValue = SwipeToDismissBoxValue.Settled,
-            positionalThreshold = positionThreshold,
-        )
-    }
-
-    LaunchedEffect(dismissState.currentValue) {
-        when (dismissState.currentValue) {
-            SwipeToDismissBoxValue.EndToStart -> {
-                onDelete()
-            }
-
-            else -> {}
-        }
-    }
-
-    SwipeToDismissBox(
-        state = dismissState,
-        backgroundContent = {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        MaterialTheme.colorScheme.errorContainer,
-                        RoundedCornerShape(25)
-                    )
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                Icon(
-                    imageVector = HugeIcons.Delete01,
-                    contentDescription = stringResource(R.string.history_page_delete),
-                    tint = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        },
-        enableDismissFromStartToEnd = false,
-        modifier = modifier
+    SwipeToDelete(
+        onDelete = onDelete,
+        modifier = modifier,
+        shape = RoundedCornerShape(25),
     ) {
         ConversationItem(
             conversation = conversation,

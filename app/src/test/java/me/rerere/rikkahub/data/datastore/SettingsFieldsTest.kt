@@ -228,6 +228,8 @@ private val STORED_KEYS = setOf(
     "chat_model",
     "fast_model",
     "fast_model_reasoning_level",
+    "memory_model",
+    "memory_model_reasoning_level",
     "title_model",
     "title_reasoning_level",
     "translate_model",
