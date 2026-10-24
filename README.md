@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/huadeng-icon.png" width="96" alt="Lantern icon"/>
+<img src="docs/app-icon.png" width="96" alt="ZhongJi RP icon"/>
 
-# RikkaHub Plus · Lantern
+# 终极 RP · ZhongJi
 
 ### An **AI chat client** for Android that is also a **SillyTavern**-compatible endpoint
 
