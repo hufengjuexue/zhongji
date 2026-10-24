@@ -197,9 +197,9 @@ android {
         applicationId = "me.rerere.zhongji"
         minSdk = 26
         targetSdk = 37
-        // 终极 RP (ZhongJi RP) 自主演进生命周期：创世首发 1.0.0
-        versionCode = 1
-        versionName = "1.0.0"
+        // 终极 RP (ZhongJi RP) 自主演进生命周期：1.0.1 (集成上游 3.1.1 核心修补与记忆模型)
+        versionCode = 2
+        versionName = "1.0.1"
 
         // 插件解密密钥的派生因子之一：由签名口令做 HMAC，口令只存在于
         // local.properties / CI secrets，不写入 APK 明文。APK 内只保留 HMAC 结果，

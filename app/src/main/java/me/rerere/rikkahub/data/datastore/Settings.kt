@@ -52,10 +52,12 @@ data class Settings(
     val favoriteModels: List<Uuid> = emptyList(),
     val chatModelId: Uuid = Uuid.random(),
     val fastModelId: Uuid = Uuid.random(),
+    val fastModelReasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+    // 记忆整理模型：null = 跟随快速模型
+    val memoryModelId: Uuid? = null,
+    val memoryModelReasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
     // 标题总结模型：null = 跟随快速模型
     val titleModelId: Uuid? = null,
-    val fastModelReasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
-    // 标题推理等级。旧版标题请求直接复用 fastModelReasoningLeve
     // 就会花一二百个 token 在"数字数"上；默认 OFF，让标题请求不走思考链。
     val titleReasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val imageGenerationModelId: Uuid = Uuid.random(),
