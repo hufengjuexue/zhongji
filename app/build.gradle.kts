@@ -194,7 +194,7 @@ android {
     // 不写这一行时 AGP 会用自带默认值，导致 CI 每次构建重新下载整个 NDK。
     ndkVersion = nativeNdkVersion
     defaultConfig {
-        applicationId = "me.rerere.rikkahub.huadeng"
+        applicationId = "me.rerere.zhongji"
         minSdk = 26
         targetSdk = 37
         // 跟随上游 3.1.0；versionCode 在本地线（238）上递增，保证覆盖安装
