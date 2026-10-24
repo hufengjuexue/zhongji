@@ -1,11 +1,12 @@
 {
-  "version": "3.1.0",
-  "publishedAt": "2026-10-24T08:00:00Z",
-  "changelog": "终极 RP · Super-Fork 强化版发布：\n\n1. 独创自动记忆向量尾部近因注入管道（MemoryVectorTailTransformer），11份世界观拓扑静态下沉\n2. 物理拔除底层 3 处反 RP 规训惩罚与道德说教锁\n3. 换装岩仓玲音 (Lain) 88% 黄金比例自适应专属图标\n4. 微创修复 12 处 Compose 运行时崩溃隐患\n5. 应用与品牌全面更名为『终极 RP』(ZhongJi RP)",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "publishedAt": "2026-10-24T10:00:00Z",
+  "changelog": "终极 RP (ZhongJi RP) · v1.0.0 创世首发正式版：\n\n1. 【独立生态】全新独立包名 me.rerere.zhongji，与原版华灯完美双开共存，数据零冲突\n2. 【首创机制】记忆向量尾部注入机制 (MemoryVectorTailTransformer)，100% 保护商用大模型 Prefix Prompt Caching\n3. 【视觉焕新】全套岩仓玲音 (Lain) 高清自适应图标与『终极 RP』品牌全面就绪\n4. 【底层净化】物理拔除 3 处底层反 RP 规训惩罚与道德说教锁，剔除签名限制\n5. 【极致稳定】微创排查修复 12 处 Compose 运行时崩溃隐患",
   "downloads": [
     {
-      "name": "zhongji-rp-3.1.0-arm64-v8a.apk",
-      "url": "https://github.com/hufengjuexue/zhongji/releases/latest",
+      "name": "zhongji-rp-1.0.0-arm64-v8a.apk",
+      "url": "https://github.com/hufengjuexue/zhongji/releases/download/v1.0.0/zhongji-rp-1.0.0-arm64-v8a.apk",
       "size": "约 108 MB"
     }
   ]

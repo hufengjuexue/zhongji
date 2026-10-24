@@ -2,7 +2,7 @@
 
 <img src="docs/app-icon.png" width="96" alt="终极 RP 图标"/>
 
-# 终极 RP · ZhongJi
+# 终极 RP · ZhongJi (v1.0.0)
 
 ### 安卓上的 **AI 深度聊天客户端**
 ### 兼为 **SillyTavern（酒馆）兼容端**
