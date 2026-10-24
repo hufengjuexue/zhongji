@@ -1,8 +1,6 @@
-# 华灯 3.0.0
+# 终极 RP 3.1.0
 
-本次更新紧跟上游 3.0.0，添加了各种美化功能以及 RP 中可能用到的各种工具，增添了华灯前端内核，更兼容了大量的前端卡，修复了已知的亿种 Bug。
-
-欢迎加入软件反馈/RP 欢乐 QQ 交流群 [【Rikkahub·华灯】（点击一键加群）](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=XXbZtPG3SrT0QoGtn-19_rChhGgfCzh7&authKey=ww4WCnqfe%2BoKe68oaNW897iGbxMivTPwcfCoYhUYeHN40Bv2QGmyx8hco7Cxw6mO&noverify=0&group_code=1129035651)，新群欢迎来聊，反馈问题可以更快回复，群里可享高速下载，以及有更兼容前端和更小白友好的内测加强版本，领取免费公益模型，欢迎加群体验。
+本次更新完成架构升维：新增记忆向量尾部注入管道、物理切除底层反 RP 规训惩罚、修复 12 处 Compose 运行时崩溃，换装岩仓玲音 (Lain) 自适应图腾图标。
 
 ## 版本特性
 

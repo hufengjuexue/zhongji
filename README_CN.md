@@ -11,10 +11,10 @@
 
 [**简体中文**](README_CN.md) | [**English**](README.md) | [差异手册](DIVERGENCE.md)
 
-[![官网](https://img.shields.io/badge/官网-rikkahub.luoca.cn-8f4c00)](https://rikkahub.luoca.cn/) [![文档](https://img.shields.io/badge/使用文档-docs-8f4c00)](https://rikkahub.luoca.cn/docs/) [![Release](https://img.shields.io/github/v/release/MiaoWuNYA/rikkahub-sillytavern-android?label=release&color=brightgreen)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases)
+[![官网](https://img.shields.io/badge/官网-rikkahub.luoca.cn-8f4c00)](https://rikkahub.luoca.cn/) [![文档](https://img.shields.io/badge/使用文档-docs-8f4c00)](https://rikkahub.luoca.cn/docs/) [![Release](https://img.shields.io/github/v/release/hufengjuexue/zhongji?label=release&color=brightgreen)](https://github.com/hufengjuexue/zhongji/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases)
-[![Stars](https://img.shields.io/github/stars/MiaoWuNYA/rikkahub-sillytavern-android?color=yellow)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/stargazers)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/zhongji/releases)
+[![Stars](https://img.shields.io/github/stars/hufengjuexue/zhongji?color=yellow)](https://github.com/hufengjuexue/zhongji/stargazers)
 
 </div>
 
@@ -56,8 +56,6 @@
    - 告别千篇一律的通用剪影与系统主题涂脏，换装 **岩仓玲音 (Lain)** 经典原画，以 88% 黄金比例自适应算法完美适配圆角/圆形桌面图标。
 
 ---
-### 交流反馈
-欢迎加入交流群1129035651，分享遇到的问题和使用方案
 ### 酒馆兼容
 
 | 角色卡全兼容（V3 卡 + 62 条内嵌世界书） | 宏引擎（60+ 官方宏） |
@@ -111,18 +109,16 @@ rikkahub/rikkahub (最上游，v2.5.6)
         ├──► heikeyangle-code/rikkahub-plus (中间分支 mingli2)
         │            │  酒馆系统 / 宏引擎 / 斜杠命令 / 群聊
         │            ▼
-        └──► MiaoWuNYA/rikkahub-sillytavern-android  ← 本仓库
-                     │  酒馆增强 / 缓存优化 / 插件 / 记忆 / 中转兼容 / 手机增强
-                     │
-                     ├─ 另从 orangechat & Tumin 引入：三层记忆、情侣空间、
-                     │  生活空间、外观自定义、插件系统雏形
-                     └─ 另从 Rikkahub-Revised 移植：语义记忆 RAG、滚动压缩
+        ├──► MiaoWuNYA/rikkahub-sillytavern-android (华灯分支)
+        │            │  酒馆增强 / 缓存优化 / 插件 / 记忆 / 中转兼容
+        │            ▼
+        └──► hufengjuexue/zhongji  ← 终极 RP (本仓库)
+                     │  记忆向量尾部近因注入 / 去反RP规训 / Lain自适应图腾 / Compose崩溃硬化
 ```
 
 - **对最上游 `rikkahub`**：上游功能全部保留；酒馆、插件、记忆等全部是增量
-- **对中间分支 `heikeyangle-code/rikkahub-plus`（mingli2）**：酒馆核心来自它，本分支在其上补齐了
-  HTML 卡片、多开场白、预设与正则导入、QR 导入、世界书编辑器补全与 Token 预算兜底、
-  Vector Storage 语义条目、提示词查看器、正则深度限制与缓存、开场白宏替换
+- **对中间分支 `heikeyangle-code/rikkahub-plus`（mingli2）**：酒馆核心来自它，补齐了 HTML 卡片、多开场白、预设与正则导入、QR 导入
+- **对华灯分支 `MiaoWuNYA`**：继承其酒馆增强与生态兼容基底，并在其上实现自研尾部向量注入与规训脱敏
 - **对其它同源分支**：见文末[致谢](#-致谢与版权说明credits)，特色功能的来源均已注明
 
 </details>
@@ -131,7 +127,7 @@ rikkahub/rikkahub (最上游，v2.5.6)
 
 ## 🚀 快速开始
 
-1. 到 [Releases](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases/latest) 下载最新 APK（`arm64-v8a`，Android 8.0+）
+1. 到 [Releases](https://github.com/hufengjuexue/zhongji/releases/latest) 下载最新 APK（`arm64-v8a`，Android 8.0+）
 2. **配模型**：设置 → 模型与服务 → **提供商**，添加你的 API；再到**默认模型和提示词**给对话/标题/压缩分别选模型
 3. 开始聊天。想要更多：
    - **导入角色卡**（助手页 → 导入，支持 PNG 卡 / V2 / V3 JSON，世界书和预设自动带进来）
@@ -587,9 +583,9 @@ TypeSafe System One 判断模型的接入配置页：API 地址 / Key / 模型�
 
 | 渠道 | 说明 |
 |---|---|
-| **稳定版** | [Releases](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases) 按版本发布（`2.5.6.N`，历史版本曾是 `2.5.4fixN`，可直接覆盖安装升级） |
-| **Nightly** | Actions 每天两次自动构建（过去 24 小时无新提交则跳过），覆盖 [nightly](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases/tag/nightly) 预发布；版本按日期推进（`2.5.6.YYYYMMDD`） |
-| **手动构建产物** | 每次推送在 [Actions](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/actions) 产出 APK Artifact（构建页底部「Artifacts → rikkahub-plus-fresh」，需登录） |
+| **稳定版** | [Releases](https://github.com/hufengjuexue/zhongji/releases) 按版本发布（可直接覆盖安装升级） |
+| **Nightly** | Actions 每日自动构建预发布；版本按日期推进（`3.1.0.YYYYMMDD`） |
+| **手动构建产物** | 每次推送在 [Actions](https://github.com/hufengjuexue/zhongji/actions) 产出 APK Artifact（构建页底部「Artifacts → zhongji-rp-release」，需登录） |
 | **应用内更新** | 设置 → 关于 → 检查更新（GitHub Releases API，国内可达镜像自动回退） |
 
 > 仅提供 `arm64-v8a` 单一架构 APK，支持 Android 8.0（API 26）及以上。
@@ -610,7 +606,7 @@ TypeSafe System One 判断模型的接入配置页：API 地址 / Key / 模型�
 
 欢迎大家与我协作！无论是提 Bug、提建议还是贡献代码，都非常欢迎：
 
-- 提 Bug / 建议：[Issues](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/issues)
+- 提 Bug / 建议：[Issues](https://github.com/hufengjuexue/zhongji/issues)
 - 提代码：直接 Fork + PR，无需事先申请
 
 ---
