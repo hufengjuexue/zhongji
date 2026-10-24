@@ -29,8 +29,8 @@ import java.util.concurrent.TimeUnit
 import me.rerere.rikkahub.utils.l10n
 
 /** 本定制版的仓库。GitHub Release 是权威来源，仓库根目录的 update.json 是兜底快照。 */
-private const val REPO = "MiaoWuNYA/rikkahub-sillytavern-android"
-private const val BRANCH = "huadeng"
+private const val REPO = "hufengjuexue/zhongji"
+private const val BRANCH = "main"
 
 private const val TAG = "UpdateChecker"
 

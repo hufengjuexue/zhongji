@@ -10,10 +10,10 @@
 
 [**English**](README.md) | [**简体中文**](README_CN.md) | [Divergence map](DIVERGENCE.md) | [Divergence map (EN)](DIVERGENCE_EN.md)
 
-[![Website](https://img.shields.io/badge/Website-rikkahub.luoca.cn-8f4c00)](https://rikkahub.luoca.cn/) [![Docs](https://img.shields.io/badge/Docs-docs-8f4c00)](https://rikkahub.luoca.cn/docs/) [![Release](https://img.shields.io/github/v/release/MiaoWuNYA/rikkahub-sillytavern-android?label=release&color=brightgreen)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases)
+[![Website](https://img.shields.io/badge/Website-rikkahub.luoca.cn-8f4c00)](https://rikkahub.luoca.cn/) [![Docs](https://img.shields.io/badge/Docs-docs-8f4c00)](https://rikkahub.luoca.cn/docs/) [![Release](https://img.shields.io/github/v/release/hufengjuexue/zhongji?label=release&color=brightgreen)](https://github.com/hufengjuexue/zhongji/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases)
-[![Stars](https://img.shields.io/github/stars/MiaoWuNYA/rikkahub-sillytavern-android?color=yellow)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/stargazers)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/zhongji/releases)
+[![Stars](https://img.shields.io/github/stars/hufengjuexue/zhongji?color=yellow)](https://github.com/hufengjuexue/zhongji/stargazers)
 
 </div>
 
@@ -109,16 +109,16 @@ rikkahub/rikkahub (original upstream, v2.5.6)
         ├──► heikeyangle-code/rikkahub-plus (intermediate fork, mingli2)
         │            │  tavern system / macro engine / slash commands / group chats
         │            ▼
-        └──► MiaoWuNYA/rikkahub-sillytavern-android  ← this repo
-                     │  cache optimization / plugins / memory / proxy fix / on-device
-                     │
-                     ├─ also from orangechat & Tumin: three-layer memory, couples space,
-                     │  life hub, appearance customization, early plugin system
-                     └─ also ported from Rikkahub-Revised: semantic memory RAG, rolling compression
+        ├──► MiaoWuNYA/rikkahub-sillytavern-android (Huadeng fork)
+        │            │  cache optimization / plugins / memory / proxy fix / on-device
+        │            ▼
+        └──► hufengjuexue/zhongji  ← ZhongJi RP (this repo)
+                     │  vector tail injection / uncensored / Lain adaptive icon / Compose hardened
 ```
 
 - **vs. original upstream `rikkahub`**: everything preserved; the tavern/plugin/memory work is purely additive
-- **vs. intermediate `heikeyangle-code/rikkahub-plus` (mingli2)**: the tavern core comes from it; this fork adds cache optimization, plugins, memory, proxy fix, voice, and privacy hardening on top
+- **vs. intermediate `heikeyangle-code/rikkahub-plus` (mingli2)**: the tavern core comes from it
+- **vs. Huadeng fork `MiaoWuNYA`**: inherits the deep tavern integration and ecosystem base
 - **vs. other same-origin forks**: see [Credits](#-credits) — feature provenance is stated per project
 
 </details>
@@ -127,7 +127,7 @@ rikkahub/rikkahub (original upstream, v2.5.6)
 
 ## 🚀 Quick start
 
-1. Grab the latest APK from [Releases](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases/latest) (`arm64-v8a`, Android 8.0+)
+1. Grab the latest APK from [Releases](https://github.com/hufengjuexue/zhongji/releases/latest) (`arm64-v8a`, Android 8.0+)
 2. Settings → Models & Services → **Providers**, add your API; then **Default models & prompts** to pick models for chat / title / compression
 3. Start chatting. Want more:
    - **Import a character card** (Assistants page → import, PNG / V2 / V3 JSON; lorebooks and presets come along automatically)
@@ -580,9 +580,9 @@ The configuration page for the TypeSafe System One judge model: API base URL / k
 
 | Channel | Description |
 |---|---|
-| **Stable** | Versioned releases (`2.5.6.N`; historical versions used `2.5.4fixN` — installs upgrade over them directly) on [Releases](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases) |
-| **Nightly** | Actions build twice daily (skipped if no commit in the past 24h) and overwrite the [nightly](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/releases/tag/nightly) prerelease; versions advance by date (`2.5.6.YYYYMMDD`) |
-| **Manual builds** | Every push produces an APK artifact on [Actions](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/actions) (build page → Artifacts → `rikkahub-plus-fresh`; sign-in required) |
+| **Stable** | Releases on [Releases](https://github.com/hufengjuexue/zhongji/releases) |
+| **Nightly** | Actions daily automated builds on [Releases](https://github.com/hufengjuexue/zhongji/releases) |
+| **Manual builds** | Every push produces an APK artifact on [Actions](https://github.com/hufengjuexue/zhongji/actions) (build page → Artifacts → `zhongji-rp-release`) |
 | **In-app update** | Settings → About → Check for updates (GitHub Releases API, with a mainland-China-reachable mirror fallback) |
 
 > Only a single `arm64-v8a` APK is published, supporting Android 8.0 (API 26) and above.
@@ -603,7 +603,7 @@ The configuration page for the TypeSafe System One judge model: API base URL / k
 
 Contributions are always welcome! Bug reports, suggestions, and code are all appreciated:
 
-- Bug reports / suggestions: [Issues](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android/issues)
+- Bug reports / suggestions: [Issues](https://github.com/hufengjuexue/zhongji/issues)
 - Code: just Fork + PR — no permission needed
 
 ---
