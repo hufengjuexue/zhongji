@@ -3,6 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ master, main, mingli, huadeng ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:
@@ -58,10 +59,12 @@ jobs:
       # 默认名 app-release.apk 不带版本号，分批下载时容易和旧版本混淆。
       # 命名保持英文，避免升级工具处理中文路径出错。
       - name: Rename APK
+        id: rename
         run: |
           set -e
           V=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           echo "versionName=$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
           for f in app/build/outputs/apk/release/*.apk; do
             [ -e "$f" ] || { echo "没有找到 APK，保持原样"; exit 0; }
             case "$f" in
@@ -83,11 +86,12 @@ jobs:
         with:
           name: zhongji-rp-release
           path: app/build/outputs/apk/release/*.apk
-      - name: Create Release on Tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Automatically Publish Release
+        if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         uses: softprops/action-gh-release@v2
         with:
-          name: 终极 RP · ZhongJi RP ${{ github.ref_name }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.rename.outputs.version) }}
+          name: 终极 RP · ZhongJi RP ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.rename.outputs.version) }}
           draft: false
           prerelease: false
           files: app/build/outputs/apk/release/*.apk
