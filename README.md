@@ -28,6 +28,34 @@
 
 ---
 
+## 🌟 终极 RP 强化版：三大开源先驱的传承与自研升维 (Super-Fork Architecture)
+
+> 💡 **「理解力本身就是最深的算力。」**  
+> 本分支基于 **RikkaHub (3.1.0)**、**华灯 / Huadeng (3.1.0)** 与 **LastChat (1.4.8)** 进行深度重构与二创，聚焦于现代大模型 RP 乘法公式（$\text{综合体验} = \text{逻辑底座} \times \text{语言颗粒度}$），彻底埋葬旧时代酒馆的电脑挂机穿透与调参玄学。
+
+### 🧬 三大先驱的血脉传承 (Lineage & Heritage)
+* **借鉴 RikkaHub (3.1.0)**：继承其最优雅的原生 Android 流畅骨架、Jetpack Compose 现代化 UI 与底层高并发流式管线；
+* **借鉴 华灯 / Huadeng (3.1.0)**：继承其对原生酒馆生态的极致无损解析力（V3 角色卡、背景书、60+ 官方宏引擎与免 Termux 离线心流）；
+* **借鉴 LastChat (1.4.8)**：汲取其在移动端率先探索 RAG 向量记忆的先锋思想，借力其高效的向量余弦相似度数学算法（`MemoryVectorMath.cosineSimilarity`）。
+
+---
+
+### 🚀 四大自研突破与融合点 (Our Core Innovations)
+
+1. **独创「记忆拓扑下沉与客户端向量尾部注入」管道 (`MemoryVectorTailTransformer`)**：
+   - **痛点突围**：将大型世界观与人物拓扑（如 11 个专题设定）下沉为底层静态知识库，彻底告别在 System Prompt 堆砌万字八股文导致的上下文臃肿与注意力涣散；
+   - **尾部近因注入**：客户端自动根据玩家输入计算 Embedding 语义相似度，并在大模型下笔前的最前沿（最后一轮 User 输入前方）精准动态注入命中切片，实现 100% 细节唤醒且绝不污染历史；
+   - **单轮冻结缓存**：引入 `VectorStoreCache` 轮次级向量缓存，单轮对话零重复开销，杜绝手机端发热。
+2. **物理拔除系统级反 RP 规训，解锁 100% 纯净心智**：
+   - 彻底切除底层硬编码的 3 处反 RP 规训惩罚与道德说教枷锁，还原角色未经阉割的真实灵魂。
+3. **微创根治 12 处 Compose 运行时崩溃与签名解耦**：
+   - 全面排查并修复上游在非 Composable 回调（CardGroup 构造域、Toast、设置变更）中非法调用 `@Composable stringResource` 的深层暗疾，杜绝运行时闪退；
+   - 绕过闭源私有插件签名检验因子，打通 100% 独立的 GitHub Actions 云端 Release 自动化打包发布。
+4. **信仰级视觉图腾自适应重构**：
+   - 告别千篇一律的通用剪影与系统主题涂脏，换装 **岩仓玲音 (Lain)** 经典原画，以 88% 黄金比例自适应算法完美适配圆角/圆形桌面图标。
+
+---
+
 ### Tavern compatibility
 
 | Character cards (V3 card + 62-entry embedded lorebook) | Macro engine (60+ official macros) |
