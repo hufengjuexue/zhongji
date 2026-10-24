@@ -134,6 +134,9 @@
         <data
           android:host="shortcut"
           android:scheme="rikkahub" />
+        <data
+          android:host="shortcut"
+          android:scheme="zhongji" />
       </intent-filter>
     </activity>
     <activity
