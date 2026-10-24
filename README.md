@@ -2,7 +2,7 @@
 
 <img src="docs/app-icon.png" width="96" alt="ZhongJi RP icon"/>
 
-# 终极 RP · ZhongJi
+# 终极 RP · ZhongJi (v1.0.0)
 
 ### An **AI chat client** for Android that is also a **SillyTavern**-compatible endpoint
 
