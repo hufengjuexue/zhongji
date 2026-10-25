@@ -8,8 +8,6 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.event.AppEventBus
-import me.rerere.rikkahub.data.qq.QqBotClient
-import me.rerere.rikkahub.data.weixin.WeixinBotClient
 import me.rerere.rikkahub.service.ChatNotificationManager
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.service.MediaCreationService
@@ -33,15 +31,6 @@ val appModule = module {
 
     single {
         LocalTools(get(), get(), get(), get())
-    }
-
-    // 微信 Bot / QQ Bot API 客户端（复用全局 OkHttpClient，各自按需覆写超时）
-    single {
-        WeixinBotClient(get<OkHttpClient>())
-    }
-
-    single {
-        QqBotClient(get())
     }
 
     single {

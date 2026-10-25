@@ -1,6 +1,9 @@
 package me.rerere.rikkahub.ui.pages.setting
 
+import android.content.Context
+import android.net.Uri
 import androidx.activity.compose.LocalActivity
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -116,7 +119,6 @@ fun SettingPreferencesThemePage(vm: SettingVM = koinViewModel()) {
             ) { page ->
                 when (ThemeTab.entries[page]) {
                     ThemeTab.THEME -> ThemeContent(vm = vm, contentPadding = contentPadding)
-                    ThemeTab.COLOR -> SettingDisplayColorContent(vm = vm, contentPadding = contentPadding)
                     ThemeTab.UI -> SettingPreferencesUIContent(vm = vm, contentPadding = contentPadding)
                 }
             }
@@ -129,7 +131,6 @@ private enum class ThemeTab(
     @param:StringRes private val labelRes: Int,
 ) : PagerTab {
     THEME(HugeIcons.Sun01, R.string.setting_page_preferences_theme),
-    COLOR(HugeIcons.PaintBoard, R.string.setting_page_display_color),
     UI(HugeIcons.Edit01, R.string.setting_page_preferences_ui);
 
     override val label: String
@@ -401,5 +402,22 @@ private fun ThemeContent(vm: SettingVM, contentPadding: PaddingValues) {
                 }
             }
         }
+    }
+}
+
+private fun importThemeImage(context: Context, uri: Uri): String {
+    val dir = context.filesDir.resolve("theme_images").apply { mkdirs() }
+    val file = dir.resolve("${System.currentTimeMillis()}_${uri.lastPathSegment ?: "image"}")
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        file.outputStream().use { output -> input.copyTo(output) }
+    } ?: error("Failed to open input stream")
+    return file.absolutePath
+}
+
+private fun deleteThemeFileIfOwned(context: Context, oldPath: String?, newPath: String?) {
+    if (oldPath.isNullOrBlank() || oldPath == newPath) return
+    val dir = context.filesDir.resolve("theme_images").absolutePath
+    if (oldPath.startsWith(dir)) {
+        File(oldPath).delete()
     }
 }

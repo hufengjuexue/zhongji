@@ -464,7 +464,6 @@ class ConversationRepository(
 
     suspend fun updateTitle(conversationId: Uuid, title: String) {
         conversationDAO.updateTitle(conversationId.toString(), title)
-        messageFtsManager.updateTitle(conversationId.toString(), title)
     }
 
     suspend fun updateCustomSystemPrompt(conversationId: Uuid, customSystemPrompt: String?) {

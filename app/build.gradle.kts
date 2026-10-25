@@ -274,6 +274,7 @@ dependencies {
     implementation(libs.snakeyaml)
     // zxing (qrcode)
     implementation(libs.zxing.core)
+    implementation(libs.androidx.exifinterface)
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
