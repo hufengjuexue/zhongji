@@ -38,7 +38,6 @@
 }
 
 # Chaquopy bridge — 所有方法通过Python反射调用，R8不能删
--keep class me.rerere.rikkahub.data.ai.python.PythonBridge { *; }
 -keep class me.rerere.rikkahub.data.ai.python.JsBridge { *; }
 
 # 本地 Compose 自定义组件依赖：Compose 自带 consumer rules 已覆盖反射必需项，

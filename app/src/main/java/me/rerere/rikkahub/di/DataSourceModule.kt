@@ -26,7 +26,6 @@ import me.rerere.rikkahub.data.ai.TranslationHandler
 import androidx.sqlite.db.SupportSQLiteDatabase
 import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
 import io.requery.android.database.sqlite.SQLiteCustomExtension
-import me.rerere.rikkahub.data.db.fts.SimpleDictManager
 import me.rerere.rikkahub.data.db.migrations.AppDatabaseMigrations
 import me.rerere.rikkahub.data.ai.UsageRecorder
 import me.rerere.rikkahub.data.ai.account.ProviderAccountManager
@@ -77,20 +76,7 @@ val dataSourceModule = module {
             .addMigrations(*AppDatabaseMigrations.HANDWRITTEN)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
-                    val dictDir = SimpleDictManager.extractDict(context)
-                    val cursor = db.query("SELECT jieba_dict(?)", arrayOf(dictDir.absolutePath))
-                    cursor.use {
-                        if (it.moveToFirst()) {
-                            val result = it.getString(0)
-                            val success = result?.trimEnd('/') == dictDir.absolutePath.trimEnd('/')
-                            if (!success) {
-                                android.util.Log.e(
-                                    "DataSourceModule",
-                                    "jieba_dict failed: $result, path=${dictDir.absolutePath}"
-                                )
-                            }
-                        }
-                    }
+                    java.io.File(context.filesDir, "simple_dict").takeIf { it.exists() }?.deleteRecursively()
                     db.execSQL(
                         """
                         CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
@@ -246,13 +232,6 @@ val dataSourceModule = module {
     }
 
     single { McpManager(settingsStore = get(), appScope = get(), filesManager = get()) }
-
-    single {
-        me.rerere.rikkahub.data.ai.jev.JevClient(
-            httpClient = get(),
-            settingsStore = get(),
-        )
-    }
 
     single {
         me.rerere.rikkahub.data.memory.CrossWindowMemoryStore(get())

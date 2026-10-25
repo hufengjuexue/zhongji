@@ -96,11 +96,6 @@ import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantPromptPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantRequestPage
 import me.rerere.rikkahub.ui.pages.backup.BackupPage
 import me.rerere.rikkahub.ui.pages.chat.ChatPage
-import me.rerere.rikkahub.ui.pages.couple.CoupleAnniversaryBookPage
-import me.rerere.rikkahub.ui.pages.couple.CoupleDiaryPage
-import me.rerere.rikkahub.ui.pages.couple.CoupleMomentsPage
-import me.rerere.rikkahub.ui.pages.couple.CoupleSpacePage
-import me.rerere.rikkahub.ui.pages.life.LifeHubPage
 import me.rerere.rikkahub.ui.pages.voice.VideoCallPage
 import me.rerere.rikkahub.ui.pages.voice.VoiceCallPage
 import me.rerere.rikkahub.ui.pages.chat.GroupChatListPage
@@ -136,7 +131,6 @@ import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesGeneralPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNetworkPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesUIPage
 import me.rerere.rikkahub.ui.pages.setting.SettingThemePage
-import me.rerere.rikkahub.ui.pages.setting.SettingDisplayColorPage
 import me.rerere.rikkahub.ui.pages.setting.SettingDonatePage
 import me.rerere.rikkahub.ui.pages.setting.SettingFilesPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMcpDetailPage
@@ -148,17 +142,10 @@ import me.rerere.rikkahub.ui.pages.setting.SettingProviderDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingProviderPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSearchDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSearchPage
-import me.rerere.rikkahub.ui.pages.setting.SettingQqBotPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMediaPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSpeechPage
 import me.rerere.rikkahub.ui.pages.setting.SettingTtsPlaybackPage
 import me.rerere.rikkahub.ui.pages.setting.SettingWebPage
-import me.rerere.rikkahub.ui.pages.setting.SettingWeixinBotPage
-import me.rerere.rikkahub.ui.pages.setting.SettingHuaDengCompatPage
-import me.rerere.rikkahub.ui.pages.setting.SettingHuaDengPage
-import me.rerere.rikkahub.ui.pages.setting.SettingTavernPage
-import me.rerere.rikkahub.ui.pages.setting.TavernRegexPage
-import me.rerere.rikkahub.ui.pages.setting.SettingJevPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSecurityPage
 import me.rerere.rikkahub.ui.pages.share.handler.ShareHandlerPage
 import me.rerere.rikkahub.ui.pages.stats.StatsPage
@@ -591,10 +578,6 @@ class RouteActivity : ComponentActivity() {
                                 SettingThemePage()
                             }
 
-                            entry<Screen.SettingDisplayColor> {
-                                SettingDisplayColorPage()
-                            }
-
                             entry<Screen.SettingPreferences> {
                                 SettingPreferencesPage()
                             }
@@ -677,36 +660,8 @@ class RouteActivity : ComponentActivity() {
                                 SettingWebPage()
                             }
 
-                            entry<Screen.SettingTavern> {
-                                SettingTavernPage()
-                            }
-
-                            entry<Screen.SettingTavernRegex> {
-                                TavernRegexPage()
-                            }
-
-                            entry<Screen.SettingHuaDeng> {
-                                SettingHuaDengPage()
-                            }
-
-                            entry<Screen.SettingHuaDengCompat> {
-                                SettingHuaDengCompatPage()
-                            }
-
-                            entry<Screen.SettingJev> {
-                                SettingJevPage()
-                            }
-
                             entry<Screen.SettingSecurity> {
                                 SettingSecurityPage()
-                            }
-
-                            entry<Screen.SettingWeixinBot> {
-                                SettingWeixinBotPage()
-                            }
-
-                            entry<Screen.SettingQqBot> {
-                                SettingQqBotPage()
                             }
 
                             entry<Screen.SettingProactiveMessage> {
@@ -811,26 +766,6 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.GroupChat> { key ->
                                 GroupChatPage(groupId = key.id)
-                            }
-
-                            entry<Screen.CoupleSpace> {
-                                CoupleSpacePage()
-                            }
-
-                            entry<Screen.CoupleMoments> {
-                                CoupleMomentsPage()
-                            }
-
-                            entry<Screen.CoupleDiary> {
-                                CoupleDiaryPage()
-                            }
-
-                            entry<Screen.CoupleAnniversaries> {
-                                CoupleAnniversaryBookPage()
-                            }
-
-                            entry<Screen.LifeHub> {
-                                LifeHubPage()
                             }
 
                             entry<Screen.VoiceCall> { key ->
@@ -940,17 +875,16 @@ private fun BackupLaunchReminderHost(onNavigateToBackup: () -> Unit) {
 // 设置页背景图只作用于设置相关路由，避免透到聊天等页面
 private fun Screen.isSettingScreen(): Boolean = when (this) {
     Screen.Setting, Screen.Backup,
-    Screen.SettingTheme, Screen.SettingDisplayColor,
+    Screen.SettingTheme,
     Screen.SettingPreferences, Screen.SettingPreferencesTheme,
     Screen.SettingPreferencesNotification, Screen.SettingPreferencesGeneral,
     Screen.SettingPreferencesUI, Screen.SettingPreferencesNetwork,
     Screen.SettingProvider, Screen.SettingModels, Screen.SettingAbout,
     Screen.SettingSearch, Screen.SettingSpeech, Screen.SettingTtsPlayback,
     Screen.SettingMedia, Screen.SettingMcp, Screen.SettingDonate,
-    Screen.SettingFiles, Screen.SettingWeb, Screen.SettingTavern,
-    Screen.SettingTavernRegex, Screen.SettingHuaDeng, Screen.SettingHuaDengCompat,
-    Screen.SettingJev, Screen.SettingSecurity,
-    Screen.SettingWeixinBot, Screen.SettingQqBot, Screen.SettingProactiveMessage,
+    Screen.SettingFiles, Screen.SettingWeb,
+    Screen.SettingSecurity,
+    Screen.SettingProactiveMessage,
     Screen.Persona, Screen.AuthorsNote, Screen.Extensions, Screen.QuickMessages,
     Screen.Prompts, Screen.Skills, Screen.Plugins, Screen.Workspaces,
     Screen.Stats -> true
@@ -1044,9 +978,6 @@ sealed interface Screen : NavKey {
     data object SettingTheme : Screen
 
     @Serializable
-    data object SettingDisplayColor : Screen
-
-    @Serializable
     data object SettingPreferences : Screen
 
     @Serializable
@@ -1107,28 +1038,7 @@ sealed interface Screen : NavKey {
     data object SettingWeb : Screen
 
     @Serializable
-    data object SettingTavern : Screen
-
-    @Serializable
-    data object SettingTavernRegex : Screen
-
-    @Serializable
-    data object SettingHuaDeng : Screen
-
-    @Serializable
-    data object SettingHuaDengCompat : Screen
-
-    @Serializable
-    data object SettingJev : Screen
-
-    @Serializable
     data object SettingSecurity : Screen
-
-    @Serializable
-    data object SettingWeixinBot : Screen
-
-    @Serializable
-    data object SettingQqBot : Screen
 
     @Serializable
     data object SettingProactiveMessage : Screen
@@ -1192,21 +1102,6 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object GroupChatList : Screen
-
-    @Serializable
-    data object CoupleSpace : Screen
-
-    @Serializable
-    data object CoupleMoments : Screen
-
-    @Serializable
-    data object CoupleDiary : Screen
-
-    @Serializable
-    data object CoupleAnniversaries : Screen
-
-    @Serializable
-    data object LifeHub : Screen
 
     @Serializable
     data class VoiceCall(val conversationId: String) : Screen

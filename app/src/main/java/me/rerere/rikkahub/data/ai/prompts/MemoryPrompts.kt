@@ -49,7 +49,7 @@ private val MEMORY_FORMAT_PROMPT = """
     - Stable facts such as relationships, address, job, role and ongoing projects are recorded on first mention.
     - Match wording to evidence: one mention is written as "mentioned X once", not "X enthusiast".
     - Prefer wording that does not go stale: "mornings are full of meetings" outlasts "standup 10:00-10:15".
-    - Staleness test: a month from now, in a conversation about something else, will this still be true and worth reading? Do not record this week's bug or today's errand; keep only the stable part.
+    - Staleness test: Focus on lasting facts, personal preferences, and ongoing commitments. Do not record trivial fleeting banter, but ongoing life events, current plans, and emotional milestones belong in /topics/ongoing.md or their domain topic files.
     - Do not record again what is already recorded (a rephrasing counts as already recorded).
 
     ## Sensitive information

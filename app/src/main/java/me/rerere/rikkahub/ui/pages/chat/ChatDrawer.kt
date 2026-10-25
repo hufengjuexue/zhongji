@@ -1201,21 +1201,5 @@ private fun DrawerActions(
                 onClick = { navController.navigate(Screen.Translator) },
             )
         }
-        if (!settings.huadengSettings.enableCleanMode) {
-            // 情侣空间入口
-            DrawerEntry(
-                icon = HugeIcons.InLove,
-                text = stringResource(R.string.couple_space_title),
-                onClick = { navController.navigate(Screen.CoupleSpace) },
-            )
-
-            // 生活空间入口
-            DrawerEntry(
-                icon = HugeIcons.Rocket01,
-                text = stringResource(R.string.chat_drawer_life_space),
-                onClick = { navController.navigate(Screen.LifeHub) },
-            )
-        }
-        // 清爽简洁模式：隐藏情侣空间/生活空间等娱乐功能入口
     }
 }

@@ -367,38 +367,12 @@ private fun AssistantLocalToolContent(
                 title = R.string.local_tool_device_toolbox_title,
                 description = R.string.local_tool_device_toolbox_desc,
             )
-            toolItem(
-                option = LocalToolOption.LifeCompanion,
-                icon = HugeIcons.Heart,
-                title = R.string.local_tool_life_companion_title,
-                description = R.string.local_tool_life_companion_desc,
-            )
-            toolItem(
-                option = LocalToolOption.CoupleSpace,
-                icon = HugeIcons.Gift,
-                title = R.string.local_tool_couple_space_title,
-                description = R.string.local_tool_couple_space_desc,
-            )
             // 上游 2.5.6：chart_display 本地工具
             toolItem(
                 option = LocalToolOption.ChartDisplay,
                 icon = HugeIcons.ChartLineData01,
                 title = R.string.assistant_page_local_tools_chart_display_title,
                 description = R.string.assistant_page_local_tools_chart_display_desc,
-            )
-            // 代码静态检查
-            toolItem(
-                option = LocalToolOption.CodeCheck,
-                icon = HugeIcons.SourceCode,
-                title = R.string.local_tool_code_check_title,
-                description = R.string.local_tool_code_check_desc,
-            )
-            // 计算器（数值）
-            toolItem(
-                option = LocalToolOption.Calculator,
-                icon = HugeIcons.Calculator,
-                title = R.string.local_tool_calculator_title,
-                description = R.string.local_tool_calculator_desc,
             )
             // 分享文件
             toolItem(
@@ -424,13 +398,6 @@ private fun AssistantLocalToolContent(
                 icon = HugeIcons.Image02,
                 title = R.string.local_tool_show_image_title,
                 description = R.string.local_tool_show_image_desc,
-            )
-            // 通用文本差异对比
-            toolItem(
-                option = LocalToolOption.DiffText,
-                icon = HugeIcons.Diff,
-                title = R.string.local_tool_diff_text_title,
-                description = R.string.local_tool_diff_text_desc,
             )
             // 子 agent：把子任务派给独立 agent 完成后取回结果
             toolItem(

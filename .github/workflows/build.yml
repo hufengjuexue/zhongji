@@ -23,15 +23,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Upgrade pip & setuptools
-        run: pip install --upgrade pip setuptools wheel
-      - name: Force full Python reinstall (auto-update all packages)
-        run: rm -rf app/build/python $HOME/.gradle/caches/chaquopy*
-      - name: Pre-install setuptools for build
-        run: pip install --upgrade pip setuptools wheel 2>&1 | tail -3
       - name: Write signing config
         env:
           KEY_BASE64: ${{ secrets.KEY_BASE64 }}
@@ -52,7 +43,6 @@ jobs:
       - name: Build
         run: |
           chmod +x gradlew
-          rm -rf app/build/python/  # 清理之前失败构建的脏缓存
           ./gradlew assembleRelease -x :web:buildWebUi --no-build-cache --stacktrace 2>&1 | tee build.log
           exit ${PIPESTATUS[0]}
       # AGP 9 已移除 applicationVariants，无法在 Gradle 里改产物名，改在这里重命名。

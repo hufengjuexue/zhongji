@@ -122,6 +122,12 @@ class ProactiveMessageWorker(
             return Result.success()
         }
 
+        if (proactiveSetting.isInQuietHours()) {
+            Log.d(TAG, "Proactive message in quiet hours, skipping and rescheduling")
+            ProactiveMessageService.scheduleNext(applicationContext, proactiveSetting)
+            return Result.success()
+        }
+
         // 唤醒锁：Doze 下 CPU 可能已经睡下去，生成要联网、要解密会话，
         // 不持锁容易被中途冻住。上限与 WorkManager 的执行窗口一致。
         val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager

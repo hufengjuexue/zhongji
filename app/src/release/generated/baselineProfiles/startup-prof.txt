@@ -49903,11 +49903,6 @@ SPLme/rerere/rikkahub/data/db/fts/MessageFtsManagerKt;->extractFtsText(Lme/rerer
 Lme/rerere/rikkahub/data/db/fts/MessageFtsManagerKt$$ExternalSyntheticLambda0;
 SPLme/rerere/rikkahub/data/db/fts/MessageFtsManagerKt$$ExternalSyntheticLambda0;-><init>()V
 SPLme/rerere/rikkahub/data/db/fts/MessageFtsManagerKt$$ExternalSyntheticLambda0;->invoke(Ljava/lang/Object;)Ljava/lang/Object;
-Lme/rerere/rikkahub/data/db/fts/SimpleDictManager;
-SPLme/rerere/rikkahub/data/db/fts/SimpleDictManager;-><clinit>()V
-SPLme/rerere/rikkahub/data/db/fts/SimpleDictManager;-><init>()V
-SPLme/rerere/rikkahub/data/db/fts/SimpleDictManager;->copyAssetDir(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)V
-SPLme/rerere/rikkahub/data/db/fts/SimpleDictManager;->extractDict(Landroid/content/Context;)Ljava/io/File;
 Lme/rerere/rikkahub/data/db/migrations/Migration_11_12Kt;
 SPLme/rerere/rikkahub/data/db/migrations/Migration_11_12Kt;-><clinit>()V
 SPLme/rerere/rikkahub/data/db/migrations/Migration_11_12Kt;->getMigration_11_12()Landroidx/room/migration/Migration;

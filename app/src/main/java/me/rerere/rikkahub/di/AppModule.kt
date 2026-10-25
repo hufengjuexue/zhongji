@@ -127,9 +127,7 @@ val appModule = module {
             folderRepository = get(),
             crossWindowMemoryTransformer = get(),
             crossWindowMemoryStore = get(),
-            coupleRepository = get(),
             pluginToolProvider = get(),
-            jevClient = get(),
         )
     }
 

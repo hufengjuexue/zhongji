@@ -78,8 +78,6 @@ import me.rerere.rikkahub.data.ai.GenerationLoop
 import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
 import me.rerere.rikkahub.data.ai.TranslationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
-import me.rerere.rikkahub.data.ai.jev.JevClient
-import me.rerere.rikkahub.data.ai.tools.createJudgeTool
 import me.rerere.rikkahub.data.ai.prompts.TITLE_MAX_CHARS
 import me.rerere.rikkahub.plugin.provider.PluginToolProvider
 import me.rerere.rikkahub.data.ai.tools.LocalTools
@@ -93,9 +91,7 @@ import me.rerere.rikkahub.data.ai.tools.createWorkspaceTools
 import me.rerere.rikkahub.data.ai.tools.createSkillTools
 import me.rerere.rikkahub.data.ai.tools.createFileTools
 import me.rerere.rikkahub.data.ai.tools.createShellTools
-import me.rerere.rikkahub.data.ai.tools.createPythonTool
 import me.rerere.rikkahub.data.ai.tools.createDatabaseQueryTool
-import me.rerere.rikkahub.data.ai.tools.createCalculatorTool
 import me.rerere.rikkahub.data.ai.tools.createWebFetchTool
 import me.rerere.rikkahub.data.ai.tools.createTaskTools
 import me.rerere.rikkahub.data.ai.tools.createConversationTools
@@ -107,8 +103,6 @@ import me.rerere.rikkahub.data.ai.context.RollingContextSummary
 import me.rerere.rikkahub.data.ai.context.automaticRollingContextThreshold
 import me.rerere.rikkahub.data.ai.context.coveredMessageCount
 import me.rerere.rikkahub.data.ai.tools.createHistoryMessageTool
-import me.rerere.rikkahub.data.ai.tools.createLifeCompanionTools
-import me.rerere.rikkahub.data.ai.tools.createCoupleSpaceTools
 import me.rerere.rikkahub.data.ai.context.createRollingContextPlan
 import me.rerere.rikkahub.data.ai.context.isStillApplicableTo
 import me.rerere.rikkahub.data.ai.context.rollingContextWindowStartIndex
@@ -155,7 +149,6 @@ import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.model.withAssistantUpdate
 import me.rerere.rikkahub.data.model.withoutConversationFields
 import me.rerere.rikkahub.data.repository.ConversationRepository
-import me.rerere.rikkahub.data.repository.CoupleRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
@@ -289,9 +282,7 @@ class ChatService(
     private val folderRepository: FolderRepository,
     private val crossWindowMemoryTransformer: CrossWindowMemoryTransformer,
     private val crossWindowMemoryStore: CrossWindowMemoryStore,
-    private val coupleRepository: CoupleRepository,
     private val pluginToolProvider: PluginToolProvider,
-    private val jevClient: JevClient,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -1505,10 +1496,7 @@ class ChatService(
             updateConversation(conversationId, initialConversation.copy(chatSuggestions = emptyList()))
 
             // memory tool
-            // 酒馆模式且不保留工具：请求里没有任何工具，能力告警与 MCP 校验都不适用
-            val tavernToolFree = settings.huadengSettings.enableTavernMode &&
-                !settings.huadengSettings.tavernModeKeepTools
-            if (!tavernToolFree && !model.abilities.contains(ModelAbility.TOOL)) {
+            if (!model.abilities.contains(ModelAbility.TOOL)) {
                 if (useExternalWebSearch || mcpManager.getAllAvailableTools(assistant).isNotEmpty()) {
                     addError(
                         IllegalStateException(context.getString(R.string.tools_warning)),
@@ -1524,8 +1512,7 @@ class ChatService(
 
             // 预构建工具列表只为提前校验（非法 MCP 服务名在此抛错暂停队列）；
             // 实际请求的工具列表在生成时另行构建，此处的结果不使用。
-            // 酒馆模式不注册 MCP 工具，该校验跳过，否则纯净模式会被 MCP 配置拖停队列
-            if (!settings.huadengSettings.enableTavernMode) try {
+            try {
                 chatToolFactory.createTools(
                     settings = settings,
                     assistant = assistant,
@@ -1617,29 +1604,6 @@ class ChatService(
                 }
             } else null
 
-            // ── 生活 / 情侣空间工具 ──
-            // 清爽简洁模式开启时不注册娱乐类工具
-            // 生活空间 6 个工具：助手开启“生活空间”开关时加入
-            val lifeCompanionTools = if (assistant.localTools.contains(LocalToolOption.LifeCompanion) &&
-                !settings.huadengSettings.enableCleanMode
-            ) {
-                runCatching {
-                    createLifeCompanionTools(context, coupleRepository, assistant.id.toString())
-                }.getOrDefault(emptyList())
-            } else emptyList()
-            // 情侣空间 4 个工具：助手开启“情侣空间”开关、非清爽模式，且情侣空间已绑定且绑定角色是当前助手时加入
-            val coupleSpaceTools = if (settings.huadengSettings.enableCleanMode ||
-                !assistant.localTools.contains(LocalToolOption.CoupleSpace)
-            ) {
-                emptyList()
-            } else runCatching {
-                val relationship = coupleRepository.relationship.first()
-                if (relationship != null && relationship.assistantId == assistant.id.toString()) {
-                    createCoupleSpaceTools(coupleRepository, relationship.assistantId)
-                } else {
-                    emptyList()
-                }
-            }.getOrDefault(emptyList())
 
             generationLoop.generateText(
                 conversationId = conversationId,
@@ -1662,33 +1626,17 @@ class ChatService(
 
                     add(templateTransformer)
 
-                    if (settings.huadengSettings.enableTavernMode) {
-                        // 用户手动上传的文档和写的占位符照常处理，只去掉自动注入类
-                        removeAll { it === OcrTransformer }
-                        removeAll { it === SkillAutoTriggerTransformer }
-                        removeAll { it === TimeReminderTransformer }
-                    } else {
-                        add(workspaceReminderTransformer)
-                        // 跨窗口生活流：注入到最新 user 消息之前（不进 system，保前缀缓存）
-                        if (assistant.enableCrossWindowMemory) {
-                            add(crossWindowMemoryTransformer)
-                        }
-                        if (assistant.enableMemory && settings.vectorStorageEnabled) {
-                            add(MemoryVectorTailTransformer)
-                        }
+                    add(workspaceReminderTransformer)
+                    // 跨窗口生活流：注入到最新 user 消息之前（不进 system，保前缀缓存）
+                    if (assistant.enableCrossWindowMemory) {
+                        add(crossWindowMemoryTransformer)
+                    }
+                    if (assistant.enableMemory && settings.vectorStorageEnabled) {
+                        add(MemoryVectorTailTransformer)
                     }
                 },
                 outputTransformers = outputTransformers,
                 tools = buildList {
-                    // ── 酒馆模式：只保留最小可用工具面 ──
-                    // 实现见 buildTavernModeTools：插件工具保留（用户主动安装的能力，
-                    // 与 App 自带工作流性质不同），其余只留文件/搜索/抓取/计算器，
-                    // 且受「允许调用工具」开关控制。记忆、技能、MCP、任务、
-                    // 生活/情侣空间等一律不注册。
-                    if (settings.huadengSettings.enableTavernMode) {
-                        addAll(buildTavernModeTools(assistant, settings, useExternalWebSearch))
-                        return@buildList
-                    }
                     if (assistant.localTools.contains(LocalToolOption.FileTools)) {
                         addAll(createFileTools(context = context))
                     }
@@ -1714,23 +1662,8 @@ class ChatService(
                     if (assistant.localTools.contains(LocalToolOption.ShellTools)) {
                         addAll(createShellTools())
                     }
-                    if (assistant.localTools.contains(LocalToolOption.PythonEngine)) {
-                        add(
-                            createPythonTool(
-                                context = context,
-                                timeoutSec = assistant.toolExecTimeout,
-                                includeLibraryHints = settings.huadengSettings.enablePythonLibraryHints,
-                            )
-                        )
-                    }
                     if (assistant.localTools.contains(LocalToolOption.DatabaseQuery)) {
                         add(createDatabaseQueryTool(database))
-                    }
-                    if (assistant.localTools.contains(LocalToolOption.Calculator)) {
-                        add(createCalculatorTool(context))
-                    }
-                    if (settings.huadengSettings.jevJudgeTool) {
-                        add(createJudgeTool(jevClient))
                     }
                     if (assistant.localTools.contains(LocalToolOption.SubAgent)) {
                         add(
@@ -1764,9 +1697,6 @@ class ChatService(
                             )
                         )
                     }
-                    // 生活空间 / 情侣空间工具
-                    addAll(lifeCompanionTools)
-                    addAll(coupleSpaceTools)
                     // 插件工具（自动放行）
                     addAll(pluginToolProvider.getTools())
                     // 对齐上游：MCP 工具名带服务器名前缀，且校验服务器名（仅字母数字），非法名直接报错返回
@@ -2159,49 +2089,6 @@ class ChatService(
     /**
      * 为指定 Assistant 生成回复（群聊用），支持流式回调
      */
-    /**
-     * 酒馆模式下的最小可用工具面。
-     *
-     * 目的：工具仍然能用（模型知道有它、能调），但不注册任何会往上下文里
-     * 塞工作流产物的工具（记忆、技能、任务、MCP、数据库、生活/情侣空间等
-     * 全部不注册），也不发送任何工具系统提示词。
-     *
-     * 抽出来是因为此前这段逻辑只存在于 handleMessageComplete 里，
-     * 而 generateForAssistant 是完全独立的另一条生成路径（群聊、QUIET、
-     * 聊天列表入口都走它），没有这份裁剪——于是酒馆模式下记忆工具照样
-     * 被注册，助手会自行读写记忆。两条路径共用同一份实现，避免再次分叉。
-     *
-     * @param useExternalWebSearch 是否使用 App 自带的联网搜索。
-     *        统一由 shouldUseExternalWebSearch 计算，不要分别判断
-     *        assistant.enableWebSearch，否则两条路径口径会不一致。
-     */
-    private suspend fun buildTavernModeTools(
-        assistant: Assistant,
-        settings: Settings,
-        useExternalWebSearch: Boolean,
-    ): List<Tool> = buildList {
-        // 关闭「保留工具」后退化为纯文本模型，请求中不含任何工具（插件工具一并去掉）
-        if (!settings.huadengSettings.tavernModeKeepTools) return@buildList
-
-        // 插件工具保留：插件是用户主动安装的能力（可携带自己的提示词与工具），
-        // 属于用户明确要用的东西，与 App 自带工作流不同，酒馆模式下不裁剪
-        addAll(pluginToolProvider.getTools())
-
-        // 只留与聊天/创作直接相关、且不注入额外上下文的基础工具
-        if (assistant.localTools.contains(LocalToolOption.FileTools)) {
-            addAll(createFileTools(context = context))
-        }
-        // 联网搜索：仅在启用且模型本身没内置搜索时注册
-        if (useExternalWebSearch) {
-            addAll(createSearchTools(settings))
-            // 网页抓取与搜索配套：没有搜索时不单独给抓取，
-            // 否则模型会拿到一个它无从获取 URL 的工具。
-            add(createWebFetchTool())
-        }
-        if (assistant.localTools.contains(LocalToolOption.Calculator)) {
-            add(createCalculatorTool(context))
-        }
-    }
 
     suspend fun generateForAssistant(
         assistant: Assistant,
@@ -2231,23 +2118,21 @@ class ChatService(
         // MCP 工具：对齐上游校验服务器名（仅字母数字），非法名直接报错返回。
         // 酒馆模式不注册 MCP 工具，跳过校验
         val mcpTools = mcpManager.getAllAvailableTools(assistant)
-        if (!settings.huadengSettings.enableTavernMode) {
-            val invalidMcpNames = mcpTools
-                .map { it.second }
-                .distinct()
-                .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' } }
-            if (invalidMcpNames.isNotEmpty()) {
-                addError(
-                    error = IllegalStateException(
-                        context.getString(
-                            R.string.error_mcp_invalid_server_name,
-                            invalidMcpNames.joinToString(", ")
-                        )
-                    ),
-                    conversationId = conversationId,
-                )
-                return ""
-            }
+        val invalidMcpNames = mcpTools
+            .map { it.second }
+            .distinct()
+            .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' } }
+        if (invalidMcpNames.isNotEmpty()) {
+            addError(
+                error = IllegalStateException(
+                    context.getString(
+                        R.string.error_mcp_invalid_server_name,
+                        invalidMcpNames.joinToString(", ")
+                    )
+                ),
+                conversationId = conversationId,
+            )
+            return ""
         }
 
         generationLoop.generateText(
@@ -2259,20 +2144,6 @@ class ChatService(
             conversationId = conversationId,
             memories = memoryRepository.getFiles(assistant.memoryId),
             tools = buildList {
-                // 酒馆模式：与 handleMessageComplete 走同一份裁剪实现。
-                // 此前本路径完全没有酒馆判断，会注册全套工具：
-                // 记忆工具（模型自行读写记忆）、技能、任务、MCP、数据库等，
-                // 与「酒馆模式 = 纯净请求」的定位冲突。
-                if (settings.huadengSettings.enableTavernMode) {
-                    addAll(
-                        buildTavernModeTools(
-                            assistant,
-                            settings,
-                            shouldUseExternalWebSearch(assistant, model),
-                        )
-                    )
-                    return@buildList
-                }
                 if (assistant.localTools.contains(LocalToolOption.FileTools)) {
                     addAll(createFileTools(context = context))
                 }
@@ -2285,12 +2156,6 @@ class ChatService(
                 }
                 if (assistant.localTools.contains(LocalToolOption.DatabaseQuery)) {
                     add(createDatabaseQueryTool(database))
-                }
-                if (assistant.localTools.contains(LocalToolOption.Calculator)) {
-                    add(createCalculatorTool(context))
-                }
-                if (settings.huadengSettings.jevJudgeTool) {
-                    add(createJudgeTool(jevClient))
                 }
                 add(createWebFetchTool())
                 if (assistant.localTools.contains(LocalToolOption.TaskTools)) {
@@ -2322,19 +2187,10 @@ class ChatService(
                 }
             },
             inputTransformers = buildList {
-                // 同上：addAll 打底再按酒馆模式删减
                 addAll(inputTransformers)
-
                 add(templateTransformer)
-
-                if (settings.huadengSettings.enableTavernMode) {
-                    removeAll { it === OcrTransformer }
-                    removeAll { it === SkillAutoTriggerTransformer }
-                    removeAll { it === TimeReminderTransformer }
-                } else {
-                    if (assistant.enableMemory && settings.vectorStorageEnabled) {
-                        add(MemoryVectorTailTransformer)
-                    }
+                if (assistant.enableMemory && settings.vectorStorageEnabled) {
+                    add(MemoryVectorTailTransformer)
                 }
             },
             outputTransformers = outputTransformers,

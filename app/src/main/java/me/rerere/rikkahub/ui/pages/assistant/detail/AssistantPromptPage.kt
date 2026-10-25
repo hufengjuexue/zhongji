@@ -226,46 +226,138 @@ private fun AssistantPromptContent(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = stringResource(R.string.assistant_page_available_variables),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    // 基础占位符（旧版简单替换）
+                    var showMoreVariables by remember { mutableStateOf(false) }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.assistant_page_available_variables),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Tag(
+                            onClick = { showMoreVariables = !showMoreVariables },
+                        ) {
+                            Text(
+                                text = if (showMoreVariables) "收起扩展变量 ▲" else "更多宏与变量 ▼",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+
+                    // 常用高频变量（常驻免折叠，包含时间、用户、角色等）
+                    val coreVariables = remember {
+                        listOf(
+                            "char" to "{{char}}",
+                            "user" to "{{user}}",
+                            "persona" to "{{persona}}",
+                            "cur_date" to "{{cur_date}}",
+                            "time" to "{{time}}",
+                            "weekday" to "{{weekday}}",
+                            "idleDuration" to "{{idleDuration}}",
+                            "timeDiff" to "{{timeDiff::A::B}}",
+                            "model_name" to "{{model_name}}",
+                        )
+                    }
+
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        DefaultPlaceholderProvider.placeholders.forEach { (k, info) ->
+                        coreVariables.forEach { (key, syntax) ->
+                            val info = DefaultPlaceholderProvider.placeholders[key]
                             Tag(
                                 onClick = {
-                                    systemPromptValue.insertAtCursor("{{$k}}")
+                                    systemPromptValue.insertAtCursor(syntax)
                                 }
                             ) {
-                                info.displayName()
-                                Text(": {{$k}}")
+                                if (info != null) {
+                                    info.displayName()
+                                } else {
+                                    Text(key)
+                                }
+                                Text(": $syntax")
                             }
                         }
                     }
-                    // 宏引擎 2.0：直接读引擎目录（MacroEngine.macroCatalog），新增宏自动显示
-                    MacroEngine.macroCatalog.groupBy { it.group }.forEach { (groupName, macros) ->
+
+                    // 扩展宏与进阶变量分类展示（折叠展开，过滤重复别名）
+                    if (showMoreVariables) {
+                        // 进阶时间与环境
                         Text(
-                            text = groupName,
+                            text = "时间与环境进阶",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp),
                         )
+                        val timeAndEnvKeys = remember {
+                            listOf("isodate", "isotime", "timezone", "locale", "battery_level", "device_info")
+                        }
                         FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            macros.forEach { entry ->
-                                Tag(
-                                    onClick = {
-                                        systemPromptValue.insertAtCursor("{{${entry.syntax}}}")
+                            timeAndEnvKeys.forEach { key ->
+                                val info = DefaultPlaceholderProvider.placeholders[key]
+                                if (info != null) {
+                                    Tag(onClick = { systemPromptValue.insertAtCursor("{{$key}}") }) {
+                                        info.displayName()
+                                        Text(": {{$key}}")
                                     }
-                                ) {
-                                    Text(entry.description)
-                                    Text(": {{${entry.syntax}}}")
+                                }
+                            }
+                        }
+
+                        // 角色卡与上下文字段
+                        Text(
+                            text = "角色卡与上下文",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        val contextKeys = remember {
+                            listOf("description", "personality", "scenario", "firstMessage", "creatorNotes", "lastMessage", "lastUserMessage", "lastCharMessage", "input", "group")
+                        }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            contextKeys.forEach { key ->
+                                val info = DefaultPlaceholderProvider.placeholders[key]
+                                if (info != null) {
+                                    Tag(onClick = { systemPromptValue.insertAtCursor("{{$key}}") }) {
+                                        info.displayName()
+                                        Text(": {{$key}}")
+                                    }
+                                }
+                            }
+                        }
+
+                        // 宏引擎 2.0（逻辑控制、变量操作、掷骰、随机选一）
+                        MacroEngine.macroCatalog.groupBy { it.group }.forEach { (groupName, macros) ->
+                            Text(
+                                text = groupName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                macros.forEach { entry ->
+                                    Tag(
+                                        onClick = {
+                                            systemPromptValue.insertAtCursor("{{${entry.syntax}}}")
+                                        }
+                                    ) {
+                                        Text(entry.description)
+                                        Text(": {{${entry.syntax}}}")
+                                    }
                                 }
                             }
                         }

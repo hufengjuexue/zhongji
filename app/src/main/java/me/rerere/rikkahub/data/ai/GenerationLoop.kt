@@ -198,11 +198,7 @@ class GenerationLoop(
                 assistant.contextTemplate.trim() == me.rerere.rikkahub.data.model.DEFAULT_CONTEXT_TEMPLATE)
         val conversationOverride = assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()
 
-        // 收集插件系统提示词。
-        // 酒馆模式下同样注入：插件是用户主动安装的注入内容，属于用户明确要发送的东西，
-        // 与 App 自带的工作流（记忆/技能/工作空间）性质不同，必须保留，
-        // 否则酒馆模式一开、依赖插件注入的功能就会失效。
-        val tavernMode = settings.huadengSettings.enableTavernMode
+        // 收集插件系统提示词
         val pluginSystemPromptText = run {
             val pluginPrompts = pluginToolProvider.getPluginSystemPrompts()
             if (pluginPrompts.isEmpty()) "" else pluginPrompts.joinToString("\n\n")
@@ -225,60 +221,19 @@ class GenerationLoop(
             assistant.systemPrompt
         }
 
-        // 工具路由说明按实际注册的工具裁剪：纯聊天助手（角色卡/记忆场景，无任何工具）
-        // 不该背 ~230 tokens 的工具指引，还会被误导去调用不存在的 web_search/execute_python
-        val toolNames = tools.map { it.name }.toSet()
-        fun hasTool(vararg prefixes: String) = toolNames.any { name -> prefixes.any { name.startsWith(it) } }
-        val hasShell = hasTool("execute_command", "workspace_shell")
-        val hasPython = hasTool("execute_python")
-        val hasCalculator = hasTool("calculator")
-        val routingLines = buildList {
-            if (hasTool("workspace_read", "workspace_write")) add("Workspace files → workspace_read/write/edit (/workspace/...)")
-            if (hasTool("workspace_shell")) add("Workspace shell → workspace_shell (git, builds, Unix tools in sandbox)")
-            if (hasTool("file")) add("Device files → file action=\"read/write/patch/list/search/copy/move/delete\" (Download/skills dirs)")
-            if (hasTool("execute_command")) add("Device shell → execute_command (shell operations, process management, system tools)")
-            if (hasPython) add("Python → execute_python (data processing, API)")
-            if (hasCalculator) add("Math → calculator${if (hasPython) " (NOT execute_python)" else ""}")
-            if (hasTool("web_search", "search_", "scrape_")) add("Web → web_search / web_fetch")
-            if (hasTool("memory_tool", "memory_")) add("Memory → memory_tool")
-        }
-        val ethicLines = buildList {
-            add("❌ Do NOT describe what you will do — just do it")
-            add("❌ Do NOT stop after writing a stub — complete then report")
-            add("❌ Do NOT fabricate results — if a tool fails, say so")
-            if (hasShell) add("❌ Do NOT use shell when a dedicated tool exists")
-            if (hasPython && hasCalculator) add("❌ Do NOT use execute_python for math (use calculator)")
-            if (hasTool("ask_user")) add("✅ If you need user input, use ask_user directly")
-        }
-        val assemblerContext = me.rerere.rikkahub.data.ai.prompts.PromptContext(
-            identitySection = mainIdentity,
-            // 酒馆模式：工具路由与工作伦理区全部去掉，只留角色卡本身
-            leadInInstructions = if (tavernMode || routingLines.isEmpty()) "" else buildString {
-                appendLine("<tool_selection>")
-                routingLines.forEach { appendLine(it) }
-                appendLine("</tool_selection>")
-                appendLine()
-                appendLine("<work_ethic>")
-                ethicLines.forEach { appendLine(it) }
-                appendLine("</work_ethic>")
-                appendLine()
-            },
-            workspaceDescription = if (!tavernMode && hasTool("workspace_read", "workspace_write", "workspace_shell")) {
-                "Working directory: ${context.filesDir?.absolutePath ?: "."}"
-            } else "",
-            extraInstructions = pluginSystemPromptText,
-            // 提示词缓存：Recent Chats 每天变化且列表随其他会话活动移动，
-            // 放在系统提示（前缀最顶部）会打断全部缓存，已挪到上下文尾部（buildUserContext）
-            constraints = emptyList(),
-        )
-        val system = me.rerere.rikkahub.data.ai.prompts.SystemPromptAssembler.assemble(assemblerContext)
         val mainText = buildString {
-            append(system)
-            // 酒馆模式：工具的 systemPrompt 段全部不发，工具仍有 JSON schema 可用
-            if (!tavernMode) {
-                tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, messages))
+            if (mainIdentity.isNotBlank()) {
+                append(mainIdentity)
+            }
+            if (pluginSystemPromptText.isNotBlank()) {
+                if (isNotEmpty()) appendLine("\n")
+                append(pluginSystemPromptText)
+            }
+            tools.forEach { tool ->
+                val toolPrompt = tool.systemPrompt(model, messages)
+                if (toolPrompt.isNotBlank()) {
+                    if (isNotEmpty()) appendLine()
+                    append(toolPrompt)
                 }
             }
         }
@@ -296,22 +251,7 @@ class GenerationLoop(
     // ── 预构建：tools + systemPrompt（循环不变，移到外面）──
     val toolsInternal = buildList {
         Log.i(TAG, "generateInternal: build tools($assistant)")
-        // 酒馆模式：本层是全部生成路径的公共叠加点，必须兜底裁剪。
-        // 不保留工具时整组清空；保留时只留酒馆基础工具面（插件 + 文件/搜索/抓取/计算器），
-        // 记忆、技能、MCP、工作空间等 App 工作流工具一律不进请求。
         addAll(tools)
-        if (settings.huadengSettings.enableTavernMode) {
-            if (settings.huadengSettings.tavernModeKeepTools) {
-                retainAll { it.name.isTavernBaseTool() }
-            } else {
-                clear()
-            }
-        }
-        // 便于核对酒馆模式的实际工具面：把最终注册的工具名列出来。
-        // 排查「记忆工具为何还在」这类问题时，这一行直接给出答案。
-        if (settings.huadengSettings.enableTavernMode) {
-            Log.i(TAG, "tavern mode tools: ${if (isEmpty()) "(none)" else joinToString(", ") { it.name }}")
-        }
     }
     val statusTrackedTools = toolsInternal.map { tool ->
         if (tool.name == "ask_user") tool else tool.copy(
@@ -659,8 +599,6 @@ class GenerationLoop(
             messages
         }
         val limitedChat = requestMessages.limitContext(assistant.contextMessageLimit)
-        // 酒馆模式：请求中只保留原版酒馆的上下文构成（角色卡/世界书/示例消息/作者注释）
-        val tavernMode = settings.huadengSettings.enableTavernMode
         // 收集插件系统提示词（suspend 调用，需在 coroutine 上下文中）
         val pluginSystemPromptText = run {
             val pluginPrompts = pluginToolProvider.getPluginSystemPrompts()
@@ -669,74 +607,44 @@ class GenerationLoop(
         val internalMessages = buildList {
             // 延迟构建：prebuiltSystemMessages 几乎总是非空，fallback 每步白算一遍是纯浪费
             val fallbackSystem = { buildString {
-                // ── s10: 使用 SystemPromptAssembler 替代硬编码 ──
-                val assemblerContext = me.rerere.rikkahub.data.ai.prompts.PromptContext(
-                identitySection = buildString {
-                    val effectiveSystemPrompt =
-                        if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                            conversationSystemPrompt
-                        } else {
-                            val fallbackPersona = settings.personas
-                                .find { it.id == settings.activePersonaId }
-                                ?.takeIf { it.enabled && (it.lockedCharacterIds.isEmpty() || assistant.id in it.lockedCharacterIds) }
-                            val fallbackPersonaDesc = fallbackPersona?.description?.takeIf { it.isNotBlank() } ?: ""
-                            val fallbackPersonaForPrompt =
-                                if (fallbackPersona?.position == me.rerere.rikkahub.data.model.PersonaInjectionPosition.IN_PROMPT) {
-                                    fallbackPersonaDesc
-                                } else {
-                                    ""
-                                }
-                            if (assistant.tavernData != null) {
-                                assistant.assembleContext(
-                                    userName = settings.displaySetting.userNickname.ifBlank { "User" },
-                                    personaDesc = fallbackPersonaForPrompt,
-                                )
+                val effectiveSystemPrompt =
+                    if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                        conversationSystemPrompt
+                    } else {
+                        val fallbackPersona = settings.personas
+                            .find { it.id == settings.activePersonaId }
+                            ?.takeIf { it.enabled && (it.lockedCharacterIds.isEmpty() || assistant.id in it.lockedCharacterIds) }
+                        val fallbackPersonaDesc = fallbackPersona?.description?.takeIf { it.isNotBlank() } ?: ""
+                        val fallbackPersonaForPrompt =
+                            if (fallbackPersona?.position == me.rerere.rikkahub.data.model.PersonaInjectionPosition.IN_PROMPT) {
+                                fallbackPersonaDesc
                             } else {
-                                assistant.systemPrompt
+                                ""
                             }
+                        if (assistant.tavernData != null) {
+                            assistant.assembleContext(
+                                userName = settings.displaySetting.userNickname.ifBlank { "User" },
+                                personaDesc = fallbackPersonaForPrompt,
+                            )
+                        } else {
+                            assistant.systemPrompt
                         }
-                    append(effectiveSystemPrompt)
-                },
-                // 酒馆模式：工具路由与工作伦理区不发，与 buildCachedSystemPrompt
-                // 的 253 行保持一致。此前这里是硬编码的，无论什么模式都发，
-                // 一旦走到 fallback 路径，酒馆模式就会多背这 193 字符。
-                leadInInstructions = if (tavernMode) ""
-                else buildString {
-                    appendLine("Guidelines:")
-                    appendLine("- Prefer dedicated tools over shell commands for file operations")
-                    appendLine("- When a tool fails, try an alternative approach before giving up")
-                    appendLine("- If you need clarification, ask the user directly")
-                },
-                // 原先无条件写入工作目录。但那 89 字符对没有 workspace 工具的会话
-                // 毫无用处——模型拿不到任何能读写该路径的工具，路径只是白占上下文。
-                // 与 buildCachedSystemPrompt 的 239 行保持一致：只在确有 workspace
-                // 工具且非酒馆模式时才给。
-                workspaceDescription = if (!tavernMode && tools.any { t ->
-                        t.name.startsWith("workspace_")
                     }
-                ) {
-                    "Working directory: ${context.filesDir?.absolutePath ?: "."}"
-                } else "",
-                extraInstructions = pluginSystemPromptText,
-                // 提示词缓存：Recent Chats 已挪到上下文尾部（buildUserContext）
-                constraints = emptyList(),
-            )
-            val system = me.rerere.rikkahub.data.ai.prompts.SystemPromptAssembler.assemble(assemblerContext)
-
-            // ── 工具prompt（追加在 assembler 结果之后）──
-            append(system)
-            // 酒馆模式：工具的 systemPrompt 段全部不发（工具仍有 JSON schema 可用）。
-            // 必须与 buildCachedSystemPrompt 的同名处理保持一致——那处一直是带
-            // tavernMode 判断的，这里此前漏了，导致走 fallback 路径时酒馆模式
-            // 仍会把全部工具的系统提示词拼进 system，纯净请求不成立。
-            if (!tavernMode) {
-                tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, messages))
+                if (effectiveSystemPrompt.isNotBlank()) {
+                    append(effectiveSystemPrompt)
                 }
-            }
-            }
-            }
+                if (pluginSystemPromptText.isNotBlank()) {
+                    if (isNotEmpty()) appendLine("\n")
+                    append(pluginSystemPromptText)
+                }
+                tools.forEach { tool ->
+                    val toolPrompt = tool.systemPrompt(model, messages)
+                    if (toolPrompt.isNotBlank()) {
+                        if (isNotEmpty()) appendLine()
+                        append(toolPrompt)
+                    }
+                }
+            } }
             if (prebuiltSystemMessages.isNotEmpty()) {
                 addAll(prebuiltSystemMessages)
             } else if (fallbackSystem().isNotBlank()) {
@@ -744,20 +652,18 @@ class GenerationLoop(
             }
 
             // 记忆（上游语义）：按文件组织的记忆库内容注入 system
-            if (assistant.enableMemory && !tavernMode && !memories.isNullOrEmpty()) {
+            if (assistant.enableMemory && !memories.isNullOrEmpty()) {
                 add(
                     UIMessage.system(prompt = buildMemoryPrompt(memories)).copy(isSynthetic = true)
                 )
             }
 
             // ── 上下文滚动压缩摘要：作为 system 消息注入，替代被覆盖的早期前缀 ──
-            // 酒馆模式：摘要属于"工作流产物"，不发，避免干扰纯净上下文
-            if (!tavernMode && !rollingContextSummary.isNullOrBlank()) {
+            if (!rollingContextSummary.isNullOrBlank()) {
                 add(UIMessage.system(prompt = ROLLING_CONTEXT_SYSTEM_PROMPT + "\n" + rollingContextSummary + "\n</rolling_context_summary>"))
             }
 
             // ── 官方 mes_example：作为示例消息注入（story string 之后、聊天历史之前）──
-            // 酒馆模式：角色卡自带内容，保留（属于用户明确要发送的部分）
             if (assistant.tavernData != null) {
                 addAll(
                     assistant.buildExampleMessages(
@@ -766,20 +672,9 @@ class GenerationLoop(
                 )
             }
 
-            // ── 提示词缓存：动态上下文（记忆全量 + 日期 + Recent Chats）冻结锚点注入 ──
-            // 记忆/日期/Recent Chats 放前缀区会打断静态前缀；放尾部又会随历史追加而后移
-            // （位置移动 = token 流在它上次出现的位置分叉）。冻结策略见 UserContextAnchorCache：
-            // 内容不变时钉在首次出现的位置，历史纯追加；内容变化时旧块原位保留、新块追加尾部，
-            // token 前缀仍然可命中。临时会话（无 conversationId）退化为尾部注入。
+            // ── 提示词缓存：近期对话动态上下文注入 ──
             val recentChats = prebuiltRecentChats
-            // 酒馆模式：日期 / Recent Chats 一律不发（记忆已由 buildMemoryPrompt 消息承担）
-            val userContext = if (tavernMode) "" else buildUserContext(recentChats)
-            // 锚点缓存里可能残留上一个模式注入的块（记忆/日期/Recent Chats）。
-            // userContext 置空只是不再新增，旧块仍会被下面的循环按 afterMessageId 命中并注入，
-            // 表现为「关掉酒馆模式之外仍收到近期对话」。此处显式清空以保证语义一致。
-            if (tavernMode) {
-                conversationId?.let { UserContextAnchorCache.getOrCreate(it).blocks.clear() }
-            }
+            val userContext = buildUserContext(recentChats)
             // 华灯：上下文瞬态内容裁剪——两轮之前的网页搜索结果/图片/音视频不再随请求发送
             //（占位说明带消息 ID，AI 可用 read_history_message 取回），存储与 UI 不受影响
             val requestChat = if (settings.huadengSettings.enableTransientContentPrune) {
@@ -954,14 +849,7 @@ class GenerationLoop(
         PromptDebugCache.store(conversationId, escapedMessages)
 
         var messages: List<UIMessage> = messages
-        // 酒馆模式且不保留工具：模型级内置工具（搜索/URL 上下文等）同样不进请求
-        val requestModel = if (settings.huadengSettings.enableTavernMode &&
-            !settings.huadengSettings.tavernModeKeepTools
-        ) {
-            model.copy(tools = emptySet())
-        } else {
-            model
-        }
+        val requestModel = model
         val params = TextGenerationParams(
             model = requestModel,
             temperature = assistant.temperature,
@@ -1360,39 +1248,12 @@ private val personaDepthAnchors =
 private fun buildUserContext(
     recentChats: String = "",
 ): String {
-    val contextMap = linkedMapOf<String, String>()
-
-    // 对标 CC getUserContext: currentDate
-    // 提示词缓存：本函数整体注入上下文尾部（generateInternal 的 base buildList 末尾），
-    // 日期（每天变化）不进入前缀区；记忆已改由 buildMemoryPrompt 的 system 消息注入
-    contextMap["currentDate"] = "Current date: ${java.time.LocalDate.now()}."
-    if (recentChats.isNotBlank()) {
-        contextMap["recentChats"] = recentChats.trim()
+    if (recentChats.isBlank()) return ""
+    return buildString {
+        appendLine("<recent_chats_context>")
+        appendLine(recentChats.trim())
+        append("</recent_chats_context>")
     }
-
-    if (contextMap.isEmpty()) return ""
-
-    // Memoize: 当 contextMap 内容不变时复用
-    val key = contextMap.entries.joinToString("|") { "${it.key}=${it.value}" }
-    if (key == _lastUserContextKey && _lastUserContext != null) {
-        return _lastUserContext!!
-    }
-
-    val result = buildString {
-        appendLine("<system-reminder>")
-        appendLine("As you answer the user's questions, you can use the following context:")
-        contextMap.forEach { (key, value) ->
-            appendLine("# $key")
-            appendLine(value)
-        }
-        appendLine()
-        appendLine("Use this context only if it is relevant to the current task; do not respond to it directly.")
-        append("</system-reminder>")
-    }
-
-    _lastUserContextKey = key
-    _lastUserContext = result
-    return result
 }
 
 /**

@@ -196,16 +196,10 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         headlineContent = { Text(stringResource(R.string.setting_page_preferences_general)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.SettingHuaDeng) },
-                        leadingContent = { CardGroupIcon(HugeIcons.Settings03, containerColor = containerColor, contentColor = contentColor) },
-                        supportingContent = { Text(stringResource(R.string.setting_page_huadeng_desc)) },
-                        headlineContent = { Text(stringResource(R.string.setting_page_huadeng)) },
-                    )
-                    item(
-                        onClick = { navController.navigate(Screen.SettingTavern) },
-                        leadingContent = { CardGroupIcon(HugeIcons.BookOpen02, containerColor = containerColor, contentColor = contentColor) },
-                        supportingContent = { Text(stringResource(R.string.setting_page_tavern_desc)) },
-                        headlineContent = { Text(stringResource(R.string.setting_page_tavern)) },
+                        onClick = { navController.navigate(Screen.SettingProactiveMessage) },
+                        leadingContent = { CardGroupIcon(HugeIcons.Message02, containerColor = containerColor, contentColor = contentColor) },
+                        supportingContent = { Text(stringResource(R.string.setting_page_proactive_message_desc)) },
+                        headlineContent = { Text(stringResource(R.string.setting_page_proactive_message)) },
                     )
                 }
             }

@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
-import me.rerere.rikkahub.data.db.fts.SimpleDictManager
+import java.io.File
 import me.rerere.rikkahub.data.db.migrations.AppDatabaseMigrations
 
 /** Shared schema, migrations and extensions for the app and staged backup validation. */
@@ -21,20 +21,7 @@ internal object AppDatabaseFactory {
             .addMigrations(*AppDatabaseMigrations.HANDWRITTEN)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
-                    val dictDir = SimpleDictManager.extractDict(context)
-                    val cursor = db.query("SELECT jieba_dict(?)", arrayOf(dictDir.absolutePath))
-                    cursor.use {
-                        if (it.moveToFirst()) {
-                            val result = it.getString(0)
-                            val success = result?.trimEnd('/') == dictDir.absolutePath.trimEnd('/')
-                            if (!success) {
-                                android.util.Log.e(
-                                    "DataSourceModule",
-                                    "jieba_dict failed: $result, path=${dictDir.absolutePath}"
-                                )
-                            }
-                        }
-                    }
+                    File(context.filesDir, "simple_dict").takeIf { it.exists() }?.deleteRecursively()
                     db.execSQL(
                         """
                         CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(

@@ -175,25 +175,6 @@
       android:exported="false"
       android:foregroundServiceType="microphone" />
 
-    <!-- 微信 Bot (iLink 协议): 长轮询收微信消息, 转给关联助手处理, 回复发回微信 -->
-    <service
-      android:name=".service.WeixinBotService"
-      android:exported="false"
-      android:foregroundServiceType="specialUse">
-      <property
-        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-        android:value="weixin bot message polling" />
-    </service>
-
-    <!-- QQ Bot (开放平台 API v2): WebSocket 网关收 QQ 私聊消息, 转给当前助手处理, 回复发回 QQ -->
-    <service
-      android:name=".service.QqBotService"
-      android:exported="false"
-      android:foregroundServiceType="specialUse">
-      <property
-        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-        android:value="qq bot websocket message polling" />
-    </service>
 
     <!-- AI 主动发消息已改为 WorkManager 直接执行（见 ProactiveMessageWorker），
          不再需要前台服务。原来的 ProactiveMessageTriggerService 走

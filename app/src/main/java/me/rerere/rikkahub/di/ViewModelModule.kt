@@ -6,7 +6,6 @@ import me.rerere.rikkahub.ui.pages.backup.BackupVM
 import me.rerere.rikkahub.ui.pages.chat.ChatDrawerVM
 import me.rerere.rikkahub.ui.pages.chat.ChatVM
 import android.content.Context
-import me.rerere.rikkahub.ui.pages.couple.CoupleVM
 import me.rerere.rikkahub.ui.pages.debug.DebugVM
 import me.rerere.rikkahub.ui.pages.favorite.FavoriteVM
 import me.rerere.rikkahub.ui.pages.onboarding.OnboardingVM
@@ -44,7 +43,6 @@ val viewModelModule = module {
         )
     }
     viewModelOf(::ChatDrawerVM)
-    viewModel { CoupleVM(get(), get(), get<Context>()) }
     viewModelOf(::SettingVM)
     viewModel<DebugVM> { DebugVM(get(), get(), get()) }
     viewModelOf(::HistoryVM)

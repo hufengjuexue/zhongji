@@ -29,6 +29,9 @@ data class ProactiveMessageSetting(
     val conversationId: String = "",
     val allowForceJump: Boolean = false,
     val jumpIdleThresholdMinutes: Int = 120,
+    val quietHoursEnabled: Boolean = true,
+    val quietHoursStart: Int = 23,
+    val quietHoursEnd: Int = 8,
 ) {
     companion object {
         /** 间隔下限。0 或负数会让闹钟立刻连环触发，必须挡住。 */
@@ -52,6 +55,18 @@ data class ProactiveMessageSetting(
             minIntervalMinutes = minOf(lo, hi),
             maxIntervalMinutes = maxOf(lo, hi),
             jumpIdleThresholdMinutes = jumpIdleThresholdMinutes.coerceAtLeast(0),
+            quietHoursStart = quietHoursStart.coerceIn(0, 23),
+            quietHoursEnd = quietHoursEnd.coerceIn(0, 23),
         )
+    }
+
+    /** 是否处于免打扰时段 */
+    fun isInQuietHours(hour: Int = java.time.LocalTime.now().hour): Boolean {
+        if (!quietHoursEnabled) return false
+        return if (quietHoursStart <= quietHoursEnd) {
+            hour in quietHoursStart..quietHoursEnd
+        } else {
+            hour >= quietHoursStart || hour < quietHoursEnd
+        }
     }
 }

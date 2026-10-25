@@ -607,23 +607,6 @@ private fun ChatPageContent(
                     onUpdateTitle = {
                         vm.updateTitle(it)
                     },
-                    onVoiceCall = {
-                        val activeId = VoiceCallService.activeConversationId.value
-                        when {
-                            activeId == null || activeId == conversation.id.toString() -> {
-                                navController.navigate(Screen.VoiceCall(conversation.id.toString()))
-                            }
-                            else -> toaster.show(context.getString(R.string.chat_call_in_progress), type = ToastType.Warning)
-                        }
-                    },
-                    onVideoCall = {
-                        val activeId = VoiceCallService.activeConversationId.value
-                        if (activeId == null || activeId == conversation.id.toString()) {
-                            navController.navigate(Screen.VideoCall(conversation.id.toString()))
-                        } else {
-                            toaster.show(context.getString(R.string.chat_call_in_progress), type = ToastType.Warning)
-                        }
-                    },
                 )
             },
             bottomBar = {
@@ -1808,8 +1791,6 @@ private fun TopBar(
     onNewChat: () -> Unit,
     onClickMenu: () -> Unit,
     onUpdateTitle: (String) -> Unit,
-    onVoiceCall: () -> Unit = {},
-    onVideoCall: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
@@ -1884,17 +1865,6 @@ private fun TopBar(
             }
         },
         actions = {
-            // 语音 / 视频通话：仅在 TTS 与 ASR 均已配置时显示
-            val ttsReady = settings.getSelectedTTSProvider() != null
-            val asrReady = settings.getSelectedASRProvider() != null
-            if (ttsReady && asrReady) {
-                IconButton(onClick = onVideoCall) {
-                    Icon(HugeIcons.Video01, contentDescription = stringResource(R.string.chat_video_call))
-                }
-                IconButton(onClick = onVoiceCall) {
-                    Icon(HugeIcons.Telephone, contentDescription = stringResource(R.string.chat_voice_call))
-                }
-            }
             if (!settings.displaySetting.hideTopBarListButton) {
                 IconButton(onClick = onClickMenu) {
                     Icon(

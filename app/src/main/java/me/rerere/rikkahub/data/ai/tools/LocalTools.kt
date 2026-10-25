@@ -472,10 +472,7 @@ class LocalTools(
     // 上游 2.5.6：图表展示工具
     val chartDisplayTool by lazy { buildChartDisplayTool() }
 
-    // 通用文本差异对比（替换原先的二进制对比）
-    val diffTextTool by lazy { buildDiffTextTool(context) }
     val showImageTool by lazy { buildShowImageTool(context) }
-    val codeCheckTool by lazy { buildCodeCheckTool(context) }
 
     fun getTools(options: List<LocalToolOption>): List<Tool> {
         val tools = mutableListOf<Tool>()
@@ -512,14 +509,6 @@ class LocalTools(
         }
         if (options.contains(LocalToolOption.ShowImage)) {
             tools.add(showImageTool)
-        }
-
-        if (options.contains(LocalToolOption.CodeCheck)) {
-            tools.add(codeCheckTool)
-        }
-
-        if (options.contains(LocalToolOption.DiffText)) {
-            tools.add(diffTextTool)
         }
         return tools
     }

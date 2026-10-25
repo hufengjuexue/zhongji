@@ -33,6 +33,7 @@ import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
+import me.rerere.rikkahub.data.ai.prompts.buildMemoryPrompt
 import me.rerere.rikkahub.data.ai.transformers.DocumentAsPromptTransformer
 import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
 import me.rerere.rikkahub.data.ai.transformers.PlaceholderTransformer
@@ -206,6 +207,16 @@ class ProactiveMessageRunner(
                         appContext, ProactiveMessageLog.Outcome.SKIPPED, "主动消息",
                         "总开关处于关闭状态，本次触发直接结束。",
                     )
+                    return false
+                }
+
+                if (proactiveSetting.isInQuietHours()) {
+                    Log.d(TAG, "Within quiet hours (${proactiveSetting.quietHoursStart} - ${proactiveSetting.quietHoursEnd}), skipping proactive message")
+                    ProactiveMessageLog.log(
+                        appContext, ProactiveMessageLog.Outcome.SKIPPED, "免打扰时段",
+                        "当前处于免打扰时段 (${proactiveSetting.quietHoursStart} - ${proactiveSetting.quietHoursEnd})，本次主动消息跳过。",
+                    )
+                    ProactiveMessageService.scheduleNext(appContext, proactiveSetting)
                     return false
                 }
 
@@ -675,10 +686,7 @@ class ProactiveMessageRunner(
                 if (memories.isNotEmpty()) {
                     appendLine()
                     appendLine()
-                    appendLine("## 记忆")
-                    memories.forEach { memory ->
-                        appendLine("- ${memory.content}")
-                    }
+                    append(buildMemoryPrompt(memories))
                 }
             }
 

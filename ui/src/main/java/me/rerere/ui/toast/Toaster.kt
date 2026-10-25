@@ -171,7 +171,23 @@ private fun ToastContent(
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 5,
                 overflow = TextOverflow.Ellipsis,
+                modifier = if (item.action != null) Modifier.weight(1f, fill = false) else Modifier,
             )
+            if (item.action != null) {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        item.action.onClick()
+                        onDismiss()
+                    },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                ) {
+                    Text(
+                        text = item.action.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (colors.iconTint != Color.Unspecified) colors.iconTint else MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 }
