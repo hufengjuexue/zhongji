@@ -1,10 +1,5 @@
 package me.rerere.rikkahub.ui.components.message
 
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -60,7 +55,6 @@ import me.rerere.hugeicons.stroke.TextSelection
 import me.rerere.hugeicons.stroke.Translate
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.hugeicons.stroke.WebDesign01
-import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.ui.context.LocalSettings
@@ -79,7 +73,6 @@ fun ColumnScope.ChatMessageActionButtons(
     node: MessageNode,
     onUpdate: (MessageNode) -> Unit,
     onRegenerate: () -> Unit,
-    onImpersonate: (() -> Unit)? = null,
     onOpenActionSheet: () -> Unit,
     onTranslate: ((UIMessage, Locale) -> Unit)? = null,
     onClearTranslation: (UIMessage) -> Unit = {},
@@ -157,24 +150,6 @@ fun ColumnScope.ChatMessageActionButtons(
                         modifier = Modifier.size(ActionIconSize),
                     )
                 }
-            }
-
-            // 冒充按钮
-            if (onImpersonate != null) {
-                Icon(
-                    imageVector = HugeIcons.ArrowRight01,
-                    contentDescription = stringResource(R.string.impersonate),
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = LocalIndication.current,
-                            onClick = onImpersonate
-                        )
-                        .padding(8.dp)
-                        .size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
 
             // Translation button

@@ -1,14 +1,15 @@
 package me.rerere.rikkahub.data.db.migrations
 
-import androidx.room.migration.Migration
+import androidx.room.migration.AutoMigrationSpec
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-/**
- * 从版本28升级到29：WorkspaceEntity 新增 shell 兼容模式列（合并上游 2.5.1）
- * - shell_compatibility_mode: Boolean，Proot/Shell 兼容模式开关，默认关闭
- */
-val Migration_28_29 = object : Migration(28, 29) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        db.addColumnIfNotExists("workspaces", "shell_compatibility_mode", "INTEGER NOT NULL DEFAULT 0")
+/** 新增 memory_consolidation 表 */
+class Migration_28_29 : AutoMigrationSpec {
+    override fun onPostMigrate(db: SupportSQLiteDatabase) {
+        // 已有的对话视为整理过，否则升级后第一次整理会把整段历史都交给模型
+        db.execSQL(
+            "INSERT OR IGNORE INTO memory_consolidation (conversation_id, consolidated_at) " +
+                "SELECT id, update_at FROM ConversationEntity"
+        )
     }
 }

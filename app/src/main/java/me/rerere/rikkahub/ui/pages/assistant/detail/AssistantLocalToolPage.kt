@@ -8,24 +8,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.ui.toast.ToastType
@@ -34,27 +30,12 @@ import me.rerere.hugeicons.stroke.Calendar03
 import me.rerere.hugeicons.stroke.ChartLineData01
 import me.rerere.hugeicons.stroke.ClipboardPaste
 import me.rerere.hugeicons.stroke.Clock01
-import me.rerere.hugeicons.stroke.Database
-import me.rerere.hugeicons.stroke.Diff
-import me.rerere.hugeicons.stroke.Folder01
-import me.rerere.hugeicons.stroke.Gift
-import me.rerere.hugeicons.stroke.Heart
-import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.JavaScript
 import me.rerere.hugeicons.stroke.MessageQuestion
-import me.rerere.hugeicons.stroke.Python
 import me.rerere.hugeicons.stroke.SmartPhone01
-import me.rerere.hugeicons.stroke.Robot01
-import me.rerere.hugeicons.stroke.SourceCode
-import me.rerere.hugeicons.stroke.Task01
-import me.rerere.hugeicons.stroke.Share04
-import me.rerere.hugeicons.stroke.Terminal
-import me.rerere.hugeicons.stroke.Toolbox
 import me.rerere.hugeicons.stroke.VolumeHigh
-import me.rerere.hugeicons.stroke.Calculator
 import me.rerere.rikkahub.R
-import me.rerere.rikkahub.data.ai.tools.LocalToolOption
-import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.ai.tools.local.LocalToolOption
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
@@ -64,8 +45,8 @@ import me.rerere.rikkahub.ui.components.ui.permission.PermissionInfo
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
 import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import me.rerere.rikkahub.ui.components.ui.switchItem
-import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.hasUsageStatsPermission
 import me.rerere.rikkahub.utils.openUsageAccessSettings
 import org.koin.androidx.compose.koinViewModel
@@ -79,9 +60,7 @@ fun AssistantLocalToolPage(id: String) {
         }
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
-    val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -102,9 +81,7 @@ fun AssistantLocalToolPage(id: String) {
         AssistantLocalToolContent(
             innerPadding = innerPadding,
             assistant = assistant,
-            settings = settings,
-            scope = scope,
-            onUpdate = { vm.update(it) },
+            onUpdate = { vm.update(it) }
         )
     }
 }
@@ -113,9 +90,7 @@ fun AssistantLocalToolPage(id: String) {
 private fun AssistantLocalToolContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
-    settings: Settings,
-    scope: kotlinx.coroutines.CoroutineScope,
-    onUpdate: (Assistant) -> Unit,
+    onUpdate: (Assistant) -> Unit
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
@@ -196,104 +171,8 @@ private fun AssistantLocalToolContent(
             .padding(innerPadding)
             .padding(bottom = 16.dp)
             .imePadding(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        CardGroup {
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.local_tool_parallel_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.local_tool_parallel_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.enableParallelToolExecution,
-                        onCheckedChange = { onUpdate(assistant.copy(enableParallelToolExecution = it)) }
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.local_tool_recurring_limit_title)) },
-                supportingContent = { Text(stringResource(R.string.local_tool_recurring_limit_desc)) },
-                trailingContent = {
-                    OutlinedTextField(
-                        value = assistant.toolRecurringLimit.toString(),
-                        onValueChange = { v ->
-                            v.toIntOrNull()?.let { onUpdate(assistant.copy(toolRecurringLimit = it)) }
-                        },
-                        modifier = Modifier.width(70.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.local_tool_total_steps_limit_title)) },
-                supportingContent = { Text(stringResource(R.string.local_tool_total_steps_limit_desc)) },
-                trailingContent = {
-                    OutlinedTextField(
-                        value = assistant.totalStepsLimit.toString(),
-                        onValueChange = { v ->
-                            v.toIntOrNull()?.let { onUpdate(assistant.copy(totalStepsLimit = it)) }
-                        },
-                        modifier = Modifier.width(70.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.local_tool_exec_timeout_title)) },
-                supportingContent = { Text(stringResource(R.string.local_tool_exec_timeout_desc)) },
-                trailingContent = {
-                    OutlinedTextField(
-                        value = assistant.toolExecTimeout.toString(),
-                        onValueChange = { v ->
-                            v.toIntOrNull()?.let { onUpdate(assistant.copy(toolExecTimeout = it)) }
-                        },
-                        modifier = Modifier.width(70.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.local_tool_js_timeout_title)) },
-                supportingContent = { Text(stringResource(R.string.local_tool_js_timeout_desc)) },
-                trailingContent = {
-                    OutlinedTextField(
-                        value = assistant.jsTimeout.toString(),
-                        onValueChange = { v ->
-                            v.toIntOrNull()?.let { onUpdate(assistant.copy(jsTimeout = it)) }
-                        },
-                        modifier = Modifier.width(70.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.local_tool_shell_timeout_title)) },
-                supportingContent = { Text(stringResource(R.string.local_tool_shell_timeout_desc)) },
-                trailingContent = {
-                    OutlinedTextField(
-                        value = assistant.shellTimeout.toString(),
-                        onValueChange = { v ->
-                            v.toIntOrNull()?.let { onUpdate(assistant.copy(shellTimeout = it)) }
-                        },
-                        modifier = Modifier.width(70.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-            )
-        }
         CardGroup {
             toolItem(
                 option = LocalToolOption.JavascriptEngine,
@@ -326,30 +205,6 @@ private fun AssistantLocalToolContent(
                 description = R.string.assistant_page_local_tools_ask_user_desc,
             )
             toolItem(
-                option = LocalToolOption.PythonEngine,
-                icon = HugeIcons.Python,
-                title = R.string.local_tool_python_title,
-                description = R.string.local_tool_python_desc,
-            )
-            toolItem(
-                option = LocalToolOption.FileTools,
-                icon = HugeIcons.Folder01,
-                title = R.string.local_tool_file_title,
-                description = R.string.local_tool_file_desc,
-            )
-            toolItem(
-                option = LocalToolOption.ShellTools,
-                icon = HugeIcons.Terminal,
-                title = R.string.local_tool_shell_cmd_title,
-                description = R.string.local_tool_shell_cmd_desc,
-            )
-            toolItem(
-                option = LocalToolOption.DatabaseQuery,
-                icon = HugeIcons.Database,
-                title = R.string.local_tool_database_title,
-                description = R.string.local_tool_database_desc,
-            )
-            toolItem(
                 option = LocalToolOption.ScreenTime,
                 icon = HugeIcons.SmartPhone01,
                 title = R.string.assistant_page_local_tools_screen_time_title,
@@ -362,49 +217,10 @@ private fun AssistantLocalToolContent(
                 description = R.string.assistant_page_local_tools_calendar_desc,
             )
             toolItem(
-                option = LocalToolOption.DeviceToolbox,
-                icon = HugeIcons.Toolbox,
-                title = R.string.local_tool_device_toolbox_title,
-                description = R.string.local_tool_device_toolbox_desc,
-            )
-            // 上游 2.5.6：chart_display 本地工具
-            toolItem(
                 option = LocalToolOption.ChartDisplay,
                 icon = HugeIcons.ChartLineData01,
                 title = R.string.assistant_page_local_tools_chart_display_title,
                 description = R.string.assistant_page_local_tools_chart_display_desc,
-            )
-            // 分享文件
-            toolItem(
-                option = LocalToolOption.PresentFile,
-                icon = HugeIcons.Share04,
-                title = R.string.local_tool_present_file_title,
-                description = R.string.local_tool_present_file_desc,
-            )
-            // 任务清单
-            toolItem(
-                option = LocalToolOption.TaskTools,
-                icon = HugeIcons.Task01,
-                title = R.string.local_tool_task_title,
-                description = R.string.local_tool_task_desc,
-            )
-            // WorkerTools / TeammateTools / SendMessage 不在这里出开关：
-            // 这三个枚举没有任何地方消费它们去注册工具，开关拨了不会有
-            // 任何效果。给用户一个假的开关比不给更糟。
-            // 枚举本身保留，以免破坏已存配置的反序列化。
-            // 在聊天里显示本地图片
-            toolItem(
-                option = LocalToolOption.ShowImage,
-                icon = HugeIcons.Image02,
-                title = R.string.local_tool_show_image_title,
-                description = R.string.local_tool_show_image_desc,
-            )
-            // 子 agent：把子任务派给独立 agent 完成后取回结果
-            toolItem(
-                option = LocalToolOption.SubAgent,
-                icon = HugeIcons.Robot01,
-                title = R.string.huadeng_sub_agent,
-                description = R.string.huadeng_sub_agent_desc,
             )
         }
     }

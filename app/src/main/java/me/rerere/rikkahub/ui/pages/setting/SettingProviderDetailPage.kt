@@ -64,7 +64,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -90,7 +89,6 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
-import me.rerere.ai.provider.pluginOwner
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.supportsQuota
 import me.rerere.ai.registry.ModelRegistry
@@ -328,19 +326,17 @@ private fun SettingProviderConfigPage(
                 }
             )
 
-            // 账号类的额度查询写死在 Provider 里，没有这一项；插件带来的供应商也不露（地址与取值路径由插件声明）
-            (internalProvider as? ProviderSetting.ApiKey)
-                ?.takeIf { (it as? ProviderSetting.OpenAI)?.pluginOwner() == null }
-                ?.let { apiKeyProvider ->
-                    SettingProviderQuotaQuery(
-                        provider = apiKeyProvider,
-                        // 额度按已保存的配置查，没开就不留这一行
-                        supportingContent = if (provider.supportsQuota) {
-                            { ProviderQuotaText(providerSetting = provider) }
-                        } else null,
-                        onEdit = { internalProvider = apiKeyProvider.withQuotaQuery(it) }
-                    )
-                }
+            // 账号类的额度查询写死在 Provider 里，没有这一项
+            (internalProvider as? ProviderSetting.ApiKey)?.let { apiKeyProvider ->
+                SettingProviderQuotaQuery(
+                    provider = apiKeyProvider,
+                    // 额度按已保存的配置查，没开就不留这一行
+                    supportingContent = if (provider.supportsQuota) {
+                        { ProviderQuotaText(providerSetting = provider) }
+                    } else null,
+                    onEdit = { internalProvider = apiKeyProvider.withQuotaQuery(it) }
+                )
+            }
 
             // 硅基流动图标
             if (provider is ProviderSetting.OpenAI && provider.baseUrl.contains("siliconflow.cn")) {
@@ -459,21 +455,12 @@ private fun SettingProviderAdvancedPage(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        if (provider.pluginOwner() != null) {
-            // 插件带来的供应商：请求头由插件声明，不在这里展示
-            Text(
-                text = stringResource(R.string.setting_provider_plugin_managed),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            CustomHeaders(
-                headers = provider.customHeaders,
-                onUpdate = { headers ->
-                    onEdit(provider.copyProvider(customHeaders = headers))
-                }
-            )
-        }
+        CustomHeaders(
+            headers = provider.customHeaders,
+            onUpdate = { headers ->
+                onEdit(provider.copyProvider(customHeaders = headers))
+            }
+        )
     }
 }
 
@@ -496,12 +483,8 @@ private fun ModelList(
     }
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
-    val currentSetting by rememberUpdatedState(providerSetting)
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val models = currentSetting.models
-        if (from.index in models.indices && to.index in 0..models.size) {
-            onUpdateProvider(currentSetting.moveMove(from.index, to.index))
-        }
+        onUpdateProvider(providerSetting.moveMove(from.index, to.index))
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

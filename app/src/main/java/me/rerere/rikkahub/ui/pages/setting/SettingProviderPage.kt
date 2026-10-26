@@ -50,7 +50,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,7 +66,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.ui.toast.ToastType
 import kotlin.uuid.Uuid
 import me.rerere.ai.provider.ProviderSetting
-import me.rerere.ai.provider.pluginOwner
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowRight01
@@ -79,6 +77,7 @@ import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Sparkles
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.ui.components.ui.QRCodeScannerDialog
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.RECOMMENDED_PROVIDERS
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -108,15 +107,11 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     var searchQuery by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<ProviderSetting?>(null) }
     val lazyListState = rememberLazyListState()
-    val currentProviders by rememberUpdatedState(settings.providers)
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val providers = currentProviders
-        if (from.index in providers.indices && to.index in 0..providers.size) {
-            val newProviders = providers.toMutableList().apply {
-                add(to.index, removeAt(from.index))
-            }
-            vm.updateSettings { it.copy(providers = newProviders) }
+        val newProviders = settings.providers.toMutableList().apply {
+            add(to.index, removeAt(from.index))
         }
+        vm.updateSettings { it.copy(providers = newProviders) }
     }
 
     val filteredProviders = remember(settings.providers, searchQuery) {
@@ -366,6 +361,21 @@ private fun ImportProviderButton(
     val toaster = LocalToaster.current
     val context = LocalContext.current
     var showImportDialog by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
+
+    if (showScanner) {
+        QRCodeScannerDialog(
+            onResult = { content ->
+                showScanner = false
+                handleScannedQRCode(content, onAdd, toaster, context)
+            },
+            onPermissionDenied = {
+                showScanner = false
+                toaster.show(context.getString(R.string.setting_provider_page_no_permission), type = ToastType.Error)
+            },
+            onDismissRequest = { showScanner = false },
+        )
+    }
 
     val pickImageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -410,11 +420,7 @@ private fun ImportProviderButton(
                         Button(
                             onClick = {
                                 showImportDialog = false
-                                pickImageLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageOnly
-                                    )
-                                )
+                                showScanner = true
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -486,6 +492,27 @@ private fun ImportProviderButton(
                     )
                 }
             }
+        )
+    }
+}
+
+private fun handleScannedQRCode(
+    content: String,
+    onAdd: (ProviderSetting) -> Unit,
+    toaster: me.rerere.ui.toast.ToasterState,
+    context: android.content.Context
+) {
+    runCatching {
+        val setting = decodeProviderSetting(content)
+        onAdd(setting)
+        toaster.show(
+            context.getString(R.string.setting_provider_page_import_success),
+            type = ToastType.Success
+        )
+    }.onFailure { error ->
+        toaster.show(
+            context.getString(R.string.setting_provider_page_qr_decode_failed, error.message ?: ""),
+            type = ToastType.Error
         )
     }
 }
@@ -670,13 +697,7 @@ private fun ProviderItem(
                     }
                     if (provider.name == "AiHubMix") {
                         Tag(type = TagType.INFO) {
-                            Text(stringResource(R.string.setting_provider_page_discount_tag))
-                        }
-                    }
-                    // 插件带来的供应商：跟着插件走，卸载插件就消失
-                    provider.pluginOwner()?.let {
-                        Tag(type = TagType.INFO) {
-                            Text(stringResource(R.string.setting_provider_plugin_tag))
+                            Text("10% 优惠")
                         }
                     }
                 }
@@ -687,7 +708,7 @@ private fun ProviderItem(
                         text = stringResource(R.string.delete),
                         icon = HugeIcons.Delete01,
                         destructive = true,
-                        enabled = !provider.builtIn && provider.pluginOwner() == null,
+                        enabled = !provider.builtIn,
                         onClick = onDelete,
                     ),
                 )

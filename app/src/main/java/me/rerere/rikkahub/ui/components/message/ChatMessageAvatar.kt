@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.components.message
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
@@ -20,7 +19,6 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
-import me.rerere.rikkahub.ui.components.ui.ThemedAvatarFrame
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.context.LocalSettings
 
@@ -33,60 +31,23 @@ fun ChatMessageUserAvatar(
 ) {
     val settings = LocalSettings.current
     if (message.role == MessageRole.USER && !message.parts.isEmptyUIMessage() && settings.displaySetting.showUserAvatar) {
-        // /send name= 插入的用户消息优先显示消息自带名字（官方 /send 的 name 参数）
-        val displayName = message.name?.takeIf { it.isNotBlank() }
-            ?: nickname.ifEmpty { stringResource(R.string.user_default_name) }
         Row(
             modifier = modifier,
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = displayName,
+                text = nickname.ifEmpty { stringResource(R.string.user_default_name) },
                 style = MaterialTheme.typography.labelLargeEmphasized,
                 maxLines = 1,
             )
-            FramedAvatar(
-                frameUrl = settings.displaySetting.themeIcons.avatarFrame(forUser = true),
-                frameScale = settings.displaySetting.themeIcons.avatarFrameScale,
-            ) {
-                UIAvatar(
-                    name = displayName,
-                    modifier = Modifier.size(AVATAR_BASE_SIZE),
-                    value = avatar,
-                    loading = false,
-                )
-            }
+            UIAvatar(
+                name = nickname,
+                modifier = Modifier.size(28.dp),
+                value = avatar,
+                loading = false,
+            )
         }
-    }
-}
-
-/** 头像基准尺寸；主题头像框按此尺寸等比放大叠加 */
-private val AVATAR_BASE_SIZE = 28.dp
-
-/**
- * 头像 + 主题头像框。
- *
- * 官方主题用 `.avatar::before` 叠一圈装饰图，尺寸常比头像大（112px 框套 50px 头像），
- * 所以这里不替换头像，而是在外层 Box 里把框放大居中画在上面。
- */
-@Composable
-private fun FramedAvatar(
-    frameUrl: String?,
-    frameScale: Float?,
-    content: @Composable () -> Unit,
-) {
-    if (frameUrl.isNullOrBlank()) {
-        content()
-        return
-    }
-    Box(contentAlignment = Alignment.Center) {
-        content()
-        ThemedAvatarFrame(
-            frameUrl = frameUrl,
-            avatarSize = AVATAR_BASE_SIZE,
-            scale = frameScale,
-        )
     }
 }
 
@@ -101,27 +62,20 @@ fun ChatMessageAssistantAvatar(
     val settings = LocalSettings.current
     val showIcon = settings.displaySetting.showModelIcon
     val useAssistantAvatar = assistant?.useAssistantAvatar == true
-    if (message.role == MessageRole.ASSISTANT && (model != null || useAssistantAvatar || !message.name.isNullOrBlank())) {
+    if (message.role == MessageRole.ASSISTANT && (model != null || useAssistantAvatar)) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
             modifier = modifier
         ) {
-            val displayName = message.name?.takeIf { it.isNotBlank() }
-                ?: (assistant?.name ?: "").ifEmpty { stringResource(R.string.assistant_page_default_assistant) }
             if (useAssistantAvatar) {
                 if (showIcon) {
-                    FramedAvatar(
-                        frameUrl = settings.displaySetting.themeIcons.avatarFrame(forUser = false),
-                        frameScale = settings.displaySetting.themeIcons.avatarFrameScale,
-                    ) {
-                        UIAvatar(
-                            name = displayName,
-                            modifier = Modifier.size(AVATAR_BASE_SIZE),
-                            value = assistant.avatar,
-                            loading = loading,
-                        )
-                    }
+                    UIAvatar(
+                        name = assistant.name,
+                        modifier = Modifier.size(28.dp),
+                        value = assistant.avatar,
+                        loading = loading,
+                    )
                 }
                 Row(
                     modifier = Modifier.weight(1f),
@@ -130,7 +84,7 @@ fun ChatMessageAssistantAvatar(
                 ) {
                     if (settings.displaySetting.showModelName) {
                         Text(
-                            text = displayName,
+                            text = assistant.name.ifEmpty { stringResource(R.string.assistant_page_default_assistant) },
                             style = MaterialTheme.typography.labelLargeEmphasized,
                             maxLines = 1,
                         )
@@ -138,16 +92,11 @@ fun ChatMessageAssistantAvatar(
                 }
             } else if (model != null) {
                 if (showIcon) {
-                    FramedAvatar(
-                        frameUrl = settings.displaySetting.themeIcons.avatarFrame(forUser = false),
-                        frameScale = settings.displaySetting.themeIcons.avatarFrameScale,
-                    ) {
-                        AutoAIIcon(
-                            name = model.modelId,
-                            modifier = Modifier.size(AVATAR_BASE_SIZE),
-                            loading = loading
-                        )
-                    }
+                    AutoAIIcon(
+                        name = model.modelId,
+                        modifier = Modifier.size(28.dp),
+                        loading = loading
+                    )
                 }
                 Row(
                     modifier = Modifier.weight(1f),
@@ -156,21 +105,12 @@ fun ChatMessageAssistantAvatar(
                 ) {
                     if (settings.displaySetting.showModelName) {
                         Text(
-                            text = message.name?.takeIf { it.isNotBlank() } ?: model.displayName,
+                            text = model.displayName,
                             style = MaterialTheme.typography.labelLargeEmphasized,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                }
-            } else if (!message.name.isNullOrBlank()) {
-                // /sendas name= 插入的消息：无模型/头像时也显示角色名
-                if (settings.displaySetting.showModelName) {
-                    Text(
-                        text = message.name ?: "",
-                        style = MaterialTheme.typography.labelLargeEmphasized,
-                        maxLines = 1,
-                    )
                 }
             }
         }

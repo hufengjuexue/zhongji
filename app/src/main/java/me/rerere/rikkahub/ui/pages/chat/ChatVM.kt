@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,11 +24,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
+import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -39,15 +40,14 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.NodeFavoriteTarget
 import me.rerere.rikkahub.data.model.getAssistantOf
 import me.rerere.rikkahub.data.model.getChatModelOf
-import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FavoriteRepository
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.ChatService
-import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.utils.UiState
 import me.rerere.rikkahub.utils.UpdateChecker
+import me.rerere.rikkahub.web.ApiException
 import java.util.Locale
 import kotlin.uuid.Uuid
 
@@ -57,10 +57,9 @@ class ChatVM(
     id: String,
     private val context: Application,
     private val settingsStore: SettingsStore,
-    private val conversationRepo: ConversationRepository,
     private val chatService: ChatService,
     val updateChecker: UpdateChecker,
-    private val analytics: FirebaseAnalytics?, // Firebase 遥测默认关闭（移植自 Rikkahub-Revised）: 未启用时为 null
+    private val analytics: FirebaseAnalytics,
     private val filesManager: FilesManager,
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
@@ -169,13 +168,6 @@ class ChatVM(
         }
     }
 
-    /** 同步更新设置并等待完成 — 供切换助手等场景使用 */
-    suspend fun updateSettingsAndWait(newSettings: Settings) {
-        val oldSettings = settings.value
-        checkUserAvatarDelete(oldSettings, newSettings)
-        settingsStore.update(newSettings)
-    }
-
     // 检查用户头像删除
     private fun checkUserAvatarDelete(oldSettings: Settings, newSettings: Settings) {
         val oldAvatar = oldSettings.displaySetting.userAvatar
@@ -193,10 +185,9 @@ class ChatVM(
         }
     }
 
-    fun updateWorkspaceCwd(workspaceCwd: String?) {
-        viewModelScope.launch {
-            chatService.updateWorkspaceCwd(_conversationId, workspaceCwd)
-        }
+    // 新会话开始前归入抽屉里选中的文件夹
+    suspend fun updateDraftFolder(folderId: Uuid?) {
+        chatService.updateDraftConversationFolder(_conversationId, folderId)
     }
 
     // 设置聊天模型
@@ -213,10 +204,11 @@ class ChatVM(
         }
     }
 
-    // 更新检查。暂停期内（设置里选的 7/14/21 天）不再发起请求。
+    // Update checker
     val updateState = settingsStore.settingsFlow
         .map { settings ->
-            !settings.init &&
+            !BuildConfig.IS_PLAY_STORE &&
+                !settings.init &&
                 settings.displaySetting.updateCheckDisabledUntilEpochMillis <= System.currentTimeMillis()
         }
         .distinctUntilChanged()
@@ -237,73 +229,23 @@ class ChatVM(
      */
     fun handleMessageSend(content: List<UIMessagePart>,answer: Boolean = true) {
         if (content.isEmptyInputMessage()) return
-        analytics?.logEvent("ai_send_message", null)
+        analytics.logEvent("ai_send_message", null)
 
         chatService.sendMessage(_conversationId, content, answer)
     }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
-        analytics?.logEvent("ai_edit_message", null)
+        analytics.logEvent("ai_edit_message", null)
 
         viewModelScope.launch {
             chatService.editMessage(_conversationId, messageId, parts)
         }
     }
 
-    /**
-     * MVU 变量按楼层写回：状态栏是逐楼快照，变量必须挂在消息上，
-     * 卡片被回收重组后才能恢复当轮状态。
-     */
-    fun updateMessageMvu(messageId: String, dataJson: String) {
-        val id = runCatching { Uuid.parse(messageId) }.getOrNull() ?: return
-        chatService.updateConversationState(_conversationId) { conv ->
-            conv.copy(
-                messageNodes = conv.messageNodes.map { node ->
-                    if (node.messages.none { it.id == id }) node
-                    else node.copy(messages = node.messages.map { m ->
-                        if (m.id == id) m.copy(mvuData = dataJson) else m
-                    })
-                },
-            )
-        }
-    }
-
-    /**
-     * 插入指定角色消息（/sys、/sendas，不触发生成）
-     */
-    fun handleInsertMessage(role: MessageRole, text: String, name: String? = null, at: Int? = null) {
-        if (text.isBlank()) return
-        chatService.insertMessage(_conversationId, role, listOf(UIMessagePart.Text(text)), name, at)
-    }
-
-    /**
-     * 触发一次 AI 回复（/trigger，不添加新消息）
-     */
-    fun handleTriggerGeneration() {
-        chatService.triggerGeneration(_conversationId)
-    }
-
-    /**
-     * 生成系统旁白并插入聊天（/sysgen）
-     */
-    fun handleGenerateSystemNarration(prompt: String, name: String? = null, at: Int? = null, trim: Boolean = false) {
-        if (prompt.isBlank()) return
-        chatService.generateSystemNarration(_conversationId, prompt, name, at, trim)
-    }
-
-    /**
-     * 压缩上下文
-     */
-    fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
+    fun handleCompressContext(additionalPrompt: String, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
-            chatService.compressConversation(
-                _conversationId,
-                conversation.value,
-                additionalPrompt,
-                targetTokens,
-                keepRecentMessages
-            ).onFailure {
+            chatService.compressConversation(_conversationId, additionalPrompt, keepRecentMessages).onFailure {
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
             }
         }
@@ -311,18 +253,6 @@ class ChatVM(
 
     suspend fun forkMessage(message: UIMessage): Conversation {
         return chatService.forkConversationAtMessage(_conversationId, message.id)
-    }
-
-    // 新会话发出第一条消息前跟随抽屉里选中的文件夹
-    suspend fun updateDraftFolder(folderId: Uuid?) {
-        chatService.updateDraftConversationFolder(_conversationId, folderId)
-    }
-
-    // 切换备选回复（swipe）
-    fun selectMessageNode(nodeId: Uuid, selectIndex: Int) {
-        viewModelScope.launch {
-            runCatching { chatService.selectMessageNode(_conversationId, nodeId, selectIndex) }
-        }
     }
 
     fun deleteMessage(message: UIMessage) {
@@ -333,18 +263,15 @@ class ChatVM(
 
     fun showDeleteBlockedWhileGeneratingError() {
         chatService.addError(
-            error = IllegalStateException(context.getString(R.string.chat_delete_while_generating)),
+            error = IllegalStateException("请先停止生成再删除消息"),
             conversationId = _conversationId,
             title = context.getString(R.string.error_title_operation)
         )
     }
 
-    fun regenerateAtMessage(
-        message: UIMessage,
-        regenerateAssistantMsg: Boolean = true
-    ) {
-        analytics?.logEvent("ai_regenerate_at_message", null)
-        chatService.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
+    fun regenerateAtMessage(message: UIMessage) {
+        analytics.logEvent("ai_regenerate_at_message", null)
+        chatService.regenerateAtMessage(_conversationId, message.id)
     }
 
     fun handleToolApproval(
@@ -352,7 +279,7 @@ class ChatVM(
         approved: Boolean,
         reason: String = ""
     ) {
-        analytics?.logEvent("ai_tool_approval", null)
+        analytics.logEvent("ai_tool_approval", null)
         chatService.handleToolApproval(_conversationId, toolCallId, approved, reason)
     }
 
@@ -360,7 +287,7 @@ class ChatVM(
         toolCallId: String,
         answer: String,
     ) {
-        analytics?.logEvent("ai_tool_answer", null)
+        analytics.logEvent("ai_tool_answer", null)
         chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
     }
 
@@ -369,42 +296,21 @@ class ChatVM(
             chatService.stopGeneration(_conversationId)
         }
     }
-    /** 官方 /continue：续写最后一条助手回复 */
-    fun continueGeneration(prompt: String) {
-        chatService.continueGeneration(_conversationId, prompt.ifBlank { null })
-    }
-
-    /** 官方 /impersonate：生成你的发言草稿，填入输入框待发送 */
-    fun impersonateDraft(prefill: String = "", onDraft: (String) -> Unit) {
-        chatService.impersonateDraft(_conversationId, prefill.ifBlank { null }, onDraft)
-    }
-
-    /** 官方 /gen：安静生成，结果填入输入框待确认 */
-    fun quietGenerate(args: ChatService.GenArgs, onDraft: (String) -> Unit) {
-        chatService.quietGenerate(_conversationId, args, onDraft)
-    }
-
-    fun saveConversationAsync() {
-        viewModelScope.launch {
-            chatService.saveConversation(_conversationId, conversation.value)
-        }
-    }
 
     fun updateTitle(title: String) {
         viewModelScope.launch {
-            val updatedConversation = conversation.value.copy(title = title)
-            chatService.saveConversation(_conversationId, updatedConversation)
+            chatService.updateTitle(_conversationId, title)
         }
     }
 
     fun deleteConversation(conversation: Conversation): Job =
         viewModelScope.launch {
-            conversationRepo.deleteConversation(conversation)
+            chatService.deleteConversation(conversation.id)
         }
 
     fun updatePinnedStatus(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.togglePinStatus(conversation.id)
+            chatService.toggleConversationPinned(conversation.id)
         }
     }
 
@@ -423,24 +329,36 @@ class ChatVM(
 
     fun generateTitle(conversation: Conversation, force: Boolean = false) {
         viewModelScope.launch {
-            val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            chatService.generateTitle(_conversationId, conversationFull, force)
-        }
-    }
-
-    fun generateSuggestion(conversation: Conversation) {
-        viewModelScope.launch {
-            chatService.generateSuggestion(_conversationId, conversation)
+            chatService.generateTitle(conversation.id, force)
         }
     }
 
     fun clearTranslationField(messageId: Uuid) {
-        chatService.clearTranslationField(_conversationId, messageId)
+        viewModelScope.launch {
+            chatService.clearTranslationField(_conversationId, messageId)
+        }
     }
 
-    fun updateConversation(newConversation: Conversation) {
-        chatService.updateConversationState(_conversationId) {
-            newConversation
+    fun selectMessageNode(nodeId: Uuid, selectIndex: Int) {
+        viewModelScope.launch {
+            try {
+                chatService.selectMessageNode(_conversationId, nodeId, selectIndex)
+            } catch (e: ApiException) {
+                // 界面上的分支已经过时（比如刚被清理掉），切换不了就算了
+                Log.w(TAG, "selectMessageNode: ${e.message}")
+            }
+        }
+    }
+
+    fun updateConversationSystemPrompt(systemPrompt: String?) {
+        viewModelScope.launch {
+            chatService.updateConversationSystemPrompt(_conversationId, systemPrompt)
+        }
+    }
+
+    fun updateWorkspaceCwd(workspaceCwd: String?) {
+        viewModelScope.launch {
+            chatService.updateWorkspaceCwd(_conversationId, workspaceCwd)
         }
     }
 
@@ -460,17 +378,7 @@ class ChatVM(
                 )
             }
 
-            chatService.updateConversationState(_conversationId) { currentConversation ->
-                currentConversation.copy(
-                    messageNodes = currentConversation.messageNodes.map { existingNode ->
-                        if (existingNode.id == node.id) {
-                            existingNode.copy(isFavorite = !currentlyFavorited)
-                        } else {
-                            existingNode
-                        }
-                    }
-                )
-            }
+            chatService.setNodeFavorite(_conversationId, node.id, favorite = !currentlyFavorited)
         }
     }
 

@@ -18,19 +18,6 @@ val buildWebUi = tasks.register<Exec>("buildWebUi") {
         else -> commandLine("pnpm", "run", "build")
     }
 
-    // 本地开发容错：未安装 pnpm 且无预构建产物时跳过，避免阻塞编译（CI 安装 pnpm 照常构建）。
-    onlyIf {
-        val hasPnpm = try {
-            ProcessBuilder("pnpm", "--version").start().run { waitFor(); waitFor() == 0 }
-        } catch (_: Exception) { false }
-        val hasOutput = webStaticResourcesDir.asFile.run { exists() && !listFiles().isNullOrEmpty() }
-        if (!hasPnpm && !hasOutput) {
-            logger.warn("⚠️ pnpm 未安装且无预构建 web UI 产物，跳过 :web:buildWebUi（CI 会构建）。" +
-                "本地如需 web 界面：npm i -g pnpm && cd web-ui && pnpm install && pnpm run build")
-        }
-        hasPnpm || hasOutput
-    }
-
     inputs.files(
         webUiDir.file("package.json"),
         webUiDir.file("pnpm-lock.yaml"),
@@ -60,8 +47,6 @@ tasks.named("preBuild") {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
 
     // ktor server
     implementation(libs.ktor.server.default.headers)
@@ -69,7 +54,6 @@ dependencies {
     implementation(libs.ktor.server.compression)
     implementation(libs.ktor.server.cors)
     api(libs.ktor.server.auth)
-    api(libs.ktor.server.auth.jwt)
     api(libs.ktor.server.core)
     implementation(libs.ktor.server.host.common)
     api(libs.ktor.server.content.negotiation)

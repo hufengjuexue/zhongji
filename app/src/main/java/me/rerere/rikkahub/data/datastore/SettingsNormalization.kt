@@ -71,11 +71,7 @@ internal fun Settings.withoutInvalidReferences(): Settings {
                 // 过滤掉不存在的快捷消息 ID
                 quickMessageIds = assistant.quickMessageIds.filter { id ->
                     id in validQuickMessageIds
-                }.toSet(),
-                // 上下文滚动压缩入口已移除，无法再手动关闭，对所有助手统一停用
-                enableRollingContextCompression = false,
-                // 跨窗口近期记忆（允许助手读取近期生活流）入口已移除，统一停用
-                enableCrossWindowMemory = false,
+                }.toSet()
             )
         },
         ttsProviders = settings.ttsProviders.distinctBy { it.id },
@@ -94,6 +90,4 @@ internal fun Settings.withoutInvalidReferences(): Settings {
 private fun Settings.withValuesInRange(): Settings = copy(
     searchServiceSelected = searchServiceSelected.coerceIn(0, (searchServices.size - 1).coerceAtLeast(0)),
     defaultTTSPlaybackSpeed = defaultTTSPlaybackSpeed.coerceIn(0.5f, 2.0f),
-    // 官方 world_info_budget 是百分比，盘上的旧值可能越界
-    worldInfoBudget = worldInfoBudget.coerceIn(0, 100),
 )

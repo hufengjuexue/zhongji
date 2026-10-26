@@ -58,6 +58,7 @@ import me.rerere.hugeicons.stroke.Image02
 import me.rerere.mediagen.model.MediaKind
 import me.rerere.mediagen.provider.MediaGenerationProviderSetting
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.remote.RemoteFileStore
 import me.rerere.rikkahub.ui.components.ai.ExtensionEmptyState
@@ -73,9 +74,8 @@ import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
 import me.rerere.rikkahub.ui.components.ui.longPressReorder
 import me.rerere.rikkahub.ui.components.ui.s3ConnectionItems
+import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
-import me.rerere.rikkahub.ui.pages.setting.components.MediaGenerationProviderConfigure
-import me.rerere.rikkahub.ui.pages.setting.components.ProviderEditSheet
 import me.rerere.rikkahub.ui.pages.setting.components.ProviderTypeSheet
 import me.rerere.rikkahub.ui.pages.setting.components.label
 import me.rerere.rikkahub.ui.pages.setting.components.typeName
@@ -86,8 +86,22 @@ import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
+private enum class MediaTab(
+    override val icon: ImageVector,
+    @param:StringRes private val labelRes: Int,
+) : PagerTab {
+    PROVIDERS(HugeIcons.Image02, R.string.setting_media_page_providers),
+    STORAGE(HugeIcons.Database02, R.string.setting_media_page_asset_storage);
+
+    override val label: String
+        @Composable get() = stringResource(labelRes)
+}
+
 @Composable
 fun SettingMediaPage(vm: SettingVM = koinViewModel()) {
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val navController = LocalNavController.current
+    val pagerState = rememberPagerState { MediaTab.entries.size }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -100,11 +114,15 @@ fun SettingMediaPage(vm: SettingVM = koinViewModel()) {
                     BackButton()
                 },
                 actions = {
-                    AddMediaProviderButton {
-                        vm.updateSettings { latest ->
-                            latest.copy(
-                                mediaGenerationProviders = listOf(it) + latest.mediaGenerationProviders
-                            )
+                    if (MediaTab.entries[pagerState.targetPage] == MediaTab.PROVIDERS) {
+                        AddMediaProviderButton { provider ->
+                            // 先加进列表，具体配置到详情页里填
+                            vm.updateSettings { latest ->
+                                latest.copy(
+                                    mediaGenerationProviders = listOf(provider) + latest.mediaGenerationProviders
+                                )
+                            }
+                            navController.navigate(Screen.SettingMediaProviderDetail(providerId = provider.id.toString()))
                         }
                     }
                 },
@@ -115,59 +133,41 @@ fun SettingMediaPage(vm: SettingVM = koinViewModel()) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
-        MediaServicesContent(vm = vm, contentPadding = innerPadding)
-    }
-}
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+        ) {
+            PagerTabs(
+                pagerState = pagerState,
+                tabs = MediaTab.entries,
+                modifier = Modifier.padding(bottom = 4.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+            )
 
-@Composable
-internal fun MediaServicesContent(vm: SettingVM, contentPadding: PaddingValues) {
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    var editingProvider by remember { mutableStateOf<MediaGenerationProviderSetting?>(null) }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) { page ->
+                when (MediaTab.entries[page]) {
+                    MediaTab.PROVIDERS -> MediaProviderList(
+                        settings = settings,
+                        onUpdateSettings = vm::updateSettings,
+                        onEdit = {
+                            navController.navigate(Screen.SettingMediaProviderDetail(providerId = it.id.toString()))
+                        },
+                    )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-    ) {
-        Text(
-            text = stringResource(R.string.setting_media_page_providers),
-            style = MaterialTheme.typography.titleSmallEmphasized,
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 4.dp),
-        )
-        MediaProviderList(
-            settings = settings,
-            onUpdateSettings = vm::updateSettings,
-            onEdit = { editingProvider = it },
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = stringResource(R.string.setting_media_page_asset_storage),
-            style = MaterialTheme.typography.titleSmallEmphasized,
-            modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
-        )
-        MediaUploadS3Tab(
-            settings = settings,
-            onUpdateSettings = vm::updateSettings,
-            modifier = Modifier.weight(1f),
-        )
-    }
-
-    editingProvider?.let { provider ->
-        MediaProviderSheet(
-            title = stringResource(R.string.setting_media_page_edit_provider),
-            initial = provider,
-            confirmText = stringResource(R.string.chat_page_save),
-            onConfirm = { edited ->
-                vm.updateSettings { latest ->
-                    latest.copy(
-                        mediaGenerationProviders = latest.mediaGenerationProviders.map {
-                            if (it.id == provider.id) edited else it
-                        }
+                    MediaTab.STORAGE -> MediaUploadS3Tab(
+                        settings = settings,
+                        onUpdateSettings = vm::updateSettings,
                     )
                 }
-            },
-            onDismiss = { editingProvider = null }
-        )
+            }
+        }
     }
 }
 
@@ -310,11 +310,10 @@ private fun MediaProviderItem(
     }
 }
 
-// 新建时先选类型，再进配置面板
+// 新建时先选类型，再进详情页
 @Composable
-internal fun AddMediaProviderButton(onAdd: (MediaGenerationProviderSetting) -> Unit) {
+private fun AddMediaProviderButton(onAdd: (MediaGenerationProviderSetting) -> Unit) {
     var showTypeSheet by remember { mutableStateOf(false) }
-    var newProvider by remember { mutableStateOf<MediaGenerationProviderSetting?>(null) }
     val factories = remember {
         listOf<() -> MediaGenerationProviderSetting>(
             { MediaGenerationProviderSetting.OpenAI() },
@@ -338,45 +337,9 @@ internal fun AddMediaProviderButton(onAdd: (MediaGenerationProviderSetting) -> U
             typeName = { create -> remember(create) { create() }.typeName },
             onSelect = { create ->
                 showTypeSheet = false
-                newProvider = create()
+                onAdd(create())
             },
             onDismiss = { showTypeSheet = false },
-        )
-    }
-
-    newProvider?.let { provider ->
-        MediaProviderSheet(
-            title = stringResource(R.string.setting_media_page_add_provider),
-            initial = provider,
-            confirmText = stringResource(R.string.setting_tts_page_add),
-            onConfirm = onAdd,
-            onDismiss = { newProvider = null }
-        )
-    }
-}
-
-@Composable
-private fun MediaProviderSheet(
-    title: String,
-    initial: MediaGenerationProviderSetting,
-    confirmText: String,
-    onConfirm: (MediaGenerationProviderSetting) -> Unit,
-    onDismiss: () -> Unit
-) {
-    ProviderEditSheet(
-        title = title,
-        initial = initial,
-        confirmText = confirmText,
-        onConfirm = { provider ->
-            // 没填模型 ID 的行不保存
-            onConfirm(provider.copyProvider(models = provider.models.filter { it.modelId.isNotBlank() }))
-        },
-        onDismiss = onDismiss,
-    ) { provider, onValueChange, modifier ->
-        MediaGenerationProviderConfigure(
-            setting = provider,
-            onValueChange = onValueChange,
-            modifier = modifier
         )
     }
 }

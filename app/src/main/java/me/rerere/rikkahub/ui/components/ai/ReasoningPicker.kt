@@ -28,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -40,8 +39,6 @@ import androidx.graphics.shapes.RoundedPolygon
 import kotlinx.coroutines.flow.drop
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.rikkahub.data.model.ThemeIconSet
-import me.rerere.rikkahub.ui.components.ui.ThemedIcon
 import me.rerere.hugeicons.stroke.Idea
 import me.rerere.hugeicons.stroke.Idea01
 import me.rerere.rikkahub.R
@@ -60,20 +57,9 @@ fun ReasoningButton(
     modifier: Modifier = Modifier,
     onlyIcon: Boolean = false,
     reasoningLevel: ReasoningLevel,
-    themeIcons: ThemeIconSet = ThemeIconSet(),
     onUpdateReasoningLevel: (ReasoningLevel) -> Unit,
-    // WebView 工具条代理点击：外部要求打开原生选择器
-    forceShow: Boolean = false,
-    onForceShowHandled: () -> Unit = {},
 ) {
     var showPicker by remember { mutableStateOf(false) }
-
-    LaunchedEffect(forceShow) {
-        if (forceShow) {
-            showPicker = true
-            onForceShowHandled()
-        }
-    }
 
     if (showPicker) {
         ReasoningPicker(
@@ -97,7 +83,7 @@ fun ReasoningButton(
                 modifier = Modifier.size(24.dp),
                 contentAlignment = Alignment.Center
             ) {
-                ReasoningIcon(reasoningLevel, themeIcons)
+                Icon(reasoningLevel.icon(), null)
             }
             if (!onlyIcon) Text(stringResource(R.string.setting_provider_page_reasoning))
         }
@@ -197,27 +183,6 @@ fun ReasoningPicker(
     }
 }
 
-@Composable
-private fun ReasoningIcon(level: ReasoningLevel, themeIcons: ThemeIconSet = ThemeIconSet()) {
-    val vector = when (level) {
-        ReasoningLevel.OFF -> HugeIcons.Idea
-        ReasoningLevel.AUTO -> HugeIcons.Idea01
-        ReasoningLevel.LOW -> ReasoningLow
-        ReasoningLevel.MEDIUM -> ReasoningMedium
-        ReasoningLevel.HIGH -> ReasoningHigh
-        ReasoningLevel.XHIGH -> ReasoningHigh
-        ReasoningLevel.MAX -> ReasoningHigh
-    }
-    // 主题可换图/换色/换尺寸（官方推理强度入口无固定 id，取候选集合）
-    ThemedIcon(
-        imageVector = vector,
-        contentDescription = null,
-        imageUrl = themeIcons.effectiveReasoningImageUrl,
-        tint = themeIcons.effectiveReasoningTint?.let { Color(it) },
-        scale = themeIcons.effectiveReasoningScale,
-    )
-}
-
 private fun ReasoningLevel.icon(): ImageVector = when (this) {
     ReasoningLevel.OFF -> HugeIcons.Idea
     ReasoningLevel.AUTO -> HugeIcons.Idea01
@@ -239,7 +204,7 @@ private fun ReasoningLevel.shape(): RoundedPolygon = when (this) {
 }
 
 @Composable
-internal fun ReasoningLevel.label(): String = when (this) {
+private fun ReasoningLevel.label(): String = when (this) {
     ReasoningLevel.OFF -> stringResource(R.string.reasoning_off)
     ReasoningLevel.AUTO -> stringResource(R.string.reasoning_auto)
     ReasoningLevel.LOW -> stringResource(R.string.reasoning_light)

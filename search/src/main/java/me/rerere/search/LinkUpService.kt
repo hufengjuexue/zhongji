@@ -44,7 +44,7 @@ object LinkUpService : SearchService<SearchServiceOptions.LinkUpOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -87,7 +87,7 @@ object LinkUpService : SearchService<SearchServiceOptions.LinkUpOptions> {
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseBody = response.body!!.string().let {
+                val responseBody = response.body.string().let {
                     json.decodeFromString<LinkUpSearchResponse>(it)
                 }
 
@@ -133,7 +133,7 @@ object LinkUpService : SearchService<SearchServiceOptions.LinkUpOptions> {
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseBody = response.body!!.string().let {
+                val responseBody = response.body.string().let {
                     json.decodeFromString<LinkUpFetchResponse>(it)
                 }
 

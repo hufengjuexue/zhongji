@@ -14,30 +14,13 @@
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
   <uses-permission
     android:name="android.permission.PACKAGE_USAGE_STATS"
     tools:ignore="ProtectedPermissions" />
   <uses-permission android:name="android.permission.READ_CALENDAR" />
   <uses-permission android:name="android.permission.WRITE_CALENDAR" />
-
-  <!-- 设备工具箱（DeviceToolbox）：运行时权限在工具执行时检测，未授权返回引导说明 -->
-  <uses-permission android:name="android.permission.VIBRATE" />
-  <uses-permission android:name="android.permission.SET_ALARM" />
-  <uses-permission android:name="android.permission.SET_WALLPAPER" />
-  <uses-permission android:name="android.permission.WAKE_LOCK" />
-  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-  <uses-permission android:name="android.permission.READ_SMS" />
-  <uses-permission android:name="android.permission.READ_CONTACTS" />
-  <uses-permission android:name="android.permission.READ_CALL_LOG" />
-  <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
   <uses-feature
     android:name="android.hardware.camera"
@@ -63,7 +46,7 @@
   </queries>
 
   <application
-    android:name="me.rerere.rikkahub.RikkaHubApp"
+    android:name=".RikkaHubApp"
     android:largeHeap="true"
     android:allowBackup="true"
     android:appCategory="productivity"
@@ -134,15 +117,8 @@
         <data
           android:host="shortcut"
           android:scheme="rikkahub" />
-        <data
-          android:host="shortcut"
-          android:scheme="zhongji" />
       </intent-filter>
     </activity>
-    <activity
-      android:name="com.yalantis.ucrop.UCropActivity"
-      android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
-
     <service
       android:name=".service.ChatGenerationForegroundService"
       android:exported="false"
@@ -163,33 +139,6 @@
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="local web server for LLM chat UI" />
     </service>
-    <service
-      android:name=".service.GenerationForegroundService"
-      android:exported="false"
-      android:foregroundServiceType="dataSync">
-    </service>
-
-    <!-- 语音/视频通话前台服务：ASR→LLM→TTS 本地通话循环 -->
-    <service
-      android:name=".service.VoiceCallService"
-      android:exported="false"
-      android:foregroundServiceType="microphone" />
-
-
-    <!-- AI 主动发消息已改为 WorkManager 直接执行（见 ProactiveMessageWorker），
-         不再需要前台服务。原来的 ProactiveMessageTriggerService 走
-         startForegroundService，在 targetSdk 31+ 的后台场景会抛
-         ForegroundServiceStartNotAllowedException 并被静默吞掉。 -->
-
-    <!-- AI 主动发消息: 闹钟触发 / 开机重新排程 -->
-    <receiver
-      android:name=".data.service.ProactiveMessageReceiver"
-      android:exported="false">
-      <intent-filter>
-        <action android:name="me.rerere.rikkahub.PROACTIVE_MESSAGE" />
-        <action android:name="android.intent.action.BOOT_COMPLETED" />
-      </intent-filter>
-    </receiver>
 
     <provider
       android:name="androidx.core.content.FileProvider"

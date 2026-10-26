@@ -32,11 +32,12 @@ dependencies {
     // https://github.com/Petterpx/FloatingX
     api(libs.floatingx.app)
     api(libs.floatingx.compose)
+    api(libs.floatingx.system)
 
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
-    implementation(libs.quickjs)
+
+    // quickjs
+    api(libs.quickjs)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

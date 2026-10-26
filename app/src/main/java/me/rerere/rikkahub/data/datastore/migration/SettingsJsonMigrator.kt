@@ -65,22 +65,6 @@ object SettingsJsonMigrator {
                 }
             }
 
-            // V5: 删除旧版把角色卡内嵌世界书物化出的外置书（isCharacterBook=true）及其绑定，
-            //     避免恢复旧备份后同一份内容以两个 id 重复注入
-            val lorebooksElement = root["lorebooks"]
-            if (lorebooksElement != null) {
-                val lorebooksJson = JsonInstant.encodeToString(lorebooksElement)
-                val removedIds = characterBookIds(lorebooksJson)
-                if (removedIds.isNotEmpty()) {
-                    root["lorebooks"] = JsonInstant.parseToJsonElement(stripCharacterBooks(lorebooksJson))
-                    root["assistants"]?.let { assistants ->
-                        root["assistants"] = JsonInstant.parseToJsonElement(
-                            stripLorebookIds(JsonInstant.encodeToString(assistants), removedIds)
-                        )
-                    }
-                }
-            }
-
             // V4: 移除 assistants 的 allowConversationPromptInjection 开关
             root["assistants"]?.let { element ->
                 val migrated = migrateAssistantsConversationInjections(JsonInstant.encodeToString(element))

@@ -56,9 +56,6 @@ fun ImportExportTab(
     // 导入类型：local 为本地备份，chatbox 为 Chatbox 导入，cherry 为 Cherry Studio 导入
     var importType by remember { mutableStateOf("local") }
 
-    // 导出类型：local 为本地备份，upstream 为上游 rikkahub 兼容备份
-    var exportType by remember { mutableStateOf("local") }
-
     // 创建文件保存的launcher
     val createDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
@@ -68,7 +65,7 @@ fun ImportExportTab(
                 isExporting = true
                 runCatching {
                     // 导出文件
-                    val exportFile = if (exportType == "upstream") vm.exportUpstreamToFile() else vm.exportToFile()
+                    val exportFile = vm.exportToFile()
 
                     // 复制到用户选择的位置
                     context.contentResolver.openOutputStream(targetUri)?.use { outputStream ->
@@ -200,7 +197,6 @@ fun ImportExportTab(
             item(
                 onClick = if (!isExporting) {
                     {
-                        exportType = "local"
                         val timestamp = LocalDateTime.now()
                             .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                         createDocumentLauncher.launch("rikkahub_backup_$timestamp.zip")
@@ -216,33 +212,7 @@ fun ImportExportTab(
                         }
                     )
                 },
-                leadingContent = {
-                    BackupActionIcon(HugeIcons.FileExport, loading = isExporting && exportType == "local")
-                },
-            )
-
-            item(
-                onClick = if (!isExporting) {
-                    {
-                        exportType = "upstream"
-                        val timestamp = LocalDateTime.now()
-                            .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-                        createDocumentLauncher.launch("rikkahub_upstream_backup_$timestamp.zip")
-                    }
-                } else null,
-                headlineContent = { Text(stringResource(R.string.backup_page_export_upstream)) },
-                supportingContent = {
-                    Text(
-                        if (isExporting && exportType == "upstream") {
-                            stringResource(R.string.backup_page_exporting)
-                        } else {
-                            stringResource(R.string.backup_page_export_upstream_desc)
-                        }
-                    )
-                },
-                leadingContent = {
-                    BackupActionIcon(HugeIcons.FileExport, loading = isExporting && exportType == "upstream")
-                },
+                leadingContent = { BackupActionIcon(HugeIcons.FileExport, loading = isExporting) },
             )
 
             item(

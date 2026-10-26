@@ -31,7 +31,7 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -65,7 +65,7 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseBody = response.body!!.string().let {
+                val responseBody = response.body.string().let {
                     json.decodeFromString<RikkaHubSearchResponse>(it)
                 }
 

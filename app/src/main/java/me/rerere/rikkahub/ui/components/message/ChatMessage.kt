@@ -49,7 +49,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
@@ -79,46 +78,30 @@ import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Video01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
-import me.rerere.rikkahub.data.datastore.allRegexesOf
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
-import me.rerere.rikkahub.data.model.TRANSPARENT_BUBBLE as TRANSPARENT_BUBBLE_SENTINEL
 import me.rerere.rikkahub.data.model.replaceRegexes
-import me.rerere.rikkahub.ui.components.richtext.CardHostContext
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.richtext.buildMarkdownPreviewHtml
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
 import me.rerere.rikkahub.ui.components.ui.Favicon
 import me.rerere.rikkahub.ui.components.ui.FaviconRow
-import me.rerere.rikkahub.ui.components.ui.toComposeColor
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.modifier.shimmer
 import me.rerere.rikkahub.ui.context.LocalSettings
-import me.rerere.rikkahub.ui.components.message.extractVideoCallArchiveSessionId
-import me.rerere.rikkahub.ui.components.message.VideoCallArchiveCard
 import me.rerere.rikkahub.ui.context.LocalWorkspaceId
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
-import me.rerere.rikkahub.ui.theme.LocalMaterialMode
-import me.rerere.rikkahub.ui.theme.isGlass
-import me.rerere.rikkahub.ui.theme.isTranslucent
-import me.rerere.rikkahub.ui.theme.liquidGlassFill
-import me.rerere.rikkahub.ui.theme.liquidGlassHighlight
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.openUrl
-import me.rerere.rikkahub.utils.toMessageTimeString
 import me.rerere.rikkahub.utils.urlDecode
-import coil3.compose.AsyncImage
-import kotlinx.datetime.toJavaLocalDateTime
 import me.rerere.ui.charts.ChartCard
 import me.rerere.ui.charts.ChartSpec
 import me.rerere.ui.webview.WebViewContentCache
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
-import androidx.compose.foundation.border
-import androidx.compose.ui.draw.shadow
 
 @Composable
 fun ChatMessage(
@@ -128,13 +111,8 @@ fun ChatMessage(
     model: Model? = null,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
-    // 消息深度：0 = 最新一条，向前递增。正则脚本（尤其前端卡的 HTML 注入）
-    // 用 minDepth/maxDepth 限定生效范围，必须传真实值，否则 maxDepth 失效、
-    // 历史消息会被重复注入 HTML。
-    messageDepth: Int = 0,
     onFork: () -> Unit,
     onRegenerate: () -> Unit,
-    onImpersonate: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit,
@@ -145,13 +123,6 @@ fun ChatMessage(
     onClearTranslation: (UIMessage) -> Unit = {},
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
-    /**
-     * 前端角色卡的宿主生成入口（卡内 `window.generate`）。
-     * 为 null 时卡会显示「宿主未注入 generate 接口，无法生成」。
-     */
-    cardHost: CardHostContext? = null,
-    /** 卡把开局正文写回消息的入口。 */
-    cardMessagesJson: String = "[]",
 ) {
     val message = node.messages[node.selectIndex]
     if (message.isContextCheckpoint) {
@@ -208,18 +179,14 @@ fun ChatMessage(
         ) {
             MessagePartsBlock(
                 assistant = assistant,
-                messageDepth = messageDepth,
                 role = message.role,
                 parts = message.parts,
                 annotations = message.annotations,
                 loading = loading,
-                isStreamingMessage = loading && message.finishedAt == null,
                 model = model,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
                 onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
-                cardHost = cardHost,
-                cardMessagesJson = cardMessagesJson,
             )
 
             message.translation?.let { translation ->
@@ -250,7 +217,6 @@ fun ChatMessage(
                 ChatMessageActionButtons(
                     message = message,
                     onRegenerate = onRegenerate,
-                    onImpersonate = onImpersonate,
                     node = node,
                     onUpdate = onUpdate,
                     onOpenActionSheet = {
@@ -320,19 +286,14 @@ fun ChatMessage(
 @Composable
 private fun MessagePartsBlock(
     assistant: Assistant?,
-    messageDepth: Int,
     role: MessageRole,
     model: Model?,
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
-    // 仅当这条消息本身还在生成时为 true，历史消息恒为 false
-    isStreamingMessage: Boolean = false,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onUserMessageClick: (() -> Unit)? = null,
-    cardHost: CardHostContext? = null,
-    cardMessagesJson: String = "[]",
 ) {
     val context = LocalContext.current
     // 消息输出HapticFeedback
@@ -372,29 +333,6 @@ private fun MessagePartsBlock(
 
     // Render parts in original order (group thinking/tool as chain-of-thought)
     val groupedParts = remember(parts) { parts.groupMessageParts() }
-
-    // 正则可视化替换按 (原文, 作用域) 缓存，稳定消息重组直接复用；流式期间见 applyVisualRegexes
-    val effectiveRegexes = remember(assistant?.id, assistant?.regexes, settings.globalRegexes, messageDepth) {
-        settings.allRegexesOf(assistant)
-    }
-    val regexVisualCache = remember(effectiveRegexes, messageDepth) {
-        mutableMapOf<Pair<String, AssistantAffectScope>, String>()
-    }
-    fun applyVisualRegexes(text: String, scope: AssistantAffectScope): String {
-        if (effectiveRegexes.isEmpty()) return text
-        // 流式期间不跑正则：整条消息每个 chunk 重算会卡，生成结束后再一次性生效
-        if (loading) return text
-        val key = text to scope
-        return regexVisualCache.getOrPut(key) {
-            text.replaceRegexes(
-                regexes = effectiveRegexes,
-                scope = scope,
-                visual = true,
-                depth = messageDepth,
-            )
-        }
-    }
-
     groupedParts.fastForEach { block ->
         when (block) {
             is MessagePartBlock.ThinkingBlock -> {
@@ -405,11 +343,7 @@ private fun MessagePartsBlock(
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         cardColors = CardDefaults.cardColors(
-                            containerColor = customBubbleColor(
-                                custom = settings.displaySetting.thinkingBubbleColor,
-                                fallback = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                alpha = settings.displaySetting.bubbleOpacity,
-                            ),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
                         ),
                     ) { step ->
                         when (step) {
@@ -456,161 +390,48 @@ private fun MessagePartsBlock(
                     is UIMessagePart.Text -> {
                         val textContent = @Composable {
                             if (role == MessageRole.USER) {
-                                val materialMode = LocalMaterialMode.current
-                                val isGlassBubble = materialMode.isGlass
-                                val userBubbleColor = customBubbleColor(
-                                    custom = settings.displaySetting.userBubbleColor,
-                                    fallback = MaterialTheme.colorScheme.primaryContainer,
-                                    alpha = settings.displaySetting.bubbleOpacity,
-                                )
-                                Surface(
+                                ChatMessageBubble(
+                                    role = role,
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = settings.displaySetting.bubbleOpacity),
+                                    onClick = { onUserMessageClick?.invoke() },
+                                    // 用户气泡不占满整行，和助手的回复错开
                                     modifier = Modifier
                                         .padding(start = 24.dp)
-                                        .animateContentSize()
-                                        .themeBubbleBorder(
-                                            color = settings.displaySetting.bubbleBorderColor,
-                                            width = settings.displaySetting.bubbleBorderWidth,
-                                            shadowColor = settings.displaySetting.bubbleShadowColor,
-                                            shadowWidth = settings.displaySetting.bubbleShadowWidth,
-                                            cornerRadius = settings.displaySetting.bubbleCornerRadius,
-                                        ),
-                                    shape = RoundedCornerShape(settings.displaySetting.bubbleCornerRadius.dp),
-                                    color = when {
-                                        isGlassBubble -> Color.Transparent
-                                        materialMode.isTranslucent -> userBubbleColor.copy(alpha = userBubbleColor.alpha * 0.72f)
-                                        else -> userBubbleColor
-                                    },
-                                    onClick = { onUserMessageClick?.invoke() },
+                                        .animateContentSize(),
                                 ) {
-                                    Box {
-                                        BubbleBackgroundImage(
-                                            path = settings.displaySetting.userBubbleImagePath,
-                                            overlayColor = if (settings.displaySetting.bubbleImageOverlayEnabled) {
-                                                customBubbleColor(
-                                                    custom = settings.displaySetting.userBubbleColor,
-                                                    fallback = MaterialTheme.colorScheme.primaryContainer,
-                                                    alpha = 0.55f,
-                                                )
-                                            } else null,
-                                            contentScale = bubbleContentScale(
-                                                settings.displaySetting.bubbleBackgroundSize
-                                            ),
-                                            modifier = Modifier.matchParentSize(),
-                                        )
-                                        if (isGlassBubble) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .matchParentSize()
-                                                    .liquidGlassFill(
-                                                        tint = customBubbleColor(
-                                                            custom = settings.displaySetting.userBubbleColor,
-                                                            fallback = MaterialTheme.colorScheme.primaryContainer,
-                                                            alpha = 1f,
-                                                        )
-                                                    )
-                                                    .liquidGlassHighlight()
-                                            )
-                                        } else if (materialMode.isTranslucent) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .matchParentSize()
-                                                    .liquidGlassHighlight(intensity = 0.6f)
-                                            )
-                                        }
-                                        Column(modifier = Modifier.padding(8.dp)) {
-                                            MarkdownBlock(
-                                                content = applyVisualRegexes(part.text, AssistantAffectScope.USER),
-                                                onClickCitation = handleClickCitation,
-                                                cardHost = cardHost,
-                                                cardMessagesJson = cardMessagesJson,
-                                                // 生成中的半截 HTML 不交给 WebView，
-                                                // 否则会渲染出残缺网页、观感像卡死
-                                                                                                                isStreaming = isStreamingMessage,
-                                            )
-                                        }
-                                    }
+                                    MarkdownBlock(
+                                        content = part.text.replaceRegexes(
+                                            assistant = assistant,
+                                            scope = AssistantAffectScope.USER,
+                                            visual = true,
+                                        ),
+                                        onClickCitation = handleClickCitation
+                                    )
                                 }
                             } else {
                                 if (settings.displaySetting.showAssistantBubble) {
-                                    val materialMode = LocalMaterialMode.current
-                                    val isGlassBubble = materialMode.isGlass
-                                    val assistantBubbleColor = customBubbleColor(
-                                        custom = settings.displaySetting.assistantBubbleColor,
-                                        fallback = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                        alpha = settings.displaySetting.bubbleOpacity,
-                                    )
-                                    Surface(
-                                        modifier = Modifier
-                                            .animateContentSize()
-                                            .themeBubbleBorder(
-                                                color = settings.displaySetting.bubbleBorderColor,
-                                                width = settings.displaySetting.bubbleBorderWidth,
-                                                shadowColor = settings.displaySetting.bubbleShadowColor,
-                                                shadowWidth = settings.displaySetting.bubbleShadowWidth,
-                                                cornerRadius = settings.displaySetting.bubbleCornerRadius,
-                                            ),
-                                        shape = RoundedCornerShape(settings.displaySetting.bubbleCornerRadius.dp),
-                                        color = when {
-                                            isGlassBubble -> Color.Transparent
-                                            materialMode.isTranslucent -> assistantBubbleColor.copy(alpha = assistantBubbleColor.alpha * 0.72f)
-                                            else -> assistantBubbleColor
-                                        },
+                                    ChatMessageBubble(
+                                        role = role,
+                                        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
+                                        modifier = Modifier.animateContentSize(),
                                     ) {
-                                        Box {
-                                            BubbleBackgroundImage(
-                                                path = settings.displaySetting.assistantBubbleImagePath,
-                                                overlayColor = if (settings.displaySetting.bubbleImageOverlayEnabled) {
-                                                    customBubbleColor(
-                                                        custom = settings.displaySetting.assistantBubbleColor,
-                                                        fallback = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                                        alpha = 0.55f,
-                                                    )
-                                                } else null,
-                                                contentScale = bubbleContentScale(
-                                                    settings.displaySetting.bubbleBackgroundSize
-                                                ),
-                                                modifier = Modifier.matchParentSize(),
-                                            )
-                                            if (isGlassBubble) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .matchParentSize()
-                                                        .liquidGlassFill(
-                                                            tint = customBubbleColor(
-                                                                custom = settings.displaySetting.assistantBubbleColor,
-                                                                fallback = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                                                alpha = 1f,
-                                                            )
-                                                        )
-                                                        .liquidGlassHighlight()
-                                                )
-                                            } else if (materialMode.isTranslucent) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .matchParentSize()
-                                                        .liquidGlassHighlight(intensity = 0.6f)
-                                                )
-                                            }
-                                            Column(modifier = Modifier.padding(8.dp)) {
-                                                MarkdownBlock(
-                                                    content = applyVisualRegexes(part.text, AssistantAffectScope.ASSISTANT),
-                                                    onClickCitation = handleClickCitation,
-                                                    cardHost = cardHost,
-                                                                                                    isStreaming = isStreamingMessage,
-                                                cardMessagesJson = cardMessagesJson,
-                                                )
-                                            }
-                                        }
+                                        MarkdownBlock(
+                                            content = part.text.replaceRegexes(
+                                                assistant = assistant,
+                                                scope = AssistantAffectScope.ASSISTANT,
+                                                visual = true,
+                                            ),
+                                            onClickCitation = handleClickCitation,
+                                        )
                                     }
                                 } else {
                                     MarkdownBlock(
-                                        content = applyVisualRegexes(part.text, AssistantAffectScope.ASSISTANT),
+                                        content = part.text.replaceRegexes(
+                                            assistant = assistant,
+                                            scope = AssistantAffectScope.ASSISTANT,
+                                            visual = true,
+                                        ),
                                         onClickCitation = handleClickCitation,
-                                        cardHost = cardHost,
-                                                cardMessagesJson = cardMessagesJson,
-                                        // 生成中不渲染卡片：正文里的 <article> 之类
-                                        // 会被判成卡片，而它是半截的
-                                                                                        isStreaming = isStreamingMessage,
                                         modifier = Modifier
                                             .animateContentSize()
                                     )
@@ -622,13 +443,7 @@ private fun MessagePartsBlock(
                         // 内部可选择的 Text 会频繁注册/注销，与 Compose 选择工具栏在绘制阶段
                         // 对 selectable 列表的排序产生并发修改，导致 ConcurrentModificationException。
                         // 生成结束后内容稳定，再启用文本选择。
-                        // 视频通话存档卡片：[VIDEO_CALL_ARCHIVE:<id>] 标记用专用卡片渲染
-                        val archiveSessionId = remember(part.text) {
-                            extractVideoCallArchiveSessionId(part.text)
-                        }
-                        if (archiveSessionId != null) {
-                            VideoCallArchiveCard(sessionId = archiveSessionId)
-                        } else if (loading) {
+                        if (loading) {
                             textContent()
                         } else {
                             SelectionContainer {
@@ -636,6 +451,7 @@ private fun MessagePartsBlock(
                             }
                         }
                     }
+
                     is UIMessagePart.Video -> {
                         ChatMessageMediaTile(
                             icon = HugeIcons.Video01,
@@ -779,10 +595,9 @@ private fun Modifier.clipDrawing(shape: Shape): Modifier = drawWithCache {
 private fun ChatMessageCitations(annotations: List<UIMessageAnnotation>) {
     var expand by remember { mutableStateOf(false) }
     val urls = remember(annotations) {
-        annotations.mapNotNull { annotation ->
+        annotations.map { annotation ->
             when (annotation) {
                 is UIMessageAnnotation.UrlCitation -> annotation.url
-                UIMessageAnnotation.CharacterCardData, UIMessageAnnotation.ExampleMessage -> null
             }
         }
     }
@@ -827,9 +642,6 @@ private fun ChatMessageCitations(annotations: List<UIMessageAnnotation>) {
                                         )
                                     }
                                 }
-
-                                is UIMessageAnnotation.CharacterCardData -> Unit
-                                is UIMessageAnnotation.ExampleMessage -> Unit
                             }
                         }
                     }
@@ -837,86 +649,4 @@ private fun ChatMessageCitations(annotations: List<UIMessageAnnotation>) {
             }
         }
     }
-}
-
-/**
- * 聊天外观自定义：气泡颜色覆盖（未设置时回退主题色，统一叠加气泡不透明度）。
- */
-@Composable
-private fun customBubbleColor(
-    custom: Long?,
-    fallback: Color,
-    alpha: Float,
-): Color {
-    val base = custom?.toComposeColor() ?: fallback
-    // 主题显式声明的气泡背景为 transparent 时，不能再用 bubbleOpacity 把 alpha 顶回去，
-    // 否则作者刻意做的"文字浮在背景上"会被糊成一块实色气泡。
-    if (custom != null && custom == TRANSPARENT_BUBBLE_SENTINEL) return base
-    return base.copy(alpha = alpha)
-}
-
-/**
- * 气泡背景图：路径为空时不绘制；叠加遮罩颜色可空。
- * 放在 [BoxScope.matchParentSize] 内，不影响气泡按内容测量尺寸。
- */
-@Composable
-private fun BubbleBackgroundImage(
-    path: String,
-    overlayColor: Color?,
-    contentScale: ContentScale,
-    modifier: Modifier = Modifier,
-) {
-    if (path.isBlank()) return
-    AsyncImage(
-        model = path,
-        contentDescription = null,
-        contentScale = contentScale,
-        modifier = modifier,
-    )
-    if (overlayColor != null) {
-        Box(modifier = modifier.background(overlayColor))
-    }
-}
-
-/**
- * 把主题里的 background-size 映射为 Compose 的 ContentScale。
- *
- * 官方主题普遍写 `.mes_block::before { width:100%; height:200px; background-size:cover }`，
- * 元素本身是固定高度的小条；而本地气泡高度由文字撑开，长消息会变成很高的条。
- * 此时若仍无条件 Crop，图片就被纵向拉伸——这正是「拉伸得太长、非常难看」的来源。
- * 因此默认改为 Fit（等比完整显示、不裁不拉），仅在主题明确要求时裁切。
- */
-private fun bubbleContentScale(size: String?): ContentScale =
-    if (size?.contains("cover", ignoreCase = true) == true) ContentScale.Crop else ContentScale.Fit
-
-/**
- * 气泡外框与阴影：对齐官方 `--SmartThemeBorderColor` + `border` 简写、
- * `--SmartThemeShadowColor` + `--shadowWidth`。
- *
- * 实测 553 个主题里气泡边框出现 307 次（1px 110、2px 41）、阴影 337 次，
- * 是仅次于圆角与底图的视觉特征。Compose 的 Surface 不带边框/阴影参数，
- * 这里用 Modifier 按相同圆角绘制，保证边框贴合圆角形状。
- */
-private fun Modifier.themeBubbleBorder(
-    color: Long?,
-    width: Float,
-    shadowColor: Long?,
-    shadowWidth: Float,
-    cornerRadius: Float,
-): Modifier {
-    val shape = RoundedCornerShape(cornerRadius.dp)
-    var m = this
-    if (shadowColor != null && shadowWidth > 0f) {
-        // 官方阴影是 `0 Ny blur`，向下偏移；这里同样下移，保持观感一致
-        m = m.shadow(
-            elevation = shadowWidth.dp,
-            shape = shape,
-            ambientColor = Color(shadowColor.toInt()),
-            spotColor = Color(shadowColor.toInt()),
-        )
-    }
-    if (color != null && width > 0f) {
-        m = m.border(width = width.dp, color = Color(color.toInt()), shape = shape)
-    }
-    return m
 }

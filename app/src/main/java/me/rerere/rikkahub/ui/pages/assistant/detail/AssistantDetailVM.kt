@@ -45,14 +45,6 @@ class AssistantDetailVM(
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
 
-    val workspaces: StateFlow<List<WorkspaceEntity>> = workspaceRepository
-        .listFlow()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = emptyList(),
-        )
-
     init {
         viewModelScope.launch(Dispatchers.IO) {
             _skills.value = skillManager.listSkills()
@@ -107,6 +99,14 @@ class AssistantDetailVM(
             settings.assistantTags
         }.stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
+        )
+
+    val workspaces: StateFlow<List<WorkspaceEntity>> = workspaceRepository
+        .listFlow()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = emptyList(),
         )
 
     fun updateTags(tagIds: List<Uuid>, tags: List<Tag>) {
@@ -181,13 +181,6 @@ class AssistantDetailVM(
                 checkAvatarDelete(old = old, new = assistant) // 删除旧头像
                 checkBackgroundDelete(old = old, new = assistant) // 删除旧背景
             }
-        }
-    }
-
-    /** 更新全局设置（内嵌世界书编辑器里的全局激活设置也走这里，与外置页同一份数据） */
-    fun updateSettings(settings: Settings) {
-        viewModelScope.launch {
-            settingsStore.update { settings }
         }
     }
 

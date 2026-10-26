@@ -534,7 +534,7 @@ private fun CardGroupScope.stepASRItems(
                 onValueChange(setting.copy(hotwords = list))
             },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(stringResource(R.string.asr_step_hotwords_placeholder)) }
+            placeholder = { Text("热词1, 热词2, 热词3") }
         )
     }
 }

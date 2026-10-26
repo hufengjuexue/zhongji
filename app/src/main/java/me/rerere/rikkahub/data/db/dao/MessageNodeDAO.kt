@@ -41,9 +41,6 @@ interface MessageNodeDAO {
     @Query("DELETE FROM message_node WHERE id = :nodeId")
     suspend fun deleteById(nodeId: String)
 
-    @Query("SELECT COUNT(*) FROM message_node WHERE conversation_id = :conversationId")
-    suspend fun countNodesOfConversation(conversationId: String): Int
-
     // 消息节点数（重新生成的分支不另算）
     @Query("SELECT COUNT(*) FROM message_node")
     suspend fun countAll(): Int

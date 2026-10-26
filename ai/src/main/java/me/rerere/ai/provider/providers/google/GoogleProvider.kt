@@ -110,8 +110,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
     private suspend fun transformRequest(
         providerSetting: ProviderSetting.Google,
-        request: Request,
-        sessionId: String? = null,
+        request: Request
     ): Request {
         return if (providerSetting.vertexAI && providerSetting.useServiceAccount) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
@@ -122,7 +121,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .addHeader("Authorization", "Bearer $accessToken")
                 .build()
         } else {
-            val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), sessionId)
+            val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
             if (providerSetting.vertexAI) {
                 request.newBuilder()
                     .url(request.url.newBuilder().addQueryParameter("key", key).build())
@@ -205,8 +204,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
-                .build(),
-            sessionId = params.sessionId,
+                .build()
         )
 
         val response = client.newCall(request).await()
@@ -264,8 +262,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
-                .build(),
-            sessionId = params.sessionId,
+                .build()
         )
 
         Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
@@ -355,13 +352,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         params: TextGenerationParams
     ): JsonObject = buildJsonObject {
         // System message if available
-        // 防空回复（systemPromptInChat）：不走 systemInstruction，系统提示词改为进对话流（见 buildContents），
-        // 论坛验证的 Gemini 空回复 workaround：以假 user/model 历史轮承载系统提示，长上下文更稳
         val systemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
-        if (systemMessage != null &&
-            !params.model.outputModalities.contains(Modality.IMAGE) &&
-            !params.systemPromptInChat
-        ) {
+        if (systemMessage != null && !params.model.outputModalities.contains(Modality.IMAGE)) {
             put("systemInstruction", buildJsonObject {
                 putJsonArray("parts") {
                     add(buildJsonObject {
@@ -378,7 +370,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         put("generationConfig", buildJsonObject {
             if (params.temperature != null) put("temperature", params.temperature)
             if (params.topP != null) put("topP", params.topP)
-            if (params.topK != null) put("topK", params.topK)
             if (params.maxTokens != null) put("maxOutputTokens", params.maxTokens)
             if (params.model.outputModalities.contains(Modality.IMAGE)) {
                 put("responseModalities", buildJsonArray {
@@ -387,9 +378,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 })
             }
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                // 酒馆模式强制关闭与档位 OFF 等效：省略 thinkingConfig 时 Gemini 会沿用
-                // 服务端默认（思考照开），必须显式下发关闭参数
-                val level = if (params.disableReasoning) ReasoningLevel.OFF else params.reasoningLevel
                 put("thinkingConfig", buildJsonObject {
                     put("includeThoughts", true)
 
@@ -399,7 +387,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId) ||
                             ModelRegistry.GEMINI_4.match(modelId = params.model.modelId)
 
-                    when (level) {
+                    when (params.reasoningLevel) {
                         ReasoningLevel.AUTO -> {} // 自动模式，不设置参数
 
                         ReasoningLevel.OFF -> {
@@ -430,11 +418,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         // Contents (user messages)
         put(
             "contents",
-            buildContents(
-                messages = messages,
-                systemPromptInChat = params.systemPromptInChat,
-                imageOutput = params.model.outputModalities.contains(Modality.IMAGE),
-            )
+            buildContents(messages)
         )
 
         // Client function tools and model built-in tools share the same array.
@@ -694,77 +678,18 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun buildContents(messages: List<UIMessage>, systemPromptInChat: Boolean = false, imageOutput: Boolean = false): JsonArray {
+    private fun buildContents(messages: List<UIMessage>): JsonArray {
         return buildJsonArray {
-            var ackInserted = false
-            var firstSystemSeen = false
-            messages.forEach { message ->
-                if (message.role == MessageRole.SYSTEM) {
-                    // 防空回复（systemPromptInChat）：系统提示词进对话流 —— SYSTEM 消息原位转为
-                    // user 轮，保留位置（世界书 AT_DEPTH / 人设 / 冻结锚点等注入不丢、不挪），
-                    // 首个系统块后跟一条假 model 确认轮，避免模型把系统内容当成用户提问。
-                    // 默认路径：首条 system 已进 systemInstruction，这里跳过；中部 SYSTEM
-                    // （记忆注入/userContext/世界书等）转 user 轮原位保留（曾随防空回复
-                    // 改造被整体丢弃，导致注入静默失效）
-                    if (imageOutput) return@forEach
-                    if (!systemPromptInChat) {
-                        if (!firstSystemSeen) {
-                            firstSystemSeen = true
-                            return@forEach
-                        }
-                        addSystemAsUserTurn(message)
-                        return@forEach
+            messages
+                .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
+                .forEach { message ->
+                    if (message.role == MessageRole.ASSISTANT) {
+                        addModelMessage(message)
+                    } else {
+                        addUserMessage(message)
                     }
-                    addSystemAsUserTurn(message)
-                    if (!ackInserted) {
-                        ackInserted = true
-                        add(buildJsonObject {
-                            put("role", "model")
-                            putJsonArray("parts") {
-                                add(buildJsonObject { put("text", "Understood.") })
-                            }
-                        })
-                    }
-                    return@forEach
                 }
-                if (!message.isValidToUpload()) return@forEach
-                if (message.role == MessageRole.ASSISTANT) {
-                    addModelMessage(message)
-                } else {
-                    addUserMessage(message)
-                }
-            }
-        }.let(::mergeConsecutiveUserTurns)
-    }
-
-    /**
-     * Gemini 要求 contents 严格 user/model 交替，连续 user 轮会 400。
-     * SYSTEM 注入转为 user 轮后可能与相邻 user 轮相接（如冻结锚点在末条 user 之后），
-     * 把「后一轮是纯文本 user」的相邻对合并（parts 拼接），保证请求合法。
-     */
-    private fun mergeConsecutiveUserTurns(contents: JsonArray): JsonArray {
-        val items = contents.map { it.jsonObject }.toMutableList()
-        var index = 1
-        while (index < items.size) {
-            val current = items[index]
-            val previous = items[index - 1]
-            val isMergeablePair = previous["role"]?.jsonPrimitive?.contentOrNull == "user" &&
-                current["role"]?.jsonPrimitive?.contentOrNull == "user" &&
-                current["parts"]?.jsonArray?.all { it.jsonObject.containsKey("text") } == true
-            if (!isMergeablePair) {
-                index++
-                continue
-            }
-            items[index - 1] = buildJsonObject {
-                put("role", "user")
-                putJsonArray("parts") {
-                    previous["parts"]?.jsonArray?.forEach { add(it) }
-                    current["parts"]?.jsonArray?.forEach { add(it) }
-                }
-            }
-            items.removeAt(index)
         }
-        return JsonArray(items)
     }
 
     private fun JsonArrayBuilder.addModelMessage(message: UIMessage) {
@@ -803,27 +728,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         if (partsBuffer.isNotEmpty()) {
             add(buildJsonObject {
                 put("role", "model")
-                    putJsonArray("parts") { partsBuffer.forEach { add(it) } }
+                putJsonArray("parts") { partsBuffer.forEach { add(it) } }
             })
         }
-    }
-
-    /**
-     * 中部 SYSTEM 消息转为 user 轮。空白/纯空 SYSTEM 跳过——
-     * 空的 parts 数组会被 Gemini 400 拒绝。
-     */
-    private fun JsonArrayBuilder.addSystemAsUserTurn(message: UIMessage) {
-        val textParts = message.parts.filterIsInstance<UIMessagePart.Text>()
-            .filter { it.text.isNotBlank() }
-        if (textParts.isEmpty()) return
-        add(buildJsonObject {
-            put("role", "user")
-            putJsonArray("parts") {
-                textParts.forEach { part ->
-                    add(buildJsonObject { put("text", part.text) })
-                }
-            }
-        })
     }
 
     private fun JsonArrayBuilder.addUserMessage(message: UIMessage) {

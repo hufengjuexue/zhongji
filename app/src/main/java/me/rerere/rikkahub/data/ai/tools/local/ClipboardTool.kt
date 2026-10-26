@@ -19,10 +19,8 @@ internal fun buildClipboardTool(context: Context): Tool = Tool(
     description = """
         Read or write plain text from the device clipboard.
         Use action: read or write. For write, provide text.
-        Every read and write requires the user's approval. Do NOT write to the clipboard unless the
-        user has explicitly requested it.
+        Do NOT write to the clipboard unless the user has explicitly requested it.
     """.trimIndent().replace("\n", " "),
-    needsApproval = { false },
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {

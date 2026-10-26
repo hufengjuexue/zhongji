@@ -42,7 +42,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -83,7 +83,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseData = response.body!!.string().let {
+                val responseData = response.body.string().let {
                     json.decodeFromString<JinaSearchResponse>(it)
                 }
 
@@ -131,7 +131,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
             if (!response.isSuccessful) {
                 error("response failed for url $url #${response.code}")
             }
-            val responseData = response.body!!.string().let {
+            val responseData = response.body.string().let {
                 json.decodeFromString<JinaScrapeResponse>(it)
             }
 

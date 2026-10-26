@@ -49,7 +49,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -151,16 +150,12 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         ) {
             val lazyListState = rememberLazyListState()
             val isFiltering = selectedTagIds.isNotEmpty() || searchQuery.isNotBlank()
-            val currentAssistants by rememberUpdatedState(settings.assistants)
             val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
                 if (!isFiltering) {
-                    val assistants = currentAssistants
-                    if (from.index in assistants.indices && to.index in 0..assistants.size) {
-                        val newAssistants = assistants.toMutableList().apply {
-                            add(to.index, removeAt(from.index))
-                        }
-                        vm.updateSettings { it.copy(assistants = newAssistants) }
+                    val newAssistants = settings.assistants.toMutableList().apply {
+                        add(to.index, removeAt(from.index))
                     }
+                    vm.updateSettings { it.copy(assistants = newAssistants) }
                 }
             }
 
@@ -248,7 +243,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         }
     }
 
-    AssistantCreationSheet(createState, vm)
+    AssistantCreationSheet(createState)
 
     RikkaConfirmDialog(
         show = deleteTarget != null,
@@ -301,15 +296,11 @@ private fun AssistantTagsFilterRow(
 ) {
     if (settings.assistantTags.isNotEmpty()) {
         val tagsListState = rememberLazyListState()
-        val currentTags by rememberUpdatedState(settings.assistantTags)
         val tagsReorderableState = rememberReorderableLazyListState(tagsListState) { from, to ->
-            val tags = currentTags
-            if (from.index in tags.indices && to.index in 0..tags.size) {
-                val newTags = tags.toMutableList().apply {
-                    add(to.index, removeAt(from.index))
-                }
-                vm.updateSettings { it.copy(assistantTags = newTags) }
+            val newTags = settings.assistantTags.toMutableList().apply {
+                add(to.index, removeAt(from.index))
             }
+            vm.updateSettings { it.copy(assistantTags = newTags) }
         }
 
         LazyRow(
@@ -361,7 +352,6 @@ private fun AssistantTagsFilterRow(
 @Composable
 private fun AssistantCreationSheet(
     state: EditState<Assistant>,
-    vm: AssistantVM,
 ) {
     state.EditStateContent { assistant, update ->
         ModalBottomSheet(
@@ -393,21 +383,13 @@ private fun AssistantCreationSheet(
                 )
 
                 AssistantImporter(
-                    onImport = { result ->
-                        // 助手与世界书一起落库。
-                        //
-                        // 这里原来只 update(assistant)，把 result.newLorebooks
-                        // 直接丢掉了——世界书条目既没进全局列表也没有 id 被引用，
-                        // 用户看到的是「世界书没生效」，实际是它根本没被存下来。
-                        //
-                        // 现在走 addAssistantWithLorebooks：存书 + 挂 id 一起做，
-                        // 用户在扩展页能单独看到这本书、逐条开关。
-                        vm.addAssistantWithLorebooks(result.assistant, result.newLorebooks)
-                        // 已落库，直接关对话框，避免 confirm 把预填的默认助手再存一遍
-                        state.dismiss()
+                    onUpdate = {
+                        update(it)
+                        state.confirm()
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
@@ -458,7 +440,6 @@ private fun AssistantItem(
             UIAvatar(
                 name = assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
                 value = assistant.avatar,
-                onClick = onEdit,
                 modifier = Modifier
                     .size(48.dp)
                     .heroAnimation("assistant_${assistant.id}")

@@ -11,6 +11,7 @@ import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Cancel01
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -22,20 +23,11 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import kotlinx.coroutines.flow.first
-import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.ai.core.MessageRole
-import me.rerere.rikkahub.data.model.GenerationType
-import me.rerere.rikkahub.service.ChatService
-import org.koin.compose.koinInject
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -119,15 +111,10 @@ import me.rerere.ui.components.ListSelectableItem
 import me.rerere.ui.components.Tooltip
 import kotlin.math.roundToInt
 import kotlin.uuid.Uuid
-import me.rerere.rikkahub.ui.components.richtext.CardHostContext
 
 private const val TAG = "ChatList"
 private const val LoadingIndicatorKey = "LoadingIndicator"
 private const val ScrollBottomKey = "ScrollBottomKey"
-
-/** 最后一个压缩检查点之前（含检查点）的消息数量，0 表示未压缩。 */
-internal fun List<MessageNode>.compressedPrefixSize(): Int =
-    indexOfLast { it.currentMessage.isContextCheckpoint }.coerceAtLeast(0)
 
 @Composable
 fun ChatList(
@@ -143,7 +130,6 @@ fun ChatList(
     onDismissError: (Uuid) -> Unit = {},
     onClearAllErrors: () -> Unit = {},
     onRegenerate: (UIMessage) -> Unit = {},
-    onImpersonate: ((UIMessage) -> Unit)? = null,
     onEdit: (UIMessage) -> Unit = {},
     onForkMessage: (UIMessage) -> Unit = {},
     onDelete: (UIMessage) -> Unit = {},
@@ -157,156 +143,6 @@ fun ChatList(
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
-    // 前端角色卡（PNG 里带完整互动网页的那种）会调用 window.generate 让宿主
-    // 帮忙生成开场白。这里接上真实生成能力：卡拼好的 prompt 送给当前对话模型，
-    // 结果只回给卡、不写入聊天（卡确认后自己决定怎么用）。
-    val chatService: ChatService = koinInject()
-    val settingsStore: SettingsStore = koinInject()
-    val onCardGenerate: suspend (String, (String) -> Unit) -> String =
-        remember(chatService, conversation.id) {
-            { prompt, onDelta ->
-                val settings = settingsStore.settingsFlow.first()
-                val assistant = settings.getAssistantById(conversation.assistantId)
-                    ?: settings.getCurrentAssistant()
-                // 卡自己拼好了完整 prompt（世界观、路线、输出格式都在里面），
-                // 所以这里按 QUIET 类型一次调用即可：不进聊天历史、不触发工具循环。
-                chatService.generateForAssistant(
-                    assistant = assistant,
-                    settings = settings,
-                    prompt = prompt,
-                    history = emptyList(),
-                    conversationId = conversation.id,
-                    generationType = GenerationType.QUIET,
-                    promptRole = MessageRole.USER,
-                    onChunk = { text, _ -> onDelta(text) },
-                )
-            }
-        }
-    // 卡产出开局正文后写回第 0 条消息。卡里的 message_id 是"消息序号"，
-    // 对应这里的 messageNodes 下标；写回即替换该节点的正文。
-    //
-    // 注意 MessageNode.messages 就是官方的 swipes：卡切开局走 selectIndex，
-    // 这里重写正文只动 messages，避免手滑把同一条消息的其余分支擦掉。
-    val onCardWriteMessage: suspend (Int, String) -> Unit =
-        remember(chatService, conversation.id) {
-            { nodeIndex, text ->
-                chatService.updateConversationState(conversation.id) { conv ->
-                    if (nodeIndex !in conv.messageNodes.indices) conv
-                    else conv.copy(
-                        messageNodes = conv.messageNodes.mapIndexed { i, node ->
-                            if (i != nodeIndex) node
-                            else {
-                                val updated = node.messages.map { m ->
-                                    m.copy(parts = listOf(me.rerere.ai.ui.UIMessagePart.Text(text)))
-                                }
-                                if (updated.isEmpty()) node
-                                else node.copy(messages = updated)
-                            }
-                        }
-                    )
-                }
-            }
-        }
-
-    // 切开局（卡里的「命牌问卜」）。官方 swipe 语义：
-    //   getChatMessages(0, {include_swipe:true}) → msgs[0].swipes
-    //   setChatMessage(text, 0, {swipe_id:N})    → 选中第 N 条
-    // 这里 nodeIndex → messageNodes 下标，swipeId → selectIndex。
-    val onCardSwitchSwipe: suspend (Int, Int) -> Unit =
-        remember(chatService, conversation.id) {
-            { nodeIndex, swipeId ->
-                chatService.updateConversationState(conversation.id) { conv ->
-                    if (nodeIndex !in conv.messageNodes.indices) conv
-                    else conv.copy(
-                        messageNodes = conv.messageNodes.mapIndexed { i, node ->
-                            if (i != nodeIndex || swipeId !in node.messages.indices) node
-                            else node.copy(selectIndex = swipeId)
-                        }
-                    )
-                }
-            }
-        }
-
-    // 卡片变量树初值：卡内世界书那条 `[initvar]` 的 YAML。
-    // 没有它 Mvu.getMvuData 拿不到东西，卡的整套角色状态就是空的。
-    val cardInitVars: List<String> = remember(conversation.assistantId, settingsStore) {
-        val settings = settingsStore.settingsFlow.value
-        val assistant = settings.getAssistantById(conversation.assistantId)
-        val ids = assistant?.lorebookIds.orEmpty()
-        settings.lorebooks
-            .filter { it.id in ids && it.isCharacterBook }
-            .flatMap { it.entries }
-            .filter { it.name.contains("[initvar]") && it.content.isNotBlank() }
-            .map { it.content }
-    }
-
-    // 卡内的 `{{user}}` 必须和开场白宏替换用同一个名字，否则
-    // 世界书里的 `{{user}}:` 键和卡运行时算出来的用户键对不上，变量树就散了。
-    val cardUserName: String = remember(conversation.assistantId, settingsStore) {
-        settingsStore.settingsFlow.value.displaySetting.userNickname.ifBlank { "user" }
-    }
-
-    // 卡写回 MVU 变量后持久化到对应楼层。
-    //
-    // 状态栏是「逐楼快照」：旧楼显示旧状态、新楼显示新状态。所以变量挂在
-    // 消息上而不是全局，卡片被回收重组后仍能恢复。
-    val onCardPersistMvu: suspend (Int, String) -> Unit =
-        remember(chatService, conversation.id) {
-            { nodeIndex, dataJson ->
-                chatService.updateConversationState(conversation.id) { conv ->
-                    if (nodeIndex !in conv.messageNodes.indices) conv
-                    else conv.copy(
-                        messageNodes = conv.messageNodes.mapIndexed { i, node ->
-                            if (i != nodeIndex) node
-                            else node.copy(
-                                messages = node.messages.map { m -> m.copy(mvuData = dataJson) }
-                            )
-                        }
-                    )
-                }
-            }
-        }
-
-    val cardHost = remember(
-        chatService, conversation.id, cardInitVars, cardUserName, onCardPersistMvu,
-    ) {
-        CardHostContext(
-            generate = onCardGenerate,
-            writeMessage = onCardWriteMessage,
-            switchSwipe = onCardSwitchSwipe,
-            initVars = cardInitVars,
-            userName = cardUserName,
-            persistMvu = onCardPersistMvu,
-        )
-    }
-
-    // 卡内 getChatMessages 读的就是这份快照，字段对齐官方：
-    // 一条消息的多个开局分支 = MessageNode.messages（官方叫 swipes）。
-    val cardMessagesJson: String = remember(conversation.messageNodes) {
-        val arr = kotlinx.serialization.json.JsonArray(
-            conversation.messageNodes.mapIndexed { index, node ->
-                kotlinx.serialization.json.buildJsonObject {
-                    put("message_id", kotlinx.serialization.json.JsonPrimitive(index))
-                    put("swipe_id", kotlinx.serialization.json.JsonPrimitive(node.selectIndex))
-                    put(
-                        "message",
-                        kotlinx.serialization.json.JsonPrimitive(
-                            node.messages.getOrNull(node.selectIndex)?.toText().orEmpty()
-                        ),
-                    )
-                    put(
-                        "swipes",
-                        kotlinx.serialization.json.JsonArray(
-                            node.messages.map { m ->
-                                kotlinx.serialization.json.JsonPrimitive(m.toText())
-                            }
-                        ),
-                    )
-                }
-            }
-        )
-        arr.toString()
-    }
     AnimatedContent(
         targetState = previewMode,
         label = "ChatListMode",
@@ -321,6 +157,7 @@ fun ChatList(
                 settings = settings,
                 hazeState = hazeState,
                 onJumpToMessage = onJumpToMessage,
+                animatedVisibilityScope = this@AnimatedContent,
             )
         } else {
             ChatListNormal(
@@ -335,7 +172,6 @@ fun ChatList(
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
                 onRegenerate = onRegenerate,
-                onImpersonate = onImpersonate,
                 onEdit = onEdit,
                 onForkMessage = onForkMessage,
                 onDelete = onDelete,
@@ -343,12 +179,11 @@ fun ChatList(
                 onClickSuggestion = onClickSuggestion,
                 onTranslate = onTranslate,
                 onClearTranslation = onClearTranslation,
+                animatedVisibilityScope = this@AnimatedContent,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
                 onToggleFavorite = onToggleFavorite,
                 onConversationSystemPromptChange = onConversationSystemPromptChange,
-                cardHost = cardHost,
-                cardMessagesJson = cardMessagesJson,
             )
         }
     }
@@ -386,7 +221,6 @@ private fun ChatListNormal(
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
     onRegenerate: (UIMessage) -> Unit,
-    onImpersonate: ((UIMessage) -> Unit)? = null,
     onEdit: (UIMessage) -> Unit,
     onForkMessage: (UIMessage) -> Unit,
     onDelete: (UIMessage) -> Unit,
@@ -394,12 +228,11 @@ private fun ChatListNormal(
     onClickSuggestion: (String) -> Unit,
     onTranslate: ((UIMessage, java.util.Locale) -> Unit)?,
     onClearTranslation: (UIMessage) -> Unit,
+    animatedVisibilityScope: AnimatedVisibilityScope,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
-    cardHost: CardHostContext? = null,
-    cardMessagesJson: String = "[]",
 ) {
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
@@ -460,15 +293,6 @@ private fun ChatListNormal(
             .associateBy { it.id }
     }
     val lastMessageIndex = conversation.messageNodes.lastIndex
-    // 压缩后只渲染最后一个检查点及其后的消息，旧记录由摘要替代
-    val hiddenPrefixCount = remember(conversation.messageNodes) {
-        conversation.messageNodes.compressedPrefixSize()
-    }
-    val visibleNodes = if (hiddenPrefixCount > 0) {
-        conversation.messageNodes.drop(hiddenPrefixCount)
-    } else {
-        conversation.messageNodes
-    }
 
     Box(
         modifier = Modifier
@@ -476,16 +300,13 @@ private fun ChatListNormal(
     ) {
         // 自动滚动到底部
         if (settings.displaySetting.enableAutoScroll) {
-            // 输入法弹出会压缩视口，isAtBottom 判定随之失真，
-            // 此时的跟随只会把列表拉得到处跳，必须暂停
-            val imeVisibleState = rememberUpdatedState(
-                WindowInsets.ime.getBottom(density) > 0
-            )
             LaunchedEffect(state) {
                 snapshotFlow { state.layoutInfo.visibleItemsInfo }.collect { visibleItemsInfo ->
-                    if (!state.isScrollInProgress && !imeVisibleState.value && loadingState) {
+                    // println("is bottom = ${visibleItemsInfo.isAtBottom()}, scroll = ${state.isScrollInProgress}, can_scroll = ${state.canScrollForward}, loading = $loading")
+                    if (!state.isScrollInProgress && loadingState) {
                         if (visibleItemsInfo.isAtBottom()) {
                             state.requestScrollToItem(conversationUpdated.messageNodes.lastIndex + 10)
+                            // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.messageNodes.lastIndex}")
                         }
                     }
                 }
@@ -520,10 +341,9 @@ private fun ChatListNormal(
                     .hazeSource(state = hazeState),
             ) {
             itemsIndexed(
-                items = visibleNodes,
+                items = conversation.messageNodes,
                 key = { index, item -> item.id },
-            ) { visibleIndex, node ->
-                val index = hiddenPrefixCount + visibleIndex
+            ) { index, node ->
                 Column {
                     ListSelectableItem(
                         key = node.id,
@@ -543,12 +363,9 @@ private fun ChatListNormal(
                                 ?: node.currentMessage.snapshotModel(),
                             assistant = assistant,
                             loading = loading && index == lastMessageIndex,
-                            // 官方深度语义：最新一条为 0，向前递增
-                            messageDepth = lastMessageIndex - index,
                             onRegenerate = {
                                 onRegenerate(node.currentMessage)
                             },
-                            onImpersonate = onImpersonate?.let { { it(node.currentMessage) } },
                             onEdit = {
                                 onEdit(node.currentMessage)
                             },
@@ -576,13 +393,6 @@ private fun ChatListNormal(
                             onToolApproval = onToolApproval,
                             onToolAnswer = onToolAnswer,
                             lastMessage = index == lastMessageIndex,
-                            // 每条消息带自己的楼层序号与 MVU 快照：
-                            // 状态栏按楼渲染，旧楼旧状态、新楼新状态
-                            cardHost = cardHost?.copy(
-                                nodeIndex = index,
-                                existingMvu = node.currentMessage.mvuData,
-                            ),
-                            cardMessagesJson = cardMessagesJson,
                         )
                     }
                 }
@@ -813,24 +623,24 @@ private fun buildHighlightedText(
 }
 
 @Composable
-internal fun ChatListPreview(
+private fun ChatListPreview(
     innerPadding: PaddingValues,
     conversation: Conversation,
     settings: Settings,
     hazeState: HazeState,
+    animatedVisibilityScope: AnimatedVisibilityScope,
     onJumpToMessage: (Int) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
-    // 只列出压缩检查点之后的可见消息，index 与列表位置保持一致
-    val visibleNodes = remember(conversation.messageNodes) {
-        conversation.messageNodes.drop(conversation.messageNodes.compressedPrefixSize())
-    }
-    val filteredMessages = remember(visibleNodes, searchQuery) {
-        visibleNodes.mapIndexed { index, node -> index to node }
-            .filter { (_, node) ->
-                searchQuery.isBlank() || node.currentMessage.toText().contains(searchQuery, ignoreCase = true)
-            }
+    // 过滤消息，同时保留原始 index 避免后续 O(n) indexOf 查找
+    val filteredMessages = remember(conversation.messageNodes, searchQuery) {
+        if (searchQuery.isBlank()) {
+            conversation.messageNodes.mapIndexed { index, node -> index to node }
+        } else {
+            conversation.messageNodes.mapIndexed { index, node -> index to node }
+                .filter { (_, node) -> node.currentMessage.toText().contains(searchQuery, ignoreCase = true) }
+        }
     }
 
     Column(

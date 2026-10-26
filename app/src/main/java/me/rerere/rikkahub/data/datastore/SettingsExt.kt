@@ -4,35 +4,8 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.rikkahub.data.model.Assistant
-import me.rerere.rikkahub.data.model.AssistantRegex
-import me.rerere.rikkahub.data.model.AuthorNoteEntry
-import me.rerere.rikkahub.data.model.LEGACY_AUTHOR_NOTE_ENTRY_ID
 import me.rerere.tts.provider.TTSProviderSetting
 import kotlin.uuid.Uuid
-import me.rerere.rikkahub.utils.l10n
-
-/**
- * 旧设置/旧备份兼容层。
- *
- * null 与空列表刻意区分：null 才回退旧字段；用户在新 UI 中删光条目后会保存 emptyList，
- * 因而旧 authorNote 不会被重复迁移或再次出现。
- */
-fun Settings.authorNoteEntriesOrLegacy(): List<AuthorNoteEntry> {
-    authorNoteEntries?.let { return it }
-    if (authorNote.isBlank()) return emptyList()
-    return listOf(
-        AuthorNoteEntry(
-            id = LEGACY_AUTHOR_NOTE_ENTRY_ID,
-            name = l10n("旧版自定义导演备注", "Legacy custom Author's Note"),
-            content = authorNote,
-            enabled = true,
-            position = authorNotePosition,
-            depth = authorNoteDepth,
-            role = authorNoteRole,
-            interval = authorNoteInterval,
-        ),
-    )
-}
 
 /** 所有提供商都还没有添加模型，视为尚未完成配置。 */
 fun Settings.isNotConfigured() = providers.all { it.models.isEmpty() }
@@ -86,10 +59,6 @@ fun Settings.getAssistantById(id: Uuid): Assistant? {
 /** 该助手绑定的快捷消息，顺序跟随全局快捷消息列表。 */
 fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
     quickMessages.filter { it.id in assistant.quickMessageIds }
-
-/** 该消息实际生效的全部正则：角色卡自身的 + 全局（酒馆预设导入的脚本等）。 */
-fun Settings.allRegexesOf(assistant: Assistant?): List<AssistantRegex> =
-    assistant?.regexes.orEmpty() + globalRegexes
 
 /** 当前选中的 TTS 提供商，选中的 ID 已不存在时回退到第一个。 */
 fun Settings.getSelectedTTSProvider(): TTSProviderSetting? {

@@ -38,7 +38,7 @@ object OllamaSearchService : SearchService<SearchServiceOptions.OllamaOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -76,7 +76,7 @@ object OllamaSearchService : SearchService<SearchServiceOptions.OllamaOptions> {
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseBody = response.body!!.string()
+                val responseBody = response.body.string()
                 val searchResponse = json.decodeFromString<OllamaSearchResponse>(responseBody)
 
                 return@withContext Result.success(

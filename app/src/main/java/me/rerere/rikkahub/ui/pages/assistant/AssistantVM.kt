@@ -12,16 +12,14 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
-import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
-import kotlin.uuid.Uuid
-import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.repository.memoryId
+import me.rerere.rikkahub.service.ChatService
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
-    private val conversationRepo: ConversationRepository,
+    private val chatService: ChatService,
     private val filesManager: FilesManager,
 ) : ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
@@ -39,24 +37,6 @@ class AssistantVM(
         }
     }
 
-    // 助手与世界书同一次落库；曾只存助手导致世界书全部丢失
-    fun addAssistantWithLorebooks(assistant: Assistant, lorebooks: List<Lorebook>) {
-        viewModelScope.launch {
-            val settings = settings.value
-            val linked = if (lorebooks.isEmpty()) {
-                assistant
-            } else {
-                assistant.copy(lorebookIds = assistant.lorebookIds + lorebooks.map { it.id })
-            }
-            settingsStore.update(
-                settings.copy(
-                    assistants = settings.assistants.plus(linked),
-                    lorebooks = (settings.lorebooks + lorebooks).distinctBy { it.id },
-                )
-            )
-        }
-    }
-
     fun removeAssistant(assistant: Assistant) {
         viewModelScope.launch {
             cleanupAssistantFiles(assistant)
@@ -65,7 +45,7 @@ class AssistantVM(
                 settings.copy(assistants = settings.assistants.filter { it.id != assistant.id })
             }
             memoryRepository.deleteFilesOfAssistant(assistant.id.toString())
-            conversationRepo.deleteConversationOfAssistant(assistant.id)
+            chatService.deleteConversationsOfAssistant(assistant.id)
         }
     }
 

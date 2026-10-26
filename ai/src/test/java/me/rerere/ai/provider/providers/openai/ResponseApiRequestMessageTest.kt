@@ -52,11 +52,7 @@ class ResponseApiRequestMessageTest {
 
     // Helper to invoke buildMessages method
     private fun invokeBuildMessages(messages: List<UIMessage>): JsonArray {
-        // 与真实请求一致：firstSystemMessage 取自未过滤的原始列表
-        return api.buildMessages(
-            messages,
-            firstSystemMessage = messages.firstOrNull { it.role == me.rerere.ai.core.MessageRole.SYSTEM },
-        )
+        return api.buildMessages(messages)
     }
 
     private fun invokeBuildRequestBody(
@@ -534,28 +530,6 @@ class ResponseApiRequestMessageTest {
 
         assertEquals(1, items.size)
         assertEquals("user", items.single().jsonObject["role"]?.jsonPrimitive?.content)
-    }
-
-    @Test
-    fun `first system is skipped and mid system kept in place by default`() {
-        // 默认路径（systemPromptInChat=false）：首条 system 已放进顶层 instructions，
-        // 这里跳过避免重复；中部 SYSTEM（记忆注入/userContext/世界书等）原位保留 system item
-        val messages = listOf(
-            UIMessage.system("You are a helpful assistant."),
-            UIMessage.user("Hello"),
-            UIMessage.system("memory: user likes cats"),
-            UIMessage.user("What do I like?"),
-        )
-
-        val result = invokeBuildMessages(messages)
-
-        val roles = result.map { it.jsonObject["role"]?.jsonPrimitive?.content }
-        assertEquals(listOf("user", "system", "user"), roles)
-        val systemItem = result[1].jsonObject
-        assertEquals(
-            "memory: user likes cats",
-            systemItem["content"]?.jsonPrimitive?.content,
-        )
     }
 
     // ==================== Helper Functions ====================

@@ -2,7 +2,13 @@ pluginManagement {
     includeBuild("build-logic")
 
     repositories {
-        google()
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
         mavenCentral()
         gradlePluginPortal()
         maven("https://repo.itextsupport.com/android")
@@ -35,10 +41,9 @@ include(":common")
 include(":document")
 include(":web")
 include(":material3")
-
-// Build 1779956616 — force cache refresh
 include(":ui")
 include(":workspace")
+include(":terminal")
 include(":app:baselineprofile")
 include(":mediagen")
 include(":oauth")

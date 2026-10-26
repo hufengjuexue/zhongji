@@ -26,10 +26,8 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.common.http.jsonPrimitiveOrNull
 import kotlin.time.Clock
 
-internal class ChatCompletionsStreamDecoder(
-    private val enableProxyFix: Boolean = false,
-) : StreamChunkDecoder {
-    private val streamState = ChatCompletionsStreamState(enableProxyFix)
+internal class ChatCompletionsStreamDecoder : StreamChunkDecoder {
+    private val streamState = ChatCompletionsStreamState()
     private val toolIdsByIndex = mutableMapOf<Int, String>()
     private val reasoningDetailsByIndex = linkedMapOf<Int, JsonObject>()
     private var responseId: String? = null
@@ -97,8 +95,8 @@ internal class ChatCompletionsStreamDecoder(
         val role = MessageRole.valueOf(
             payload["role"]?.jsonPrimitive?.contentOrNull?.uppercase() ?: "ASSISTANT"
         )
-        var content = payload["content"]?.jsonPrimitiveOrNull?.contentOrNull ?: ""
-        var reasoning = payload["reasoning_content"]?.jsonPrimitiveOrNull?.contentOrNull
+        val content = payload["content"]?.jsonPrimitiveOrNull?.contentOrNull ?: ""
+        val reasoning = payload["reasoning_content"]?.jsonPrimitiveOrNull?.contentOrNull
             ?: payload["reasoning"]?.jsonPrimitiveOrNull?.contentOrNull
             ?: payload["content"]?.takeIf { it is JsonArray }?.let { array ->
                 array.jsonArrayOrNull?.getOrNull(0)?.jsonObjectOrNull
@@ -107,13 +105,6 @@ internal class ChatCompletionsStreamDecoder(
             }
         val reasoningMetadata = accumulateReasoningDetails(payload["reasoning_details"]?.jsonArrayOrNull)
         val images = payload["images"] as? JsonArray ?: JsonArray(emptyList())
-
-        // 中转站兼容：不再在逐条 delta 上剥离 "response" 前缀——delta 恰好等于 "response"
-        // 时正则的 $ 前瞻会立即命中被剥空，后续 delta（": hi"）反而漏发；
-        // 流式剥离统一在 textHoldback 缓冲里做，非流式在 fixProxyGeminiContent 做。
-        // 注意：不能在这里做 reasoning→content 提升——流式思考阶段每条 delta 的 content
-        // 本来就为空，逐条提升会把正常思考全部误判为正文；整体提升在流结束时统一处理
-        // （见 fixProxyPromotedReply）。
 
         return UIMessage(
             role = role,
@@ -193,44 +184,23 @@ internal class ChatCompletionsStreamDecoder(
         )
     }
 
-    private class ChatCompletionsStreamState(private val enableProxyFix: Boolean = false) {
+    private class ChatCompletionsStreamState {
         private var sequence = 0
         private var textId: String? = null
         private var reasoningId: String? = null
         private var imageId: String? = null
         private val openToolIds = linkedSetOf<String>()
         private var lastToolId: String? = null
-        // 中转站兼容：缓冲首段文本开头，凑满 "response" 长度或判定不匹配后再发出，
-        // 使被拆分在多个 delta 中的前缀也能被完整剥离
-        private var textHoldback: StringBuilder? = if (enableProxyFix) StringBuilder() else null
 
         fun append(message: UIMessage, sourceId: String?): List<StreamChunk> = buildList {
             message.parts.forEach { part ->
                 when (part) {
                     is UIMessagePart.Text -> if (part.text.isNotEmpty()) {
                         addAll(closeReasoning()); addAll(closeImage()); addAll(closeTools())
-                        val delta: String? = if (textHoldback != null) {
-                            val buffer = textHoldback!!.append(part.text)
-                            val lower = buffer.toString().lowercase()
-                            // 严格大于 tag 长度才判定：恰好等于 "response" 时正则 $ 前瞻会
-                            // 立即命中而漏掉分隔符，下一个 delta（如 ": hi"）就会原样漏发。
-                            // 流结束时 flushTextHoldback 会冲刷未判定的缓冲，不会丢文本。
-                            if (buffer.length > RESPONSE_PREFIX_TAG.length || !RESPONSE_PREFIX_TAG.startsWith(lower)) {
-                                val cleaned = RESPONSE_PREFIX_REGEX.replace(buffer.toString(), "").trimStart()
-                                textHoldback = null
-                                cleaned.ifEmpty { null }
-                            } else {
-                                null // 仍是 "response" 的前缀片段，继续缓冲
-                            }
-                        } else {
-                            part.text
+                        val id = textId ?: nextId(sourceId, "text").also {
+                            textId = it; add(StreamChunk.TextStart(it))
                         }
-                        if (delta != null) {
-                            val id = textId ?: nextId(sourceId, "text").also {
-                                textId = it; add(StreamChunk.TextStart(it))
-                            }
-                            add(StreamChunk.TextDelta(id, delta))
-                        }
+                        add(StreamChunk.TextDelta(id, part.text))
                     }
                     is UIMessagePart.Reasoning -> if (part.reasoning.isNotEmpty() || part.metadata != null) {
                         addAll(closeText()); addAll(closeImage()); addAll(closeTools())
@@ -266,23 +236,8 @@ internal class ChatCompletionsStreamDecoder(
         }
 
         fun finish(reason: String?, responseId: String?, model: String?): List<StreamChunk> = buildList {
-            addAll(flushTextHoldback(responseId))
             addAll(closeText()); addAll(closeReasoning()); addAll(closeImage()); addAll(closeTools())
             add(StreamChunk.Finish(reason, responseId, model))
-        }
-
-        /** 流结束时缓冲仍未判定（总回复极短），冲刷剩余文本。 */
-        private fun flushTextHoldback(sourceId: String?): List<StreamChunk> {
-            val buffer = textHoldback ?: return emptyList()
-            textHoldback = null
-            val cleaned = RESPONSE_PREFIX_REGEX.replace(buffer.toString(), "").trimStart()
-            if (cleaned.isEmpty()) return emptyList()
-            return buildList {
-                val id = textId ?: nextId(sourceId, "text").also {
-                    textId = it; add(StreamChunk.TextStart(it))
-                }
-                add(StreamChunk.TextDelta(id, cleaned))
-            }
         }
 
         private fun closeText() = textId?.let { textId = null; listOf(StreamChunk.TextEnd(it)) }.orEmpty()
@@ -299,14 +254,5 @@ internal class ChatCompletionsStreamDecoder(
 
     private companion object {
         val REASONING_DETAIL_DELTA_FIELDS = setOf("text", "summary", "data", "signature")
-
-        /** 前缀判定标签：缓冲文本达到此长度或不再是其前缀时即可做出剥离决定。 */
-        const val RESPONSE_PREFIX_TAG = "response"
-
-        /**
-         * 中转站 response 前缀：匹配开头的 "response"，要求其后紧跟空白/冒号/结尾/中日韩字符
-         * （中转站常输出 "response对，..." 这类无分隔形式），避免误伤 "responses" 等英文单词。
-         */
-        val RESPONSE_PREFIX_REGEX = Regex("(?i)^response(?=\\s|:|\$|[\\u4e00-\\u9fff\\u3040-\\u30ff])\\s*:?\\s*")
     }
 }

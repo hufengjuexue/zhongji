@@ -33,7 +33,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.ai.core.ReasoningLevel
-import kotlinx.coroutines.flow.dropWhile
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV1Migration
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV2Migration
@@ -107,28 +106,18 @@ class SettingsStore internal constructor(
         val CUSTOM_THEMES = stringPreferencesKey("custom_themes")
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
         val NETWORK_SETTING = stringPreferencesKey("network_setting")
-        val HUADENG_SETTINGS = stringPreferencesKey("huadeng_settings")
-        val WECHAT_BOT_SETTING = stringPreferencesKey("wechat_bot_setting")
-        val QQ_BOT_SETTING = stringPreferencesKey("qq_bot_setting")
-        val PROACTIVE_MESSAGE_SETTING = stringPreferencesKey("proactive_message_setting")
-        val SECURITY_SETTING = stringPreferencesKey("security_setting")
         val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
 
         // 模型选择
         val FAVORITE_MODELS = stringPreferencesKey("favorite_models")
         val SELECT_MODEL = stringPreferencesKey("chat_model")
         val FAST_MODEL = stringPreferencesKey("fast_model")
-        val TITLE_MODEL = stringPreferencesKey("title_model")
         val FAST_MODEL_REASONING_LEVEL = stringPreferencesKey("fast_model_reasoning_level")
         val MEMORY_MODEL = stringPreferencesKey("memory_model")
         val MEMORY_MODEL_REASONING_LEVEL = stringPreferencesKey("memory_model_reasoning_level")
-        val TITLE_REASONING_LEVEL = stringPreferencesKey("title_reasoning_level")
-        val TITLE_PROMPT_REVISION_KEY = intPreferencesKey("title_prompt_revision")
         val TRANSLATE_MODEL = stringPreferencesKey("translate_model")
         val ENABLE_SUGGESTION = booleanPreferencesKey("enable_suggestion")
         val IMAGE_GENERATION_MODEL = stringPreferencesKey("image_generation_model")
-        val IMAGE_GENERATION_SIZE = stringPreferencesKey("image_generation_size")
-        val IMAGE_GENERATION_REASONING_LEVEL = stringPreferencesKey("image_generation_reasoning_level")
         val ENABLE_AUTO_TITLE = booleanPreferencesKey("enable_auto_title")
         val TITLE_PROMPT = stringPreferencesKey("title_prompt")
         val TRANSLATION_PROMPT = stringPreferencesKey("translation_prompt")
@@ -137,8 +126,6 @@ class SettingsStore internal constructor(
         val SUGGESTION_PROMPT = stringPreferencesKey("suggestion_prompt")
         val OCR_MODEL = stringPreferencesKey("ocr_model")
         val OCR_PROMPT = stringPreferencesKey("ocr_prompt")
-        val COMPRESS_MODEL = stringPreferencesKey("compress_model")
-        val COMPRESS_PROMPT = stringPreferencesKey("compress_prompt")
 
         // 提供商
         val PROVIDERS = stringPreferencesKey("providers")
@@ -185,53 +172,16 @@ class SettingsStore internal constructor(
         // 提示词注入
         val MODE_INJECTIONS = stringPreferencesKey("mode_injections")
         val LOREBOOKS = stringPreferencesKey("lorebooks")
-        val REGEX_GROUPS = stringPreferencesKey("regex_groups")
-        val WORLD_INFO_BUDGET = intPreferencesKey("world_info_budget")
-        val WORLD_INFO_BUDGET_CAP = intPreferencesKey("world_info_budget_cap")
-        val WORLD_INFO_MIN_ACTIVATIONS = intPreferencesKey("world_info_min_activations")
-        val WORLD_INFO_MIN_ACTIVATIONS_DEPTH_MAX = intPreferencesKey("world_info_min_activations_depth_max")
-        val WORLD_INFO_RECURSIVE = booleanPreferencesKey("world_info_recursive")
-        val WORLD_INFO_MAX_RECURSION_STEPS = intPreferencesKey("world_info_max_recursion_steps")
-        val WORLD_INFO_DEPTH = intPreferencesKey("world_info_depth")
-        val WORLD_INFO_CHARACTER_STRATEGY = intPreferencesKey("world_info_character_strategy")
-        val WORLD_INFO_OVERFLOW_ALERT = booleanPreferencesKey("world_info_overflow_alert")
-        val WORLD_INFO_USE_GROUP_SCORING = booleanPreferencesKey("world_info_use_group_scoring")
-        val VECTOR_STORAGE_ENABLED = booleanPreferencesKey("vector_storage_enabled")
-        val VECTOR_STORAGE_MODEL_ID = stringPreferencesKey("vector_storage_model_id")
-        val VECTOR_STORAGE_THRESHOLD = floatPreferencesKey("vector_storage_threshold")
-        val VECTOR_STORAGE_SCAN_DEPTH = intPreferencesKey("vector_storage_scan_depth")
         val QUICK_MESSAGES = stringPreferencesKey("quick_messages")
-        // 宏引擎变量（酒馆 Macro 2.0 变量持久化）
-        val MACRO_GLOBAL_VARIABLES = stringPreferencesKey("macro_global_variables")
-        val MACRO_CHAT_VARIABLES = stringPreferencesKey("macro_chat_variables")
 
         // 备份提醒
         val BACKUP_REMINDER_CONFIG = stringPreferencesKey("backup_reminder_config")
 
-        // GitHub
-        val GITHUB_TOKEN = stringPreferencesKey("github_token")
-
         // 统计
         val LAUNCH_COUNT = intPreferencesKey("launch_count")
-        // 启动次数触发的备份提醒：用户勾选「不再提醒」后永久关闭
-        val BACKUP_LAUNCH_REMINDER_DISABLED = booleanPreferencesKey("backup_launch_reminder_disabled")
-        val FILE_RETENTION_DAYS = intPreferencesKey("file_retention_days")
-        val ENABLE_WEB_SEARCH = booleanPreferencesKey("enable_web_search")
 
         // 赞助提醒
         val SPONSOR_ALERT_DISMISSED_AT = intPreferencesKey("sponsor_alert_dismissed_at")
-
-// 人设 & 导演备注（补全）
-        val PERSONAS = stringPreferencesKey("personas")
-        val ACTIVE_PERSONA_ID = stringPreferencesKey("active_persona_id")
-        val AUTHOR_NOTE = stringPreferencesKey("author_note")
-        val AUTHOR_NOTE_ENABLED = booleanPreferencesKey("author_note_enabled")
-        val AUTHOR_NOTE_POSITION = stringPreferencesKey("author_note_position")
-        val AUTHOR_NOTE_DEPTH = intPreferencesKey("author_note_depth")
-        val AUTHOR_NOTE_ROLE = stringPreferencesKey("author_note_role")
-        val AUTHOR_NOTE_INTERVAL = intPreferencesKey("author_note_interval")
-        val AUTHOR_NOTE_ENTRIES = stringPreferencesKey("author_note_entries")
-        val GROUP_CHATS = stringPreferencesKey("group_chats")
 
         // Uses the same DataStore singleton without starting settings flows or requiring Koin.
         internal suspend fun restoreBeforeInitialization(context: Context, settings: Settings, launchCount: Int) {
@@ -260,9 +210,6 @@ class SettingsStore internal constructor(
 
     /** 当前设置。加载完成前是 [Settings.dummy]，需要真实设置时用 [awaitLoaded]。 */
     val settingsFlow: StateFlow<Settings> = state.asStateFlow()
-
-    // 兼容旧调用方（RikkaHubApp/ChatService/RouteActivity）：等真实数据到达的设置流
-    val settingsFlowRaw: Flow<Settings> = settingsFlow.dropWhile { it.init }
 
     /** 等启动时的读盘完成后返回当前设置，不会返回 [Settings.dummy]。已经加载完时直接返回。 */
     suspend fun awaitLoaded(): Settings = state.first { !it.init }
@@ -295,15 +242,6 @@ class SettingsStore internal constructor(
         .map { preferences -> preferences[LAUNCH_COUNT] ?: 0 }
         .distinctUntilChanged()
 
-    /** 「不再提醒备份」开关，勾选后不再弹启动次数触发的备份提醒 */
-    val backupLaunchReminderDisabledFlow: Flow<Boolean> = preferencesFlow
-        .map { preferences -> preferences[BACKUP_LAUNCH_REMINDER_DISABLED] ?: false }
-        .distinctUntilChanged()
-
-    suspend fun setBackupLaunchReminderDisabled(disabled: Boolean) {
-        dataStore.edit { preferences -> preferences[BACKUP_LAUNCH_REMINDER_DISABLED] = disabled }
-    }
-
     /**
      * 基于最新的设置做修改，返回时修改已经落盘。
      *
@@ -327,9 +265,6 @@ class SettingsStore internal constructor(
         }
         persist()
     }
-
-    // 兼容旧调用方的整份写法：以传入快照为基底走同一条 update 管线
-    suspend fun update(settings: Settings) = update { settings }
 
     // 连续修改只写最新的一份：排队等锁的调用拿到锁时，它的修改多半已经被前一次写盘带上了。
     // 不跟着调用方取消：页面关闭（viewModelScope 取消）时修改已经在内存里生效，不能只差落盘这一步。
@@ -365,9 +300,6 @@ class SettingsStore internal constructor(
     suspend fun selectAssistant(assistantId: Uuid) {
         update { it.copy(assistantId = assistantId) }
     }
-
-    // 兼容旧调用方的单参写法
-    suspend fun updateAssistant(assistantId: Uuid) = selectAssistant(assistantId)
 
     private suspend fun updateAssistant(assistantId: Uuid, transform: (Assistant) -> Assistant) {
         update { settings ->

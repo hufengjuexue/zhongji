@@ -1,8 +1,6 @@
 package me.rerere.rikkahub.ui.pages.chat
 
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -21,14 +18,12 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
@@ -49,7 +44,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
@@ -57,20 +51,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
-import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.Rocket01
-import me.rerere.hugeicons.stroke.Code
-import me.rerere.hugeicons.stroke.Note01
 import me.rerere.hugeicons.stroke.ChartColumn
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.FolderAdd
+import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.ImageToVideo
 import me.rerere.hugeicons.stroke.InLove
 import me.rerere.hugeicons.stroke.LanguageCircle
@@ -82,9 +73,8 @@ import me.rerere.hugeicons.stroke.Sorting01
 import me.rerere.hugeicons.stroke.Sparkles
 import me.rerere.hugeicons.stroke.Tick01
 import me.rerere.hugeicons.stroke.TransactionHistory
+import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.R
-import me.rerere.rikkahub.data.ai.PromptDebugCache
-import me.rerere.ui.webview.WebViewContentCache
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.ConversationSortOrder
 import me.rerere.rikkahub.data.datastore.Settings
@@ -103,21 +93,14 @@ import me.rerere.rikkahub.ui.context.Navigator
 import me.rerere.ui.toast.ToastType
 import me.rerere.rikkahub.ui.hooks.EditStateContent
 import me.rerere.rikkahub.ui.hooks.readBooleanPreference
-import me.rerere.rikkahub.ui.hooks.rememberIsPlayStoreVersion
 import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.ui.modifier.onClick
-import me.rerere.rikkahub.ui.theme.LocalMaterialMode
-import me.rerere.rikkahub.ui.theme.hasMaterialBorder
-import me.rerere.rikkahub.ui.theme.isGlass
 import me.rerere.rikkahub.utils.navigateToChatPage
 import me.rerere.rikkahub.utils.toDp
 import me.rerere.ui.components.Tooltip
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
-
-// 侧边栏条目统一使用更大的圆角，贴合 MD3 Expressive 观感
-private val DrawerItemShape = RoundedCornerShape(16.dp)
 
 @Composable
 fun ChatDrawerContent(
@@ -129,7 +112,6 @@ fun ChatDrawerContent(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val toaster = LocalToaster.current
-    val isPlayStore = rememberIsPlayStoreVersion()
     val repo = koinInject<ConversationRepository>()
 
     val activity = context as ComponentActivity
@@ -202,27 +184,6 @@ fun ChatDrawerContent(
         }
     }
 
-    val materialMode = LocalMaterialMode.current
-    // 面板内侧留出更大的圆角，玻璃模式下与整体材质观感统一
-    val drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
-    // 玻璃模式下抬高底色不透明度下限，避免文字压在透出的内容上难以辨认
-    val drawerSurfaceAlpha = if (materialMode.isGlass) {
-        (settings.displaySetting.interfaceSurfaceOpacity / 100f * 0.85f).coerceIn(0.62f, 0.95f)
-    } else {
-        (settings.displaySetting.interfaceSurfaceOpacity / 100f).coerceIn(0.6f, 1f)
-    }
-    val drawerModifier = Modifier
-        .width(300.dp)
-        .then(
-            if (materialMode.hasMaterialBorder) {
-                Modifier.border(
-                    width = 1.dp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
-                    shape = drawerShape,
-                )
-            } else Modifier
-        )
-
     // 矮屏（如手表、横屏手机）上顶部固定会把会话列表挤没，改为跟随列表一起滚动
     val windowHeight = LocalWindowInfo.current.containerDpSize.height
     val scrollableHeader = windowHeight < 640.dp
@@ -233,7 +194,7 @@ fun ChatDrawerContent(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (updateChecksEnabled && !isPlayStore) {
+            if (updateChecksEnabled && !BuildConfig.IS_PLAY_STORE) {
                 UpdateCard(vm)
             }
 
@@ -299,6 +260,8 @@ fun ChatDrawerContent(
                 }
             }
 
+            DrawerActions(navController = navController)
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -315,8 +278,6 @@ fun ChatDrawerContent(
                     onDelete = { folderToDelete = it },
                     modifier = Modifier.weight(1f),
                 )
-
-                DrawerActions(navController = navController, settings = settings)
 
                 ConversationSortButton(
                     sortOrder = settings.displaySetting.conversationSortOrder,
@@ -337,37 +298,12 @@ fun ChatDrawerContent(
     }
 
     ModalDrawerSheet(
-        modifier = drawerModifier,
-        drawerShape = drawerShape,
-        drawerContainerColor = if (materialMode.hasMaterialBorder) {
-            DrawerDefaults.modalContainerColor.copy(alpha = drawerSurfaceAlpha)
-        } else {
-            DrawerDefaults.modalContainerColor
-        },
+        modifier = Modifier.width(300.dp)
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // 侧边栏背景图：铺满抽屉，再叠一层主题色遮罩保证前景文字可读
-            if (settings.displaySetting.drawerBackgroundPath.isNotBlank()) {
-                AsyncImage(
-                    model = settings.displaySetting.drawerBackgroundPath,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize(),
-                )
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            MaterialTheme.colorScheme.surface.copy(
-                                alpha = if (materialMode.isGlass) 0.72f else 0.55f
-                            )
-                        ),
-                )
-            }
-            Column(
-                modifier = Modifier.padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (!scrollableHeader) {
                 drawerHeader()
             }
@@ -432,7 +368,6 @@ fun ChatDrawerContent(
                         }
                         navigateToChatPage(navigator = navController, chatId = id)
                     }
-
                 },
                 modifier = Modifier.fillMaxWidth(),
                 onClickSetting = {
@@ -480,46 +415,11 @@ fun ChatDrawerContent(
                         onDismissRequest = { showMenuPopup = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.chat_page_menu_ai_translator)) },
-                            leadingIcon = { Icon(HugeIcons.LanguageCircle, null) },
+                            text = { Text(stringResource(R.string.chat_page_menu_image_generation)) },
+                            leadingIcon = { Icon(HugeIcons.Image02, null) },
                             onClick = {
                                 showMenuPopup = false
-                                navController.navigate(Screen.Translator)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.chat_page_menu_prompt_viewer)) },
-                            leadingIcon = { Icon(HugeIcons.Code, null) },
-                            onClick = {
-                                showMenuPopup = false
-                                val html = PromptDebugCache.get(current.id)
-                                if (html == null) {
-                                    toaster.show(
-                                        context.getString(R.string.chat_page_menu_prompt_viewer_empty),
-                                        type = ToastType.Warning,
-                                    )
-                                } else {
-                                    val contentId = WebViewContentCache.store(context.cacheDir, html)
-                                    navController.navigate(Screen.WebView(contentId = contentId))
-                                }
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.setting_page_authors_note)) },
-                            leadingIcon = { Icon(HugeIcons.Note01, null) },
-                            onClick = {
-                                showMenuPopup = false
-                                navController.navigate(Screen.AuthorsNote)
-                            }
-                        )
-                        // 收藏原本是并列按钮之一，为给生图/设置腾地方撤了下来。整屏只有这一处
-                        // 能进 Screen.Favorite，直接删掉会让收藏变成死功能，所以收进菜单里。
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.favorite_page_title)) },
-                            leadingIcon = { Icon(HugeIcons.InLove, null) },
-                            onClick = {
-                                showMenuPopup = false
-                                navController.navigate(Screen.Favorite)
+                                navController.navigate(Screen.ImageGen)
                             }
                         )
                     }
@@ -539,10 +439,10 @@ fun ChatDrawerContent(
 
                 DrawerAction(
                     icon = {
-                        Icon(HugeIcons.ChartColumn, stringResource(R.string.chat_drawer_stats))
+                        Icon(HugeIcons.ChartColumn, "统计数据")
                     },
                     label = {
-                        Text(stringResource(R.string.chat_drawer_stats))
+                        Text("统计数据")
                     },
                     onClick = {
                         navController.navigate(Screen.Stats)
@@ -561,7 +461,6 @@ fun ChatDrawerContent(
                     },
                 )
             }
-        }
         }
     }
 
@@ -838,6 +737,35 @@ fun ChatDrawerContent(
 }
 
 @Composable
+private fun DrawerActions(navController: Navigator) {
+    Column {
+        // 历史记录入口，行尾是搜索入口
+        DrawerEntry(
+            icon = HugeIcons.TransactionHistory,
+            text = stringResource(R.string.chat_page_history),
+            onClick = { navController.navigate(Screen.History) },
+            trailingIcon = HugeIcons.Search01,
+            trailingDescription = stringResource(R.string.chat_page_search_chats),
+            onTrailingClick = { navController.navigate(Screen.MessageSearch) },
+        )
+
+        // 媒体创作入口
+        DrawerEntry(
+            icon = HugeIcons.ImageToVideo,
+            text = stringResource(R.string.media_creation_title),
+            onClick = { navController.navigate(Screen.MediaCreationSessions) },
+        )
+
+        // 翻译入口
+        DrawerEntry(
+            icon = HugeIcons.LanguageCircle,
+            text = stringResource(R.string.chat_page_menu_ai_translator),
+            onClick = { navController.navigate(Screen.Translator) },
+        )
+    }
+}
+
+@Composable
 private fun DrawerEntry(
     icon: ImageVector,
     text: String,
@@ -851,7 +779,7 @@ private fun DrawerEntry(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
-        shape = DrawerItemShape,
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -904,7 +832,7 @@ private fun MemoryDreamingEntry(onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
-        shape = DrawerItemShape,
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
@@ -1164,42 +1092,6 @@ private fun AssistantItem(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun DrawerActions(
-    navController: Navigator,
-    settings: Settings,
-) {
-    Column {
-        // 历史记录入口，行尾是搜索入口
-        DrawerEntry(
-            icon = HugeIcons.TransactionHistory,
-            text = stringResource(R.string.chat_page_history),
-            onClick = { navController.navigate(Screen.History) },
-            trailingIcon = HugeIcons.Search01,
-            trailingDescription = stringResource(R.string.chat_page_search_chats),
-            onTrailingClick = { navController.navigate(Screen.MessageSearch) },
-        )
-
-        // 媒体创作入口
-        if (!settings.displaySetting.hideDrawerMediaCreation) {
-            DrawerEntry(
-                icon = HugeIcons.ImageToVideo,
-                text = stringResource(R.string.media_creation_title),
-                onClick = { navController.navigate(Screen.MediaCreationSessions) },
-            )
-        }
-
-        // 翻译入口
-        if (!settings.displaySetting.hideDrawerAiTranslate) {
-            DrawerEntry(
-                icon = HugeIcons.LanguageCircle,
-                text = stringResource(R.string.chat_page_menu_ai_translator),
-                onClick = { navController.navigate(Screen.Translator) },
-            )
         }
     }
 }

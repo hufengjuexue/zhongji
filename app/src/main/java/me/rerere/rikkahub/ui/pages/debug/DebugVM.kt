@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.pages.debug
 
-import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -9,7 +8,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import me.rerere.rikkahub.utils.l10n
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -25,10 +23,8 @@ import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
 import kotlin.random.Random
 import kotlin.uuid.Uuid
-import me.rerere.rikkahub.R
 
 class DebugVM(
-    private val application: Application,
     private val settingsStore: SettingsStore,
     private val conversationRepository: ConversationRepository,
 ) : ViewModel() {
@@ -82,7 +78,7 @@ class DebugVM(
             .sortedByDescending { it.value }
         if (missing.isEmpty()) return 0
         val recovered = missing.mapIndexed { index, (id, _) ->
-            Assistant(id = id, name = l10n("恢复的角色卡 ${index + 1}", "Recovered card ${index + 1}"))
+            Assistant(id = id, name = "恢复的助手 ${index + 1}")
         }
         settingsStore.update { it.copy(assistants = it.assistants + recovered) }
         return recovered.size
@@ -140,7 +136,7 @@ class DebugVM(
             val conversation = Conversation(
                 id = Uuid.random(),
                 assistantId = DEFAULT_ASSISTANT_ID,
-                title = application.getString(R.string.debug_oversized_conversation_title, sizeMB),
+                title = "超大对话测试 (${sizeMB}MB)",
                 messageNodes = messageNodes,
             )
 
@@ -166,7 +162,7 @@ class DebugVM(
             val conversation = Conversation(
                 id = Uuid.random(),
                 assistantId = DEFAULT_ASSISTANT_ID,
-                title = application.getString(R.string.debug_messages_conversation_title, messageCount),
+                title = "${messageCount}条消息测试",
                 messageNodes = messageNodes,
             )
 
@@ -180,7 +176,7 @@ class DebugVM(
             "聊天", "对话", "内容", "结构", "验证", "分页", "顺序", "稳定", "系统",
         )
         val wordCount = Random.nextInt(6, 14)
-        val prefix = if (role == MessageRole.USER) "用户" else "角色"
+        val prefix = if (role == MessageRole.USER) "用户" else "助手"
         val body = List(wordCount) { fragments.random() }.joinToString(" ")
         return "$prefix#${index + 1}: $body"
     }

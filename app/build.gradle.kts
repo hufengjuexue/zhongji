@@ -4,94 +4,63 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.io.FileInputStream
 import java.util.Properties
 
-// Firebase 遥测默认关闭（移植自 Rikkahub-Revised）：
-// 仅当以 -Prikkahub.enableFirebase=true 构建时才启用 Google 服务与 Crashlytics
-val enableFirebase = providers.gradleProperty("rikkahub.enableFirebase")
-    .map { it.equals("true", ignoreCase = true) }
-    .getOrElse(false)
-
-/**
- * 原生工具链版本，只从 gradle.properties 读，此处不设默认值。
- *
- * 必须显式声明、且缺失即失败：NDK 一旦不写，AGP 9.4.0 会退回自己的硬编码
- * 默认值，CI 每次构建都要现下约 722MB 的 NDK 包，下载被截断就报
- * "Error reading Zip content from a SeekableByteChannel"。
- * 有兜底值反而会掩盖这种错位，所以这里直接 error() 中断构建。
- *
- * 空串同样视为缺失：`rikkahub.ndkVersion=` 这种写法会让 orNull 返回 ""，
- * 若只判 null 就会把空版本号传给 AGP，报错信息远不如这里直白。
- */
-fun nativeToolchainVersion(key: String): String =
-    providers.gradleProperty(key).orNull?.takeIf { it.isNotBlank() }
-        ?: error("gradle.properties 缺少 $key（或该值为空）")
-
-val nativeNdkVersion = nativeToolchainVersion("rikkahub.ndkVersion")
-val nativeCmakeVersion = nativeToolchainVersion("rikkahub.cmakeVersion")
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
-    alias(libs.plugins.google.services) apply false
-    alias(libs.plugins.firebase.crashlytics) apply false
+    alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.crashlytics)
     alias(libs.plugins.baselineprofile)
-}
-
-if (enableFirebase) {
-    apply(plugin = "com.google.gms.google-services")
-    apply(plugin = "com.google.firebase.crashlytics")
 }
 
 android {
     namespace = "me.rerere.rikkahub"
-    compileSdk = 37
-    // 显式钉住 NDK 版本，取值见 gradle.properties 的 rikkahub.ndkVersion。
-    // 不写这一行时 AGP 会用自带默认值，导致 CI 每次构建重新下载整个 NDK。
-    ndkVersion = nativeNdkVersion
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
+
     defaultConfig {
-        applicationId = "me.rerere.zhongji"
+        applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        // 终极 RP (ZhongJi RP) 创世版本演进：1.1.0 (奥卡姆剃刀重构版)
-        versionCode = 3
-        versionName = "1.1.0"
+        versionCode = 194
+        versionName = "3.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("boolean", "ENABLE_FIREBASE", enableFirebase.toString())
-
         ndk {
-            // 只出 arm64-v8a 单一 APK（Chaquopy 要求 ndk.abiFilters，故不再用 splits abi）
-            abiFilters += listOf("arm64-v8a")
-        }
-
-        externalNativeBuild {
-            cmake {
-                // hdguard：插件密钥派生因子的运行时供给，不依赖第三方库
-                arguments += listOf("-DANDROID_STL=none")
-                cFlags += listOf("-O2", "-fvisibility=hidden", "-fno-stack-protector")
-            }
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            // 与 gradle.properties 的 rikkahub.cmakeVersion、CI 预装版本三者一致
-            version = nativeCmakeVersion
+    splits {
+        abi {
+            // AppBundle tasks usually contain "bundle" in their name
+            //noinspection WrongGradleMethod
+            val isBuildingBundle = gradle.startParameter.taskNames.any { it.lowercase().contains("bundle") }
+            isEnable = !isBuildingBundle
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = true
         }
     }
+
     signingConfigs {
         create("release") {
             val localProperties = Properties()
             val localPropertiesFile = rootProject.file("local.properties")
+
             if (localPropertiesFile.exists()) {
                 localProperties.load(FileInputStream(localPropertiesFile))
+
                 val storeFilePath = localProperties.getProperty("storeFile")
                 val storePasswordValue = localProperties.getProperty("storePassword")
                 val keyAliasValue = localProperties.getProperty("keyAlias")
                 val keyPasswordValue = localProperties.getProperty("keyPassword")
+
                 if (storeFilePath != null && storePasswordValue != null &&
                     keyAliasValue != null && keyPasswordValue != null
                 ) {
@@ -103,19 +72,12 @@ android {
             }
         }
     }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
             optimization {
                 enable = true
-                // 前端卡宿主桥走 WebView 反射，R8 看不见调用方，
-                // 会把 @JavascriptInterface 方法改名、把注入的 JS 常量整段删掉。
-                // 不挂这份规则时 debug 正常、release 静默失效，只在真机上表现为
-                // 「宿主未注入 generate 接口」。
-                proguardFiles(
-                    getDefaultProguardFile("proguard-android-optimize.txt"),
-                    "proguard-rules.pro",
-                )
             }
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
@@ -126,6 +88,20 @@ android {
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
     }
+    // 按分发渠道区分：github 是 GitHub Release / 每日构建的 APK，play 是上架 Google Play 的 AAB
+    // 两个渠道共用同一个 applicationId，Play 版不能自更新，相关入口通过 BuildConfig.IS_PLAY_STORE 关闭
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            isDefault = true
+            buildConfigField("boolean", "IS_PLAY_STORE", "false")
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "IS_PLAY_STORE", "true")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -134,22 +110,21 @@ android {
         compose = true
         buildConfig = true
     }
-    testOptions {
-        unitTests {
-            // 纯 JVM 单元测试中 android.util.Log 等调用返回默认值而非抛异常
-            isReturnDefaultValues = true
-        }
-    }
     sourceSets {
         getByName("androidTest").assets.srcDirs("$projectDir/schemas")
     }
     androidResources {
-        generateLocaleConfig = false
+        generateLocaleConfig = true
+        // 只保留 app 自己翻译过的语言，依赖库（AndroidX、GMS 等）带的其他语言资源不打包
+        localeFilters += listOf("en", "ar", "de", "ja", "ko", "ko-rKR", "ru", "zh", "zh-rTW")
     }
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            pickFirsts += "lib/*/libtermux.so"
+        }
+        resources {
+            // BouncyCastle 的 Picnic 后量子签名查找表（约 1.2MB），JSch 用不到
+            excludes += "org/bouncycastle/pqc/crypto/picnic/**"
         }
     }
     tasks.withType<KotlinCompile>().configureEach {
@@ -167,17 +142,30 @@ android {
     }
 }
 
-// baselineprofile 的 nonMinifiedRelease 只关 minify 关不掉 optimization，R8 内联会让 profile 残缺
+// 两个渠道的启动路径一样，profile 合并到 src/main 共用，不按变体各存一份
+baselineProfile {
+    mergeIntoMain = true
+}
+
+// baselineprofile 插件按 release 复制出 nonMinifiedRelease 时只关掉 isMinifyEnabled，关不掉 optimization，
+// 不手动关的话生成用的包会被 R8 内联、合并类，profile 里记下的是优化后的类和方法
 androidComponents {
     finalizeDsl { extension ->
         extension.buildTypes.findByName("nonMinifiedRelease")?.optimization?.enable = false
     }
 }
 
-tasks.register("buildAll") {
-    dependsOn("assembleRelease", "bundleRelease")
-    description = "Build both APK and AAB"
+composeCompiler {
+    stabilityConfigurationFiles.add(
+        project.layout.projectDirectory.file("compose_compiler_config.conf")
+    )
 }
+
+tasks.register("buildAll") {
+    dependsOn("assembleGithubRelease", "bundlePlayRelease")
+    description = "Build GitHub APK and Play AAB"
+}
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -188,19 +176,33 @@ kotlin {
     }
 }
 
+// kotlin-reflect 只由 ktor-server-core 传递引入，用到它的只有按配置加载模块、开发模式热重载等用不到的路径。
+// 它在 classpath 上时 stdlib 的 Reflection 会 Class.forName 加载 ReflectionFactoryImpl，R8 因此保留整个实现（约 0.7MB dex）
 configurations.matching { it.name.endsWith("RuntimeClasspath") }.configureEach {
     exclude(group = "org.jetbrains.kotlin", module = "kotlin-reflect")
 }
 
+// Local JVM tests need the desktop native library instead of the Android AAR.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module("io.github.dokar3:quickjs-kt-android"))
+            .using(module("io.github.dokar3:quickjs-kt-jvm:${libs.versions.quickjs.get()}"))
+    }
+}
+
 dependencies {
+    implementation(libs.quickjs)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.work.runtime.ktx)
-    implementation(libs.androidx.media3.exoplayer)
-    implementation(libs.androidx.media3.common)
     implementation(libs.androidx.browser)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.termux.terminal.view) {
+        // terminal-emulator 由仓库内的 :terminal 模块提供, 不再引入上游 aar
+        exclude(group = "com.termux.termux-app", module = "terminal-emulator")
+    }
+    implementation(libs.guava.listenablefuture)
 
     // Compose
     implementation(libs.androidx.activity.compose)
@@ -211,23 +213,29 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material3.adaptive)
     implementation(libs.androidx.material3.adaptive.layout)
-    implementation(libs.androidx.material3.adaptive.navigation3)
+
     // Navigation 3
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+    implementation(libs.androidx.material3.adaptive.navigation3)
+
     // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
     implementation(libs.firebase.crashlytics)
 
-
     // DataStore
     implementation(libs.androidx.datastore.preferences)
+
+    // EXIF orientation for picked images
+    implementation(libs.androidx.exifinterface)
+
     // Image metadata extractor
     // https://github.com/drewnoakes/metadata-extractor
     implementation(libs.metadata.extractor)
-    // Haze (background blur)
+
+    // Haze (background blur and glass)
     implementation(libs.haze)
     implementation(libs.haze.blur)
     implementation(libs.haze.blur.material3)
@@ -239,25 +247,24 @@ dependencies {
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
     implementation(libs.koin.androidx.workmanager)
-    implementation(libs.diffutils)
-    implementation(libs.termux.terminal.view)
-    implementation(libs.guava.listenablefuture)
-    // jetbrains markdown parser
-    implementation(libs.jetbrains.markdown)
+
     // okhttp
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.retrofit)
     implementation(libs.retrofit.serialization.json)
+
     // ktor client
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
-    // ucrop
-    implementation(libs.ucrop)
+
     // pebble (template engine)
     implementation(libs.pebble)
+
+    // java-diff-utils (unified diff)
+    implementation(libs.diffutils)
 
     // coil
     implementation(libs.coil.compose)
@@ -265,22 +272,26 @@ dependencies {
     implementation(libs.coil.okhttp)
     implementation(libs.coil.svg)
     implementation(libs.coil.cache.control)
+
     // serialization
     implementation(libs.kotlinx.serialization.json)
-// QuickJS (JS 引擎执行; 原由 highlight 模块 api 传递, 上游重写 highlight 后需显式声明)
-    implementation(libs.quickjs)
 
     // YAML front matter
     implementation(libs.snakeyaml)
-    // zxing (qrcode)
+
+    // zxing + CameraX (qrcode scanner)
     implementation(libs.zxing.core)
-    implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.compose)
+
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.room.paging)
     baselineProfile(project(":app:baselineprofile"))
     ksp(libs.androidx.room.compiler)
+
     // Paging3
     implementation(libs.androidx.paging.runtime)
     implementation(libs.androidx.paging.compose)
@@ -296,24 +307,30 @@ dependencies {
     implementation(libs.reorderable)
 
     // icons
-    implementation(libs.lucide.icons)
     implementation(libs.huge.icons)
+
     // image viewer
     implementation(libs.image.viewer)
+
     // JLatexMath
     // https://github.com/rikkahub/jlatexmath-android
     implementation(libs.jlatexmath)
     implementation(libs.jlatexmath.font.greek)
     implementation(libs.jlatexmath.font.cyrillic)
+
     // mcp
     implementation(libs.modelcontextprotocol.kotlin.sdk)
+
     // jmDNS (mDNS/Bonjour for .local hostname)
     implementation(libs.jmdns)
+
     // SLF4J Android binding — routes Ktor/SLF4J logs to logcat
     implementation(libs.slf4j.api)
     implementation(libs.slf4j.android)
+
     // sqlite-android (requery SQLite for Android)
     implementation(libs.sqlite.android)
+
     // modules
     implementation(project(":ai"))
     implementation(project(":web"))
@@ -326,10 +343,13 @@ dependencies {
     implementation(project(":material3"))
     implementation(project(":ui"))
     implementation(project(":workspace"))
+    implementation(project(":terminal"))
     implementation(project(":oauth"))
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
+
     // Leak Canary
     // debugImplementation(libs.leakcanary.android)
+
     // tests
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -341,27 +361,3 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }
-
-// ── JS engine assets check ──
-// CI 通过 .github/workflows/build.yml 的 esbuild 步骤生成这些文件。
-// 本地开发时文件可能不存在，打印明确提示，不阻断构建。
-val jsEngines = listOf(
-    "qimen-engine.js", "ziwei-nihai.js", "iching-shifa-engine.js",
-    "taixuan-engine.js", "lunar-engine.js", "astronomy-engine.js",
-    "horoscope-engine.js", "kaabalah-engine.js", "caelus-engine.js",
-    "iztro-engine.js", "natalengine-engine.js", "node-jhora-engine.js"
-)
-tasks.register("checkJsEngines") {
-    doLast {
-        val assetsDir = layout.projectDirectory.dir("src/main/assets")
-        val missing = jsEngines.filter { !assetsDir.file(it).asFile.exists() }
-        if (missing.isNotEmpty()) {
-            logger.warn("⚠️  Missing JS engines (${missing.size}/${jsEngines.size}): ${missing.joinToString(", ")}")
-            logger.warn("    CI builds these via esbuild from npm packages. Local eval_javascript tool will fail until APK is built by CI.")
-            logger.warn("    To build locally: install npm + esbuild, then run CI steps manually or download prebuilt files from CI artifacts.")
-        } else {
-            logger.lifecycle("✅ All ${jsEngines.size} JS engines present in assets/")
-        }
-    }
-}
-tasks.named("preBuild") { dependsOn("checkJsEngines") }

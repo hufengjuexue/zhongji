@@ -32,7 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +40,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -61,11 +62,16 @@ import me.rerere.ui.components.RikkaConfirmDialog
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import kotlin.reflect.full.primaryConstructor
 
 @Composable
 fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val lazyListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val nav = LocalNavController.current
+    var showAddDialog by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<SearchServiceOptions?>(null) }
 
     Scaffold(
         topBar = {
@@ -77,11 +83,14 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
                     BackButton()
                 },
                 actions = {
-                    AddSearchProviderButton(onAdd = { options ->
-                        vm.updateSettings {
-                            it.copy(searchServices = listOf(options) + it.searchServices)
-                        }
-                    })
+                    IconButton(
+                        onClick = { showAddDialog = true }
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Add01,
+                            contentDescription = stringResource(R.string.setting_page_search_add_provider)
+                        )
+                    }
                 },
                 scrollBehavior = scrollBehavior,
                 colors = CustomColors.topBarColors
@@ -89,92 +98,78 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
         },
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor
-    ) { innerPadding ->
-        SearchServicesContent(vm = vm, contentPadding = innerPadding)
-    }
-}
+    ) {
+        val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+            val fromIndex = from.index
+            val toIndex = to.index
 
-@Composable
-internal fun AddSearchProviderButton(onAdd: (SearchServiceOptions) -> Unit) {
-    var showDialog by remember { mutableStateOf(false) }
-
-    IconButton(onClick = { showDialog = true }) {
-        Icon(
-            imageVector = HugeIcons.Add01,
-            contentDescription = stringResource(R.string.setting_page_search_add_provider)
-        )
-    }
-
-    if (showDialog) {
-        AddProviderDialog(
-            onDismiss = { showDialog = false },
-            onConfirm = { options ->
-                showDialog = false
-                onAdd(options)
-            }
-        )
-    }
-}
-
-@Composable
-internal fun SearchServicesContent(vm: SettingVM, contentPadding: PaddingValues) {
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    val lazyListState = rememberLazyListState()
-    val nav = LocalNavController.current
-    var deleteTarget by remember { mutableStateOf<SearchServiceOptions?>(null) }
-
-    val currentServices by rememberUpdatedState(settings.searchServices)
-    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val services = currentServices
-        if (from.index in services.indices && to.index in 0..services.size) {
-            val newServices = services.toMutableList().apply {
-                add(to.index, removeAt(from.index))
-            }
-            vm.updateSettings {
-                it.copy(searchServices = newServices)
+            if (fromIndex >= 0 && toIndex >= 0 && fromIndex < settings.searchServices.size && toIndex < settings.searchServices.size) {
+                val newServices = settings.searchServices.toMutableList().apply {
+                    add(toIndex, removeAt(fromIndex))
+                }
+                vm.updateSettings {
+                    it.copy(searchServices = newServices)
+                }
             }
         }
-    }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding(),
-        contentPadding = contentPadding + PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        state = lazyListState
-    ) {
-        items(settings.searchServices, key = { it.id }) { service ->
-            ReorderableItem(
-                state = reorderableState,
-                key = service.id
-            ) { isDragging ->
-                SearchProviderCard(
-                    service = service,
-                    onEdit = {
-                        nav.navigate(Screen.SettingSearchDetail(service.id.toString()))
-                    },
-                    onDelete = {
-                        deleteTarget = service
-                    },
-                    canDelete = settings.searchServices.size > 1,
-                    modifier = Modifier
-                        .animateItem()
-                        .then(longPressReorder(isDragging))
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding(),
+            contentPadding = it + PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            state = lazyListState
+        ) {
+            items(settings.searchServices, key = { it.id }) { service ->
+                ReorderableItem(
+                    state = reorderableState,
+                    key = service.id
+                ) { isDragging ->
+                    SearchProviderCard(
+                        service = service,
+                        onEdit = {
+                            nav.navigate(Screen.SettingSearchDetail(service.id.toString()))
+                        },
+                        onDelete = {
+                            deleteTarget = service
+                        },
+                        canDelete = settings.searchServices.size > 1,
+                        modifier = Modifier
+                            .animateItem()
+                            .then(longPressReorder(isDragging))
+                    )
+                }
+            }
+
+            item("common_options") {
+                CommonOptions(
+                    settings = settings,
+                    onUpdate = { options ->
+                        vm.updateSettings {
+                            it.copy(searchCommonOptions = options)
+                        }
+                    }
                 )
             }
         }
+    }
 
-        item("common_options") {
-            CommonOptions(
-                settings = settings,
-                onUpdate = { options ->
-                    vm.updateSettings {
-                        it.copy(searchCommonOptions = options)
-                    }
+    if (showAddDialog) {
+        AddProviderDialog(
+            onDismiss = { showAddDialog = false },
+            onConfirm = { options ->
+                showAddDialog = false
+                vm.updateSettings {
+                    it.copy(
+                        searchServices = listOf(options) + it.searchServices
+                    )
                 }
-            )
-        }
+                scope.launch {
+                    lazyListState.animateScrollToItem(0)
+                }
+            }
+        )
     }
 
     RikkaConfirmDialog(
@@ -255,7 +250,7 @@ private fun AddProviderDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val instance = selectedType.primaryConstructor!!.callBy(mapOf())
+                    val instance = SearchServiceOptions.FACTORIES.getValue(selectedType)()
                     onConfirm(instance)
                 }
             ) {

@@ -20,7 +20,7 @@ const val WEB_VIEW_ASSET_URL = "$WEB_VIEW_BASE_URL/assets"
 private const val ASSET_HOST = "rikkahub.local"
 private const val ASSET_PATH_PREFIX = "/assets/"
 
-object WebViewLocalAssets {
+internal object WebViewLocalAssets {
     fun intercept(context: Context, uri: Uri): WebResourceResponse? {
         if (!uri.host.equals(ASSET_HOST, ignoreCase = true)) return null
         val path = uri.path ?: return null

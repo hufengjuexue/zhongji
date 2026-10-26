@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import me.rerere.ui.toast.ToastType
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.ProviderSetting
-import me.rerere.ai.provider.pluginOwner
 import me.rerere.ai.provider.ProviderQuota
 import me.rerere.ai.provider.UsageWindow
 import me.rerere.ai.provider.supportsQuota
@@ -113,13 +112,7 @@ fun ProviderConfigure(
         }
 
         when (provider) {
-            // 插件带来的供应商：地址、密钥、路径都归插件管，界面上不露出来
-            is ProviderSetting.OpenAI -> if (provider.pluginOwner() != null) {
-                ProviderConfigurePlugin(provider, onEdit)
-            } else {
-                ProviderConfigureOpenAI(provider, onEdit)
-            }
-
+            is ProviderSetting.OpenAI -> ProviderConfigureOpenAI(provider, onEdit)
             is ProviderSetting.Google -> ProviderConfigureGoogle(provider, onEdit)
             is ProviderSetting.Claude -> ProviderConfigureClaude(provider, onEdit)
             is ProviderSetting.ChatGPT -> ProviderConfigureAccount(
@@ -138,17 +131,6 @@ fun ProviderConfigure(
                 disclaimer = stringResource(R.string.setting_provider_page_grok_disclaimer),
             )
         }
-    }
-}
-
-/** 插件供应商只留一个名字可改，其余字段都由插件声明。 */
-@Composable
-private fun ProviderConfigurePlugin(
-    provider: ProviderSetting,
-    onEdit: (provider: ProviderSetting) -> Unit
-) {
-    CardGroup {
-        nameItem(provider, onEdit)
     }
 }
 

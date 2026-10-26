@@ -21,14 +21,17 @@ Material 3 look (cards with dividers, plain forms).
 ## Build, Test, and Development Commands
 
 ```bash
-./gradlew assembleDebug          # 构建 Debug APK
+./gradlew assembleGithubDebug    # 构建 GitHub 渠道的 Debug APK
+./gradlew assembleGithubRelease  # 构建 GitHub Release / 每日构建用的 APK
+./gradlew bundlePlayRelease      # 构建上架 Google Play 的 AAB
 ./gradlew test                   # 运行所有模块的 JVM 单元测试
 ./gradlew lint                   # 运行 Android Lint
-python3 tools/generate_db_schema.py --check   # 校验 AppDatabaseSchema.kt / AppDatabaseLegacyMigrations.kt 与 schema JSON 一致
-python3 tools/verify_db_migrations.py         # 用 sqlite3 验证任意旧版本都能升到最新版
 ./gradlew spotlessApply          # 用 ktlint 格式化相对 origin/master 改动过的 Kotlin 文件
 ./gradlew spotlessCheck          # 只检查格式不改文件
 ```
+
+App 有一个 `distribution` 维度的 product flavor：`github`（默认）和 `play`，共用同一个 applicationId。
+渠道差异用 `BuildConfig.IS_PLAY_STORE` 判断（如 Play 版不检查更新、不显示更新提醒）。
 
 ## Module Structure
 
@@ -38,14 +41,16 @@ python3 tools/verify_db_migrations.py         # 用 sqlite3 验证任意旧版�
 - **document**: Document parsing module for handling PDF, DOCX, PPTX, and EPUB files
 - **highlight**: Code syntax highlighting implementation
 - **material3**: Material color utility extensions used by the app UI
-- **mediagen**: Media generation provider abstraction (image/video) used by the media creation feature
-- **oauth**: OAuth authorization helpers (loopback callback server, launcher, foreground service)
 - **ui**: Reusable Compose UI components that do not depend on app logic
 - **search**: Search functionality SDK for multiple providers (Exa, Tavily, Zhipu, Bing, Brave, SearXNG, and others)
 - **speech**: Speech module for TTS and ASR implementations
 - **web**: Embedded web server module that provides Ktor server startup function and hosts static frontend build files (
   built from web-ui/ React project)
 - **workspace**: Sandboxed per-workspace file system and shell execution environment exposed to the AI as tools.
+- **terminal**: Terminal emulator core taken from termux-app's `terminal-emulator` (package `com.termux.terminal`, kept
+  binary compatible with the `terminal-view` aar). `TerminalSession` runs over a `TerminalTransport`: local PRoot
+  terminals use `LocalPtyTransport`, SSH workspaces use the app's `SshTerminalTransport`. Origin and local changes are
+  listed in terminal/README.md.
 
 ## Concepts
 
@@ -78,18 +83,6 @@ python3 tools/verify_db_migrations.py         # 用 sqlite3 验证任意旧版�
   users to regenerate responses and switch between different conversation branches, creating a tree-like conversation
   structure. (app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt)
 
-- **Frontend Card Mode**: When a conversation's assistant was imported from a card containing HTML
-  frontend cards, the chat message area is rendered by a single WebView
-  (`ui/pages/chat/WebChatSurface.kt`, page loaded from `app/src/main/assets/webui/index.html`) instead of the
-  Compose `ChatList`; the top bar and chat input stay native. Mode resolution lives in
-  `ui/pages/chat/ChatPage.kt` (`resolveFrontendCardMode` + `FrontendCardMode.AUTO/ALWAYS/NEVER`, stored on the
-  assistant). The page gets a thin TavernHelper-style bridge (slash commands, sendMessage, variables,
-  message read/write) and only displays text already processed by the native pipeline (regex, macros, context
-  assembly). Non-frontend conversations keep the original per-message embedded rendering. (
-  app/src/main/java/me/rerere/rikkahub/ui/pages/chat/WebChatSurface.kt,
-  app/src/main/java/me/rerere/rikkahub/data/model/Assistant.kt,
-  app/src/main/assets/webui/)
-
 - **Message Transformer**: A pipeline mechanism for transforming messages before sending to AI providers (
   InputMessageTransformer) or after receiving responses (OutputMessageTransformer). Transformers can modify message
   content, add metadata, apply templates, handle special tags, convert formats, and perform OCR. Common transformers
@@ -113,4 +106,4 @@ python3 tools/verify_db_migrations.py         # 用 sqlite3 验证任意旧版�
 - Page-specific strings should use page prefix (e.g., `setting_page_`)
 - If the user does not explicitly request localization, prioritize implementing functionality without considering
   localization. (e.g `Text("Hello world")`)
-- For `locale-tui` operations, use the `locale-tui-localization` skill.
+- Add, translate or clean up strings with the `tools/i18n` CLI (Bun); see the `i18n-localization` skill.

@@ -1,8 +1,6 @@
 package me.rerere.rikkahub.di
 
 import android.content.Context
-import androidx.room.Room
-import androidx.room.RoomDatabase
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import io.ktor.client.HttpClient
@@ -18,15 +16,10 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.data.ai.AIRequestInterceptor
 import me.rerere.rikkahub.data.ai.ConversationMetaGenerator
-import me.rerere.rikkahub.data.ai.GenerationLoop
 import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
 import me.rerere.rikkahub.data.ai.MemoryConsolidator
 import me.rerere.rikkahub.data.ai.RequestLoggingInterceptor
 import me.rerere.rikkahub.data.ai.TranslationHandler
-import androidx.sqlite.db.SupportSQLiteDatabase
-import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
-import io.requery.android.database.sqlite.SQLiteCustomExtension
-import me.rerere.rikkahub.data.db.migrations.AppDatabaseMigrations
 import me.rerere.rikkahub.data.ai.UsageRecorder
 import me.rerere.rikkahub.data.ai.account.ProviderAccountManager
 import me.rerere.rikkahub.data.ai.mcp.McpManager
@@ -36,6 +29,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.AppDatabaseFactory
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
+import me.rerere.rikkahub.data.remote.ModelsDevUpdater
 import me.rerere.rikkahub.data.remote.RemoteFileStore
 import me.rerere.rikkahub.data.remote.RikkaHubAPI
 import me.rerere.rikkahub.data.remote.SettingsProxyAuthenticator
@@ -44,12 +38,9 @@ import me.rerere.rikkahub.data.remote.SettingsSocks5Authenticator
 import me.rerere.rikkahub.data.remote.SponsorAPI
 import me.rerere.rikkahub.data.sync.BackupManager
 import me.rerere.rikkahub.data.sync.S3Sync
-import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.sync.webdav.WebDavSync
 import me.rerere.rikkahub.service.memoryDreamKeepAlive
 import me.rerere.search.SearchService
-import me.rerere.workspace.ProotShellRunner
-import me.rerere.workspace.WorkspaceBindMount
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -67,45 +58,7 @@ val dataSourceModule = module {
 
     single {
         val context: Context = get()
-        Room.databaseBuilder(context, AppDatabase::class.java, "rikka_hub")
-            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            // 从更高版本回退安装时库版本会高于本版 schema，清库重建而不是直接崩
-            .fallbackToDestructiveMigrationOnDowngrade(true)
-            // 迁移链与备份恢复用的 AppDatabaseFactory 取自同一份 AppDatabaseMigrations.HANDWRITTEN，
-            // 不再两处各写一份列表（历史上补链只补一处，导致恢复旧备份报 migration not found）
-            .addMigrations(*AppDatabaseMigrations.HANDWRITTEN)
-            .addCallback(object : RoomDatabase.Callback() {
-                override fun onOpen(db: SupportSQLiteDatabase) {
-                    java.io.File(context.filesDir, "simple_dict").takeIf { it.exists() }?.deleteRecursively()
-                    db.execSQL(
-                        """
-                        CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-                            text,
-                            node_id UNINDEXED,
-                            message_id UNINDEXED,
-                            conversation_id UNINDEXED,
-                            title UNINDEXED,
-                            update_at UNINDEXED,
-                            tokenize = 'simple'
-                        )
-                        """.trimIndent()
-                    )
-                }
-            })
-            .openHelperFactory(
-                RequerySQLiteOpenHelperFactory(
-                    listOf(
-                RequerySQLiteOpenHelperFactory.ConfigurationOptions { options ->
-                    options.customExtensions.add(
-                        SQLiteCustomExtension(
-                            context.applicationInfo.nativeLibraryDir + "/libsimple",
-                            null
-                        )
-                    )
-                    options
-                }
-            )))
-            .build()
+        AppDatabaseFactory.create(context)
     }
 
     single {
@@ -165,58 +118,11 @@ val dataSourceModule = module {
     }
 
     single {
-        get<AppDatabase>().coupleDao()
-    }
-
-    single {
         get<AppDatabase>().mediaCreationDao()
     }
 
     single {
         get<AppDatabase>().translationHistoryDao()
-    }
-
-    single {
-        val ctx: android.content.Context = get()
-        me.rerere.workspace.WorkspaceManager(
-            baseDir = java.io.File(ctx.filesDir, "workspaces"),
-            shellRunner = ProotShellRunner(
-                nativeLibraryDir = java.io.File(ctx.applicationInfo.nativeLibraryDir),
-            ),
-            bindMounts = listOf(
-                WorkspaceBindMount(
-                    source = java.io.File(ctx.filesDir, FileFolders.SKILLS).apply { mkdirs() },
-                    target = "/skills",
-                ),
-                WorkspaceBindMount(
-                    source = java.io.File(ctx.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
-                    target = "/tool_outputs",
-                ),
-                WorkspaceBindMount(
-                    source = java.io.File(ctx.filesDir, FileFolders.UPLOAD).apply { mkdirs() },
-                    target = "/upload",
-                ),
-            ),
-        )
-    }
-
-    single {
-        me.rerere.workspace.RootfsInstaller(
-            manager = get(),
-        )
-    }
-
-    single {
-        me.rerere.rikkahub.data.repository.WorkspaceRepository(
-            dao = get(),
-            manager = get(),
-            rootfsInstaller = get(),
-            settingsStore = get(),
-        )
-    }
-
-    single {
-        me.rerere.rikkahub.data.repository.FolderRepository(get(), get())
     }
 
     single {
@@ -232,27 +138,6 @@ val dataSourceModule = module {
     }
 
     single { McpManager(settingsStore = get(), appScope = get(), filesManager = get()) }
-
-    single {
-        me.rerere.rikkahub.data.memory.CrossWindowMemoryStore(get())
-    }
-
-    single {
-        me.rerere.rikkahub.data.ai.transformers.CrossWindowMemoryTransformer(
-            store = get(),
-        )
-    }
-
-    single {
-        GenerationLoop(
-            context = get(),
-            providerManager = get(),
-            json = get(),
-            memoryRepo = get(),
-            conversationRepo = get(),
-            pluginToolProvider = get(),
-        )
-    }
 
     single {
         MemoryConsolidator(
@@ -302,7 +187,6 @@ val dataSourceModule = module {
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.MINUTES)
             .writeTimeout(120, TimeUnit.SECONDS)
-            .pingInterval(30, TimeUnit.SECONDS) // HTTP/2 PING 保活长连接事件流（移植自 Rikkahub-Revised）
             .followSslRedirects(true)
             .followRedirects(true)
             .retryOnConnectionFailure(true)
@@ -326,15 +210,6 @@ val dataSourceModule = module {
                         .trim()
                         .ifEmpty { "RikkaHub-Android/${BuildConfig.VERSION_NAME}" }
                     requestBuilder.addHeader(HttpHeaders.UserAgent, userAgent)
-                }
-
-                // SSE 事件流：禁用缓存与压缩，避免代理缓冲破坏流式输出（移植自 Rikkahub-Revised）
-                if (originalRequest.header(HttpHeaders.Accept)
-                        ?.contains("text/event-stream", ignoreCase = true) == true
-                ) {
-                    requestBuilder
-                        .header(HttpHeaders.CacheControl, "no-cache")
-                        .header(HttpHeaders.AcceptEncoding, "identity")
                 }
 
                 chain.proceed(requestBuilder.build())
@@ -368,6 +243,10 @@ val dataSourceModule = module {
 
     single {
         SponsorAPI.create(get())
+    }
+
+    single {
+        ModelsDevUpdater(context = get(), client = get())
     }
 
     single {

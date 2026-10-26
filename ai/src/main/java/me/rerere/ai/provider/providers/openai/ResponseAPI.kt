@@ -108,7 +108,7 @@ class ResponseAPI(
         capabilities = resolveResponseProviderCapabilities(baseUrl.toHttpUrl().host),
         configureRequest = {
             headers(mergeCustomHeaders(params.customHeaders))
-            addHeader("Authorization", "Bearer ${keyRoulette.next(apiKey, id.toString(), params.sessionId)}")
+            addHeader("Authorization", "Bearer ${keyRoulette.next(apiKey, id.toString())}")
             configureReferHeaders(baseUrl)
             configureSessionHeaders(baseUrl, params.sessionId)
         },
@@ -245,41 +245,30 @@ class ResponseAPI(
                 if (isModelAllowTemperature(params.model)) {
                     if (params.temperature != null) put("temperature", params.temperature)
                     if (params.topP != null) put("top_p", params.topP)
-                    if (params.topK != null) put("top_k", params.topK)
                 }
                 if (params.maxTokens != null) put("max_output_tokens", params.maxTokens)
             }
 
             // system instructions
-            // 防空回复（systemPromptInChat）：系统提示词由 buildMessages 进对话流，不放 instructions。
-            // 首条 SYSTEM 以原始列表为准，与 buildMessages 的跳过指向同一条消息
-            val firstSystemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
+            val systemPrompt = messages.firstOrNull { it.role == MessageRole.SYSTEM }
+                ?.parts?.filterIsInstance<UIMessagePart.Text>()?.joinToString("\n") { it.text }
             val systemRole = capabilities.systemMessageRole
-            if (firstSystemMessage != null && systemRole == null && !params.systemPromptInChat) {
-                put(
-                    "instructions",
-                    firstSystemMessage.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
-                )
-            }
+            if (systemPrompt != null && systemRole == null) put("instructions", systemPrompt)
 
             // messages
             putJsonArray("input") {
-                if (firstSystemMessage != null && systemRole != null && !params.systemPromptInChat) {
+                if (!systemPrompt.isNullOrEmpty() && systemRole != null) {
                     add(buildJsonObject {
                         put("role", systemRole)
-                        put(
-                            "content",
-                            firstSystemMessage.parts.filterIsInstance<UIMessagePart.Text>()
-                                .joinToString("\n") { it.text }
-                        )
+                        put("content", systemPrompt)
                     })
                 }
-                buildMessages(messages, params.systemPromptInChat, firstSystemMessage).forEach { add(it) }
+                buildMessages(messages).forEach { add(it) }
             }
 
             // reasoning
             val reasoningModel = params.model.abilities.contains(ModelAbility.REASONING)
-            if (reasoningModel && !params.disableReasoning) {
+            if (reasoningModel) {
                 val reasoning = buildJsonObject {
                     if (capabilities.supportsReasoningSummary) {
                         put("summary", "auto")
@@ -346,41 +335,17 @@ class ResponseAPI(
         }.mergeCustomBody(params.customBody)
     }
 
-    internal fun buildMessages(
-        messages: List<UIMessage>,
-        systemPromptInChat: Boolean = false,
-        firstSystemMessage: UIMessage? = null,
-    ) = buildJsonArray {
-        var ackInserted = false
+    internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
         messages
             .filter { message ->
-                message.isValidToUpload() || message.parts.any { part ->
-                    part is UIMessagePart.Reasoning &&
-                        part.metadataAs<OpenAIReasoningMetadata>()?.encryptedContent != null
-                }
+                message.role != MessageRole.SYSTEM && (
+                    message.isValidToUpload() || message.parts.any { part ->
+                        part is UIMessagePart.Reasoning &&
+                            part.metadataAs<OpenAIReasoningMetadata>()?.encryptedContent != null
+                    }
+                    )
             }
             .forEach { message ->
-                if (message.role == MessageRole.SYSTEM) {
-                    if (!systemPromptInChat) {
-                        // 默认路径：首条 system（按原始列表判定的同一条消息）已放进顶层
-                        // instructions，跳过避免重复；中部 SYSTEM（记忆注入/userContext/
-                        // 世界书等）原位保留 system item
-                        // （曾随防空回复改造被整体丢弃，导致注入静默失效）
-                        if (message === firstSystemMessage) {
-                            return@forEach
-                        }
-                        addContentItem(MessageRole.SYSTEM, message.parts.filterIsInstance<UIMessagePart.Text>())
-                        return@forEach
-                    }
-                    // 防空回复：SYSTEM 消息原位转 user 轮（世界书等深度注入位置不变），
-                    // 首个系统块后跟一条假 assistant 确认轮
-                    addContentItem(MessageRole.USER, message.parts.filterIsInstance<UIMessagePart.Text>())
-                    if (!ackInserted) {
-                        ackInserted = true
-                        addContentItem(MessageRole.ASSISTANT, listOf(UIMessagePart.Text("Understood.")))
-                    }
-                    return@forEach
-                }
                 if (message.role == MessageRole.ASSISTANT) {
                     addAssistantItems(message)
                 } else {
@@ -589,7 +554,7 @@ class ResponseAPI(
                         when (part) {
                             is UIMessagePart.Text -> {
                                 add(buildJsonObject {
-                                    put("type", if (role == MessageRole.ASSISTANT) "output_text" else "input_text")
+                                    put("type", if (role == MessageRole.USER) "input_text" else "output_text")
                                     put("text", part.text)
                                 })
                             }

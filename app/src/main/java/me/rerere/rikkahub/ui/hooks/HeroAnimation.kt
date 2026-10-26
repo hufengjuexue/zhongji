@@ -1,8 +1,6 @@
 package me.rerere.rikkahub.ui.hooks
 
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,14 +18,7 @@ fun Modifier.heroAnimation(
     return with(sharedTransitionScope) {
         this@heroAnimation.sharedElement(
             sharedContentState = rememberSharedContentState(key),
-            animatedVisibilityScope = animatedVisibilityScope,
-            // 位置与尺寸都用弹簧过渡，否则转场期间会直接跳变到目标尺寸
-            boundsTransform = { _, _ ->
-                spring(
-                    dampingRatio = Spring.DampingRatioLowBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                )
-            },
+            animatedVisibilityScope = animatedVisibilityScope
         )
     }
 }
@@ -52,4 +43,3 @@ fun Modifier.heroContainer(
         )
     }
 }
-

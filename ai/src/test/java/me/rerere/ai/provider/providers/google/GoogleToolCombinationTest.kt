@@ -175,14 +175,9 @@ class GoogleToolCombinationTest {
     }
 
     private fun invokeBuildContents(messages: List<UIMessage>): JsonArray {
-        val method = GoogleProvider::class.java.getDeclaredMethod(
-            "buildContents",
-            List::class.java,
-            Boolean::class.java,
-            Boolean::class.java,
-        )
+        val method = GoogleProvider::class.java.getDeclaredMethod("buildContents", List::class.java)
         method.isAccessible = true
-        return method.invoke(provider, messages, false, false) as JsonArray
+        return method.invoke(provider, messages) as JsonArray
     }
 
     private fun toolModel(tools: Set<BuiltInTools> = emptySet()) = Model(

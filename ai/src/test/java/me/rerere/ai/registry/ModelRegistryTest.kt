@@ -103,6 +103,23 @@ class ModelRegistryTest {
     }
 
     @Test
+    fun testMagnitudeNotVersion() {
+        val textInput = listOf(Modality.TEXT)
+        val visionInput = listOf(Modality.TEXT, Modality.IMAGE)
+        // 8b 是参数量，不能当成 qwen 3.8
+        assertEquals(textInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen3-8b"))
+        assertEquals(textInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen3-30b-a3b"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen3-vl-8b-instruct"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen3.8-plus"))
+        // 3b 不能让 qwen2.5 命中 qwen 3
+        assertEquals(emptyList<ModelAbility>(), ModelRegistry.MODEL_ABILITIES.getData("qwen2.5-3b-instruct"))
+        assertEquals(
+            listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ModelRegistry.MODEL_ABILITIES.getData("qwen3-8b")
+        )
+    }
+
+    @Test
     fun testOpenAIOModels() {
         assertTrue(ModelRegistry.OPENAI_O_MODELS.match("o1"))
         assertTrue(ModelRegistry.OPENAI_O_MODELS.match("o3-mini"))
@@ -167,6 +184,16 @@ class ModelRegistryTest {
         assertEquals(1_000_000, ModelRegistry.MODEL_CONTEXT_LENGTH.getData("deepseek-v4-pro"))
         assertEquals(1_000_000, ModelRegistry.MODEL_CONTEXT_LENGTH.getData("deepseek-v4-flash-vision-exp"))
         assertEquals(null, ModelRegistry.MODEL_CONTEXT_LENGTH.getData("deepseek-v3"))
+    }
+
+    @Test
+    fun testStep5() {
+        val visionInput = listOf(Modality.TEXT, Modality.IMAGE)
+        val toolReasoning = listOf(ModelAbility.TOOL, ModelAbility.REASONING)
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("step-5"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("step-5-preview"))
+        assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("step-5"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("step-3"))
     }
 
     @Test

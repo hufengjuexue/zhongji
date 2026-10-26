@@ -1,7 +1,5 @@
 package me.rerere.rikkahub.ui.components.ai
 
-import android.os.Build
-import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -22,7 +20,11 @@ import me.rerere.rikkahub.data.datastore.BackgroundEffectType
 import me.rerere.rikkahub.data.datastore.DisplaySetting
 import me.rerere.rikkahub.ui.theme.LocalDarkMode
 
-// 输入框容器的背景效果（模糊或玻璃），未开启时原样返回。
+/**
+ * 输入框容器的背景效果（模糊或玻璃），未开启时原样返回。
+ *
+ * 开启后容器本身需要保持透明，[containerColor] 由效果负责铺底和着色。
+ */
 @Composable
 internal fun Modifier.chatInputHaze(
     hazeState: HazeState,
@@ -31,23 +33,21 @@ internal fun Modifier.chatInputHaze(
     shape: RoundedCornerShape,
 ): Modifier {
     if (!displaySetting.enableBlurEffect) return this
-    // 版本门禁：haze-glass 内部走 RuntimeShader（API 33
     return when (displaySetting.backgroundEffectType) {
-        BackgroundEffectType.BLUR -> if (Build.VERSION.SDK_INT >= 31) hazeBlur(
+        BackgroundEffectType.BLUR -> hazeBlur(
             input = HazeInput.Sources(hazeState),
             style = HazeBlurStyle.Material3 {
                 blurRadius(12.dp)
             },
-        ) else this
+        )
 
-        BackgroundEffectType.GLASS -> if (Build.VERSION.SDK_INT >= 33) {
+        BackgroundEffectType.GLASS -> {
             val darkMode = LocalDarkMode.current
             hazeGlass(
                 input = HazeInput.Sources(hazeState),
                 style = GlassStyle.Material3(
                     containerColor = containerColor,
-                    // 透明度由「输入框效果」里的滑块控制，下限保证文字可读
-                    tint = containerColor.copy(alpha = displaySetting.inputEffectAlpha.coerceIn(0.1f, 1f)),
+                    tint = containerColor.copy(alpha = 0.3f),
                 ) {
                     appearanceResponse(dark = darkMode)
                     // Keep background text from competing with the input text.
@@ -60,20 +60,12 @@ internal fun Modifier.chatInputHaze(
                     shape(shape)
                 },
             )
-        } else if (Build.VERSION.SDK_INT >= 31) {
-            hazeBlur(
-                input = HazeInput.Sources(hazeState),
-                style = HazeBlurStyle.Material3 {
-                    blurRadius(12.dp)
-                },
-            )
-        } else {
-            this
         }
     }
 }
 
-// Haze 按系统夜间模式选玻璃的明暗预设
+// Haze 按系统夜间模式选玻璃的明暗预设，应用内单独设置主题时会选错（深色主题下被提亮发白），
+// 所以按应用主题显式写入。深色数值对应库里 internal 的 GlassStyle.regularDark。
 private fun GlassStyleScope.appearanceResponse(dark: Boolean) {
     if (dark) {
         specularIntensity(0.38f)

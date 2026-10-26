@@ -97,16 +97,11 @@ class InteractionsApiTest {
 
     @Test
     fun `reasoning level maps to thinking level only`() {
-        fun thinkingLevel(
-            modelId: String,
-            level: ReasoningLevel,
-            disableReasoning: Boolean = false,
-        ) = api.buildRequestBody(
+        fun thinkingLevel(modelId: String, level: ReasoningLevel) = api.buildRequestBody(
             messages = listOf(UIMessage.user("hi")),
             params = TextGenerationParams(
                 model = Model(modelId = modelId, abilities = listOf(ModelAbility.REASONING)),
                 reasoningLevel = level,
-                disableReasoning = disableReasoning,
             ),
             stream = false,
         )["generation_config"]!!.jsonObject["thinking_level"]?.jsonPrimitive?.content
@@ -115,9 +110,6 @@ class InteractionsApiTest {
         assertEquals("minimal", thinkingLevel("gemini-3-flash-preview", ReasoningLevel.OFF))
         assertEquals("low", thinkingLevel("gemini-2.5-flash", ReasoningLevel.OFF))
         assertEquals("high", thinkingLevel("gemini-2.5-pro", ReasoningLevel.XHIGH))
-        // 酒馆模式强制关闭：档位是 AUTO 也必须显式下发关闭，省略参数会被服务端默认开启
-        assertEquals("minimal", thinkingLevel("gemini-3-flash-preview", ReasoningLevel.AUTO, disableReasoning = true))
-        assertEquals("low", thinkingLevel("gemini-2.5-flash", ReasoningLevel.AUTO, disableReasoning = true))
     }
 
     @Test

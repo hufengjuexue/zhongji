@@ -34,21 +34,6 @@ object SkillFrontmatterParser {
         return content.substring(endRange.last + 1).trimStart('\r', '\n')
     }
 
-    fun parseAllowedTools(raw: String?): List<String>? {
-        if (raw.isNullOrBlank()) return null
-        val trimmed = raw.trim()
-        return if (trimmed.startsWith("[")) {
-            trimmed.removeSurrounding("[", "]")
-                .split(",")
-                .map { it.trim().removeSurrounding("\"").removeSurrounding("'") }
-                .filter { it.isNotBlank() }
-        } else {
-            trimmed.split(",")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-        }.map { it.split("(").first().trim() }
-    }
-
     /** 把 [values] 写成 frontmatter 接在 [body] 前面，[parse] 和 [extractBody] 能原样读回来 */
     fun compose(values: Map<String, Any?>, body: String): String = buildString {
         append("---\n")

@@ -4,37 +4,35 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import me.rerere.rikkahub.data.db.fts.createMessageFtsTables
+import me.rerere.rikkahub.data.db.migrations.Migration_11_12
+import me.rerere.rikkahub.data.db.migrations.Migration_13_14
+import me.rerere.rikkahub.data.db.migrations.Migration_14_15
+import me.rerere.rikkahub.data.db.migrations.Migration_15_16
+import me.rerere.rikkahub.data.db.migrations.Migration_27_28
+import me.rerere.rikkahub.data.db.migrations.Migration_30_31
+import me.rerere.rikkahub.data.db.migrations.Migration_6_7
 import java.io.File
-import me.rerere.rikkahub.data.db.migrations.AppDatabaseMigrations
 
 /** Shared schema, migrations and extensions for the app and staged backup validation. */
 internal object AppDatabaseFactory {
     fun create(context: Context, name: String = SQLiteConfiguration.DATABASE_NAME): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, name)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            // 从更高版本回退安装时库版本会高于本版 schema，清库重建而不是直接崩
-            .fallbackToDestructiveMigrationOnDowngrade(true)
-            // 迁移链必须与 DataSourceModule 的主库 builder 完全一致：两处都取自
-            // AppDatabaseMigrations.HANDWRITTEN。这里也用于备份恢复的暂存库校验
-            // （BackupManager.stageRestore），缺迁移会导致恢复旧版本备份时报
-            // "migration not found"（曾缺 24→30、31→32）
-            .addMigrations(*AppDatabaseMigrations.HANDWRITTEN)
+            .addMigrations(
+                Migration_6_7,
+                Migration_11_12,
+                Migration_13_14,
+                Migration_14_15,
+                Migration_15_16,
+                Migration_27_28,
+                Migration_30_31,
+            )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
+                    // 旧版本搜索用 jieba 分词，会把词典解压到这里（约 14MB），现在不再需要
                     File(context.filesDir, "simple_dict").takeIf { it.exists() }?.deleteRecursively()
-                    db.execSQL(
-                        """
-                        CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-                            text,
-                            node_id UNINDEXED,
-                            message_id UNINDEXED,
-                            conversation_id UNINDEXED,
-                            title UNINDEXED,
-                            update_at UNINDEXED,
-                            tokenize = 'simple'
-                        )
-                        """.trimIndent()
-                    )
+                    createMessageFtsTables(db)
                 }
             })
             .openHelperFactory(SQLiteConfiguration.openHelperFactory(context))

@@ -103,7 +103,7 @@ class MemoryFileToolUI(override val toolName: String) : ToolUIRenderer {
     @Composable
     override fun title(context: ToolUIContext): String =
         memoryToolTitle(toolName, context.arguments)
-            ?: stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(toolName))
+            ?: stringResource(R.string.chat_message_tool_call_generic, toolName)
 
     // memory_read 的 path 是数组, 其余工具是单个路径
     private fun paths(context: ToolUIContext): List<String> =
@@ -319,7 +319,7 @@ object ClipboardToolUI : ToolUIRenderer {
         when (context.arguments.getStringContent("action")) {
             ACTION_READ -> stringResource(R.string.chat_message_tool_clipboard_read)
             ACTION_WRITE -> stringResource(R.string.chat_message_tool_clipboard_write)
-            else -> stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(toolName))
+            else -> stringResource(R.string.chat_message_tool_call_generic, toolName)
         }
 }
 
@@ -821,7 +821,7 @@ private fun SearchWebPreview(
         }
 
         if (items.isNotEmpty()) {
-            items(items, key = { it.getStringContent("url") ?: it.hashCode().toString() }) { item ->
+            items(items) { item ->
                 val url = item.getStringContent("url") ?: return@items
                 val title = item.getStringContent("title") ?: return@items
                 val text = item.getStringContent("text") ?: return@items
@@ -911,7 +911,7 @@ private fun ScrapeWebPreview(content: JsonElement) {
             )
         }
 
-        items(urls, key = { it.jsonObject["url"]?.jsonPrimitive?.content ?: it.hashCode().toString() }) { url ->
+        items(urls) { url ->
             val urlObject = url.jsonObject
             Column(
                 modifier = Modifier.fillMaxWidth(),

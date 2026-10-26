@@ -14,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -22,12 +21,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -165,9 +162,7 @@ internal fun AssistantBasicContent(
                     onValueChange = {
                         onUpdate(
                             assistant.copy(
-                                name = it,
-                                // 同步角色卡名称，保证改名后导出仍是修改后的名字
-                                tavernData = assistant.tavernData?.copy(name = it),
+                                name = it
                             )
                         )
                     },
@@ -204,29 +199,6 @@ internal fun AssistantBasicContent(
                     modifier = Modifier.fillMaxWidth(),
                     optionToString = { workspace ->
                         workspace?.name ?: stringResource(R.string.workspace_no_binding)
-                    },
-                )
-            }
-            formItem(
-                headlineContent = { Text(stringResource(R.string.huadeng_frontend_card_mode)) },
-                supportingContent = { Text(stringResource(R.string.huadeng_frontend_card_mode_desc)) },
-            ) {
-                Select(
-                    options = me.rerere.rikkahub.data.model.FrontendCardMode.entries,
-                    selectedOption = assistant.frontendCardMode,
-                    onOptionSelected = { onUpdate(assistant.copy(frontendCardMode = it)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    optionToString = {
-                        when (it) {
-                            me.rerere.rikkahub.data.model.FrontendCardMode.AUTO ->
-                                stringResource(R.string.huadeng_frontend_card_mode_auto)
-
-                            me.rerere.rikkahub.data.model.FrontendCardMode.ALWAYS ->
-                                stringResource(R.string.huadeng_frontend_card_mode_always)
-
-                            me.rerere.rikkahub.data.model.FrontendCardMode.NEVER ->
-                                stringResource(R.string.huadeng_frontend_card_mode_never)
-                        }
                     },
                 )
             }
@@ -367,50 +339,6 @@ internal fun AssistantBasicContent(
                 }
             }
             formItem(
-                headlineContent = { Text(stringResource(R.string.assistant_page_top_k)) },
-                supportingContent = { Text(stringResource(R.string.assistant_page_top_k_warning)) },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.topK != null,
-                        onCheckedChange = { enabled ->
-                            onUpdate(
-                                assistant.copy(
-                                    topK = if (enabled) 40 else null
-                                )
-                            )
-                        }
-                    )
-                }
-            ) {
-                AnimatedVisibility(visible = assistant.topK != null) {
-                    var topKInput by remember(assistant.id) {
-                        mutableStateOf(assistant.topK.toString())
-                    }
-                    val topKValue = topKInput.toIntOrNull()
-                    OutlinedTextField(
-                        value = topKInput,
-                        onValueChange = { value ->
-                            val digits = value.filter { it.isDigit() }
-                            topKInput = digits
-                            digits.toIntOrNull()?.takeIf { it in 1..200 }?.let { topK ->
-                                onUpdate(
-                                    assistant.copy(
-                                        topK = topK
-                                    )
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        isError = topKValue == null || topKValue !in 1..200,
-                        supportingText = {
-                            Text("1 - 200")
-                        }
-                    )
-                }
-            }
-            formItem(
                 headlineContent = { Text(stringResource(R.string.assistant_page_context_message_limit)) },
                 supportingContent = { Text(stringResource(R.string.assistant_page_context_message_limit_desc)) },
             ) {
@@ -423,9 +351,6 @@ internal fun AssistantBasicContent(
                 var contextMessageLimitFocused by remember(assistant.id) {
                     mutableStateOf(false)
                 }
-                var showContextMessageLimitDialog by remember(assistant.id) {
-                    mutableStateOf(false)
-                }
                 val focusManager = LocalFocusManager.current
 
                 fun commitContextMessageLimit() {
@@ -435,17 +360,12 @@ internal fun AssistantBasicContent(
                         return
                     }
 
-                    val normalizedValue = normalizeContextMessageLimit(value)
-                    contextMessageLimitInput = normalizedValue.toString()
-                    if (normalizedValue != assistant.contextMessageLimit) {
-                        onUpdate(assistant.copy(contextMessageLimit = normalizedValue))
-                    }
-                    if (normalizedValue != value) {
-                        showContextMessageLimitDialog = true
+                    contextMessageLimitInput = value.toString()
+                    if (value != assistant.contextMessageLimit) {
+                        onUpdate(assistant.copy(contextMessageLimit = value))
                     }
                 }
 
-                val contextMessageLimitValue = contextMessageLimitInput.toIntOrNull()
                 OutlinedTextField(
                     value = contextMessageLimitInput,
                     onValueChange = { input ->
@@ -454,7 +374,6 @@ internal fun AssistantBasicContent(
                         ) {
                             contextMessageLimitInput = input
                             input.toIntOrNull()
-                                ?.takeIf { it == 0 || it >= MIN_CONTEXT_MESSAGE_LIMIT }
                                 ?.takeIf { it != assistant.contextMessageLimit }
                                 ?.let { onUpdate(assistant.copy(contextMessageLimit = it)) }
                         }
@@ -475,38 +394,12 @@ internal fun AssistantBasicContent(
                         onDone = { focusManager.clearFocus() }
                     ),
                     singleLine = true,
-                    isError = contextMessageLimitValue in 1 until MIN_CONTEXT_MESSAGE_LIMIT,
                     supportingText = {
                         Text(
-                            stringResource(
-                                R.string.assistant_page_context_message_limit_hint,
-                                MIN_CONTEXT_MESSAGE_LIMIT
-                            )
+                            stringResource(R.string.assistant_page_context_message_limit_hint)
                         )
                     }
                 )
-
-                if (showContextMessageLimitDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showContextMessageLimitDialog = false },
-                        title = {
-                            Text(stringResource(R.string.assistant_page_context_message_limit))
-                        },
-                        text = {
-                            Text(
-                                stringResource(
-                                    R.string.assistant_page_context_message_limit_too_small,
-                                    MIN_CONTEXT_MESSAGE_LIMIT
-                                )
-                            )
-                        },
-                        confirmButton = {
-                            TextButton(onClick = { showContextMessageLimitDialog = false }) {
-                                Text(stringResource(R.string.common_confirm))
-                            }
-                        }
-                    )
-                }
 
                 if (assistant.contextMessageLimit > 0) {
                     Text(
@@ -598,14 +491,12 @@ internal fun AssistantBasicContent(
                         )
                     },
                 ) {
-                    var localOpacity by remember { mutableFloatStateOf(backgroundOpacity) }
                     Slider(
-                        value = localOpacity,
-                        onValueChange = { localOpacity = it },
-                        onValueChangeFinished = {
+                        value = backgroundOpacity,
+                        onValueChange = {
                             onUpdate(
                                 assistant.copy(
-                                    backgroundOpacity = localOpacity.toFixed(2).toFloatOrNull()?.coerceIn(0f, 1f) ?: 1.0f
+                                    backgroundOpacity = it.toFixed(2).toFloatOrNull()?.coerceIn(0f, 1f) ?: 1.0f
                                 )
                             )
                         },
@@ -618,9 +509,3 @@ internal fun AssistantBasicContent(
         }
     }
 }
-
-// 上下文限制的最小有效值
-private const val MIN_CONTEXT_MESSAGE_LIMIT = 20
-
-internal fun normalizeContextMessageLimit(value: Int): Int =
-    if (value in 1 until MIN_CONTEXT_MESSAGE_LIMIT) MIN_CONTEXT_MESSAGE_LIMIT else value

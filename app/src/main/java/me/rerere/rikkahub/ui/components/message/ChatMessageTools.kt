@@ -5,189 +5,68 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.util.fastForEach
-import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonElement
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.common.http.jsonObjectOrNull
-import me.rerere.highlight.CodeHighlightText
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.Add01
-import me.rerere.hugeicons.stroke.AiMagic
-import me.rerere.hugeicons.stroke.AiSearch02
-import me.rerere.hugeicons.stroke.ArrowRight01
-import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.BubbleChatQuestion
 import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.Clipboard
-import me.rerere.hugeicons.stroke.Code
-import me.rerere.hugeicons.stroke.Copy01
-import me.rerere.hugeicons.stroke.Delete01
-import me.rerere.hugeicons.stroke.Delete02
-import me.rerere.hugeicons.stroke.Download04
-import me.rerere.hugeicons.stroke.Eraser
-import me.rerere.hugeicons.stroke.Folder01
-import me.rerere.hugeicons.stroke.GlobalSearch
-import me.rerere.hugeicons.stroke.MagicWand01
-import me.rerere.hugeicons.stroke.QuillWrite01
-import me.rerere.hugeicons.stroke.Refresh01
-import me.rerere.hugeicons.stroke.Search01
-import me.rerere.hugeicons.stroke.Share03
 import me.rerere.hugeicons.stroke.Tick01
-import me.rerere.hugeicons.stroke.Time02
 import me.rerere.hugeicons.stroke.Tools
-import me.rerere.hugeicons.stroke.VolumeHigh
-import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.R
-import me.rerere.rikkahub.data.event.AppEvent
-import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.ai.tools.local.ASK_USER_TOOL_NAME
 import me.rerere.rikkahub.data.model.Assistant
-import me.rerere.rikkahub.data.repository.MemoryRepository
-import me.rerere.rikkahub.data.repository.memoryId
 import me.rerere.rikkahub.ui.components.message.tools.DefaultToolPreview
 import me.rerere.rikkahub.ui.components.message.tools.ToolUIContext
 import me.rerere.rikkahub.ui.components.message.tools.ToolUIRegistry
-import me.rerere.rikkahub.ui.components.message.tools.toolDisplayName
-import me.rerere.rikkahub.ui.components.richtext.HighlightCodeBlock
-import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
-import me.rerere.ui.components.DotLoading
-import me.rerere.rikkahub.ui.components.ui.Favicon
-import me.rerere.rikkahub.ui.components.ui.FaviconRow
-import me.rerere.ui.components.FormItem
 import me.rerere.rikkahub.ui.modifier.shimmer
 import me.rerere.rikkahub.utils.JsonInstant
-import me.rerere.rikkahub.utils.JsonInstantPretty
-import me.rerere.rikkahub.utils.jsonPrimitiveOrNull
-import me.rerere.rikkahub.utils.openUrl
-import org.koin.compose.koinInject
 import me.rerere.ui.components.DotLoading
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.DurationUnit
-
-private object ToolNames {
-    const val MEMORY = "memory_tool"
-    const val SEARCH_WEB = "search_web"
-    const val SCRAPE_WEB = "scrape_web"
-    const val GET_TIME_INFO = "get_time_info"
-    const val CLIPBOARD = "clipboard_tool"
-    const val TTS = "text_to_speech"
-    const val ASK_USER = "ask_user"
-    const val USE_SKILL = "use_skill"
-    const val FILE_WRITE = "file_write"
-    const val FILE_READ = "file_read"
-    const val FILE_LIST = "file_list"
-    const val FILE_COPY = "file_copy"
-    const val FILE_MOVE = "file_move"
-    const val FILE_MKDIR = "file_mkdir"
-    const val FILE_DELETE = "file_delete"
-    const val FILE_SEARCH = "file_search"
-    const val EXECUTE_COMMAND = "execute_command"
-    const val PRESENT_FILE = "present_file"
-    const val EVAL_JS = "eval_javascript"
-}
-
-private object MemoryActions {
-    const val CREATE = "create"
-    const val EDIT = "edit"
-    const val DELETE = "delete"
-}
-
-private object ClipboardActions {
-    const val READ = "read"
-    const val WRITE = "write"
-}
-
-private fun getToolIcon(toolName: String, action: String?) = when (toolName) {
-    ToolNames.MEMORY -> when (action) {
-        MemoryActions.CREATE, MemoryActions.EDIT -> HugeIcons.QuillWrite01
-        MemoryActions.DELETE -> HugeIcons.Eraser
-        else -> HugeIcons.QuillWrite01
-    }
-
-    ToolNames.SEARCH_WEB -> HugeIcons.Search01
-    ToolNames.SCRAPE_WEB -> HugeIcons.GlobalSearch
-    ToolNames.GET_TIME_INFO -> HugeIcons.Time02
-    ToolNames.CLIPBOARD -> HugeIcons.Clipboard
-    ToolNames.TTS -> HugeIcons.VolumeHigh
-    ToolNames.ASK_USER -> HugeIcons.BubbleChatQuestion
-    ToolNames.USE_SKILL -> HugeIcons.MagicWand01
-    ToolNames.FILE_WRITE -> HugeIcons.QuillWrite01
-    ToolNames.FILE_READ -> HugeIcons.Download04
-    ToolNames.FILE_LIST -> HugeIcons.Folder01
-    ToolNames.FILE_COPY -> HugeIcons.Copy01
-    ToolNames.FILE_MOVE -> HugeIcons.ArrowRight01
-    ToolNames.FILE_MKDIR -> HugeIcons.Add01
-    ToolNames.EXECUTE_COMMAND -> HugeIcons.Zap
-    ToolNames.PRESENT_FILE -> HugeIcons.Share03
-    ToolNames.FILE_DELETE -> HugeIcons.Delete02
-    ToolNames.FILE_SEARCH -> HugeIcons.AiSearch02
-    ToolNames.EVAL_JS -> HugeIcons.Code
-    else -> HugeIcons.Tools
-}
-
-private fun JsonElement?.getStringContent(key: String): String? =
-    this?.jsonObjectOrNull?.get(key)?.jsonPrimitiveOrNull?.contentOrNull
 
 @Composable
 fun ChainOfThoughtScope.ChatMessageServerToolStep(tool: UIMessagePart.ServerTool) {
@@ -207,7 +86,7 @@ fun ChainOfThoughtScope.ChatMessageServerToolStep(tool: UIMessagePart.ServerTool
         },
         label = {
             Text(
-                text = stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(tool.toolName)),
+                text = stringResource(R.string.chat_message_tool_call_generic, tool.toolName),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.shimmer(isLoading = loading),
@@ -226,9 +105,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
 ) {
-    val isAskUser = tool.toolName == ToolNames.ASK_USER
-
-    if (isAskUser) {
+    // ask_user 是交互式问答流程, 不走注册式渲染框架
+    if (tool.toolName == ASK_USER_TOOL_NAME) {
         AskUserToolStep(tool = tool, loading = loading, onToolAnswer = onToolAnswer)
         return
     }
@@ -245,7 +123,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             null
         }
     }
-    // 输出不是 JSON 时定制渲染器读不到字段，详情用默认渲染展示原文
+    // 输出不是 JSON (例如超长被截断后只剩文本预览) 时, 定制渲染器读不到任何字段, 详情改用默认渲染展示原文
     val outputUnparsable = tool.isExecuted && outputJson == null
     val context = remember(tool, loading, assistant) {
         ToolUIContext(
@@ -256,204 +134,17 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             assistant = assistant,
         )
     }
+
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(true) }
-    val eventBus: AppEventBus = koinInject()
-    val scope = rememberCoroutineScope()
-    val isPending = tool.approvalState is ToolApprovalState.Pending
+    val isPending = tool.isPending
     val isDenied = tool.approvalState is ToolApprovalState.Denied
-    val arguments = tool.inputAsJson()
-    val memoryAction = arguments.getStringContent("action")
-    val content = if (tool.isExecuted) {
-        runCatching {
-            JsonInstant.parseToJsonElement(
-                tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
-            )
-        }.getOrElse { JsonObject(emptyMap()) }
-    } else {
-        null
-    }
     val images = tool.output.filterIsInstance<UIMessagePart.Image>()
     val duration = rememberToolDuration(tool, loading)
 
-    val title = when (tool.toolName) {
-        ToolNames.MEMORY -> when (memoryAction) {
-            MemoryActions.CREATE -> stringResource(R.string.chat_message_tool_create_memory)
-            MemoryActions.EDIT -> stringResource(R.string.chat_message_tool_edit_memory)
-            MemoryActions.DELETE -> stringResource(R.string.chat_message_tool_delete_memory)
-            else -> stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(tool.toolName))
-        }
-
-        ToolNames.SEARCH_WEB -> stringResource(
-            R.string.chat_message_tool_search_web,
-            arguments.getStringContent("query") ?: ""
-        )
-
-        ToolNames.SCRAPE_WEB -> stringResource(R.string.chat_message_tool_scrape_web)
-        ToolNames.GET_TIME_INFO -> stringResource(R.string.chat_message_tool_get_time)
-        ToolNames.CLIPBOARD -> when (memoryAction) {
-            ClipboardActions.READ -> stringResource(R.string.chat_message_tool_clipboard_read)
-            ClipboardActions.WRITE -> stringResource(R.string.chat_message_tool_clipboard_write)
-            else -> stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(tool.toolName))
-        }
-
-        ToolNames.TTS -> {
-            val preview = arguments.getStringContent("text")?.let { text ->
-                if (text.length > 24) text.take(24) + "…" else text
-            } ?: ""
-            "Speaking: $preview"
-        }
-
-        ToolNames.USE_SKILL -> {
-            val skillName = arguments.getStringContent("name") ?: ""
-            val path = arguments.getStringContent("path")
-            if (path != null) "Skill: $skillName / $path" else "Skill: $skillName"
-        }
-
-        ToolNames.FILE_WRITE -> {
-            val rawInput = tool.input
-            val path = extractToolField(rawInput, "path")
-                ?: arguments.getStringContent("path") ?: ""
-            val contentBytes = rawInput.length
-            if (tool.isExecuted) {
-                stringResource(R.string.tool_write_path, path, formatToolSize(contentBytes.toLong()))
-            } else if (path.isNotBlank()) {
-                stringResource(R.string.tool_write_receiving, path, formatToolSize(contentBytes.toLong()))
-            } else {
-                stringResource(R.string.tool_write_progress)
-            }
-        }
-
-        ToolNames.FILE_READ -> {
-            val rawInput = tool.input
-            val path = extractToolField(rawInput, "path")
-                ?: arguments.getStringContent("path") ?: ""
-            if (tool.isExecuted) {
-                val outputSize = tool.output.filterIsInstance<UIMessagePart.Text>()
-                    .sumOf { it.text.length }
-                stringResource(R.string.tool_read_path, path, formatToolSize(outputSize.toLong()))
-            } else {
-                stringResource(R.string.tool_read_path_short, path)
-            }
-        }
-
-        ToolNames.FILE_LIST -> {
-            val rawInput = tool.input
-            val dir = extractToolField(rawInput, "dir")
-                ?: arguments.getStringContent("dir") ?: ""
-            if (dir.isNotBlank()) stringResource(R.string.tool_list_dir, dir) else stringResource(R.string.tool_list_download)
-        }
-
-        ToolNames.FILE_COPY -> {
-            val rawInput = tool.input
-            val src = extractToolField(rawInput, "source")
-                ?: arguments.getStringContent("source") ?: ""
-            val dst = extractToolField(rawInput, "destination")
-                ?: arguments.getStringContent("destination") ?: ""
-            if (src.isNotBlank() && dst.isNotBlank()) stringResource(R.string.tool_copy, src, dst)
-            else stringResource(R.string.tool_copy_progress)
-        }
-
-        ToolNames.FILE_MOVE -> {
-            val rawInput = tool.input
-            val src = extractToolField(rawInput, "source")
-                ?: arguments.getStringContent("source") ?: ""
-            val dst = extractToolField(rawInput, "destination")
-                ?: arguments.getStringContent("destination") ?: ""
-            if (src.isNotBlank() && dst.isNotBlank()) stringResource(R.string.tool_move, src, dst)
-            else stringResource(R.string.tool_move_progress)
-        }
-
-        ToolNames.FILE_MKDIR -> {
-            val rawInput = tool.input
-            val path = extractToolField(rawInput, "path")
-                ?: arguments.getStringContent("path") ?: ""
-            if (path.isNotBlank()) stringResource(R.string.tool_mkdir, path)
-            else stringResource(R.string.tool_mkdir_progress)
-        }
-
-        ToolNames.EXECUTE_COMMAND -> {
-            val rawInput = tool.input
-            val cmd = extractToolField(rawInput, "command")
-                ?: arguments.getStringContent("command") ?: ""
-            val display = cmd.take(60)
-            if (tool.isExecuted) {
-                val exitCode = content?.jsonObject?.get("exit_code")?.jsonPrimitive?.intOrNull
-                val exitStr = if (exitCode != null) " · exit: $exitCode" else ""
-                "$display$exitStr"
-            } else if (display.isNotBlank()) {
-                "$$display"
-            } else {
-                stringResource(R.string.tool_execute_progress)
-            }
-        }
-
-        ToolNames.PRESENT_FILE -> {
-            val rawInput = tool.input
-            val path = extractToolField(rawInput, "path")
-                ?: arguments.getStringContent("path") ?: ""
-            if (tool.isExecuted) {
-                val size = content?.jsonObject?.get("size")?.jsonPrimitive?.longOrNull
-                val sizeStr = if (size != null) " (${formatToolSize(size)})" else ""
-                stringResource(R.string.tool_share, path, sizeStr)
-            } else if (path.isNotBlank()) {
-                stringResource(R.string.tool_share_path, path)
-            } else {
-                stringResource(R.string.tool_share_progress)
-            }
-        }
-
-        else -> stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(tool.toolName))
-    }
-
-    // 判断是否有额外内容需要显示
-    val hasExtraContent = when (tool.toolName) {
-        ToolNames.MEMORY -> memoryAction in listOf(MemoryActions.CREATE, MemoryActions.EDIT) &&
-            content.getStringContent("content") != null
-
-        ToolNames.SEARCH_WEB -> content.getStringContent("answer") != null ||
-            (content?.jsonObject?.get("items")?.jsonArray?.isNotEmpty() == true)
-
-        ToolNames.SCRAPE_WEB -> arguments.getStringContent("url") != null
-        ToolNames.TTS -> arguments.getStringContent("text") != null
-        ToolNames.FILE_WRITE -> {
-            val rawInput = tool.input
-            val hasPath = extractToolField(rawInput, "path") != null
-            hasPath || content != null
-        }
-        ToolNames.FILE_READ -> {
-            val rawInput = tool.input
-            val hasPath = extractToolField(rawInput, "path") != null
-            hasPath || content != null
-        }
-        ToolNames.FILE_LIST -> {
-            val rawInput = tool.input
-            val hasDir = extractToolField(rawInput, "dir") != null
-            hasDir || content != null
-        }
-        ToolNames.FILE_COPY, ToolNames.FILE_MOVE -> {
-            val rawInput = tool.input
-            val hasSrc = extractToolField(rawInput, "source") != null
-            hasSrc || content != null
-        }
-        ToolNames.FILE_MKDIR -> {
-            val rawInput = tool.input
-            val hasPath = extractToolField(rawInput, "path") != null
-            hasPath || content != null
-        }
-        ToolNames.EXECUTE_COMMAND -> {
-            val rawInput = tool.input
-            val hasCmd = extractToolField(rawInput, "command") != null
-            hasCmd || content != null
-        }
-        ToolNames.PRESENT_FILE -> {
-            val rawInput = tool.input
-            val hasPath = extractToolField(rawInput, "path") != null
-            hasPath || content != null
-        }
-        else -> false
-    } || isDenied || images.isNotEmpty()
+    // 摘要由注册的渲染器决定; 图片输出与拒绝原因为所有工具通用
+    val hasExtraContent = renderer.hasSummary(context) || isDenied || images.isNotEmpty()
 
     ControlledChainOfThoughtStep(
         expanded = expanded,
@@ -465,7 +156,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                 )
             } else {
                 Icon(
-                    imageVector = getToolIcon(tool.toolName, memoryAction),
+                    imageVector = renderer.icon(context),
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
                     tint = LocalContentColor.current.copy(alpha = 0.7f)
@@ -474,7 +165,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         },
         label = {
             Text(
-                text = title,
+                text = renderer.title(context),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.shimmer(isLoading = loading),
@@ -521,177 +212,17 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         } else {
             null
         },
-        onClick = if (content != null || isPending || images.isNotEmpty()) {
-            { showResult = true }
-        } else {
-            null
-        },
+        onClick = { showResult = true },
         content = if (hasExtraContent) {
             {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (tool.toolName == ToolNames.MEMORY &&
-                        memoryAction in listOf(MemoryActions.CREATE, MemoryActions.EDIT)
-                    ) {
-                        content.getStringContent("content")?.let { memoryContent ->
-                            Text(
-                                text = memoryContent,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.shimmer(isLoading = loading),
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    if (tool.toolName == ToolNames.SEARCH_WEB) {
-                        content.getStringContent("answer")?.let { answer ->
-                            Text(
-                                text = answer,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.shimmer(isLoading = loading),
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        val items = content?.jsonObject?.get("items")?.jsonArray ?: emptyList()
-                        if (items.isNotEmpty()) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                FaviconRow(
-                                    urls = items.mapNotNull { it.getStringContent("url") },
-                                    size = 18.dp,
-                                )
-                                Text(
-                                    text = stringResource(R.string.chat_message_tool_search_results_count, items.size),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                                )
-                            }
-                        }
-                    }
-                    if (tool.toolName == ToolNames.SCRAPE_WEB) {
-                        val url = arguments.getStringContent("url") ?: ""
-                        Text(
-                            text = url,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                        )
-                    }
-                    if (tool.toolName == ToolNames.TTS) {
-                        val text = arguments.getStringContent("text") ?: ""
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                text = text,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            FilledTonalIconButton(
-                                onClick = { scope.launch { eventBus.emit(AppEvent.Speak(text)) } },
-                                modifier = Modifier.size(28.dp),
-                            ) {
-                                Icon(
-                                    imageVector = HugeIcons.Refresh01,
-                                    contentDescription = "Replay",
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            }
-                        }
-                    }
-                    if (tool.toolName == ToolNames.FILE_WRITE) {
-                        val rawInput = tool.input
-                        // During streaming: show partial content from raw input
-                        val contentPreview = if (!tool.isExecuted) {
-                            val contentStart = rawInput.indexOf("\"content\":\"")
-                            if (contentStart >= 0) {
-                                val after = rawInput.substring(contentStart + 11)
-                                // Take first few hundred chars, unescape basic stuff
-                                after.take(200).replace("\\\"", "\"").replace("\\n", "\n")
-                            } else null
-                        } else {
-                            // After execution: parse from result or arguments
-                            arguments.getStringContent("content")?.take(200)
-                        }
-                        contentPreview?.let { preview ->
-                            Text(
-                                text = preview + if (preview.length >= 200) "..." else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.shimmer(isLoading = loading && !tool.isExecuted),
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    if (tool.toolName == ToolNames.FILE_READ && content != null) {
-                        val outputText = tool.output.filterIsInstance<UIMessagePart.Text>()
-                            .joinToString("") { it.text }
-                        if (outputText.isNotBlank()) {
-                            Text(
-                                text = outputText.take(200) +
-                                    if (outputText.length > 200) "..." else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    if (tool.toolName == ToolNames.FILE_LIST && content != null) {
-                        val outputText = tool.output.filterIsInstance<UIMessagePart.Text>()
-                            .joinToString("") { it.text }
-                        val firstLines = outputText.lines().take(6).joinToString("\n")
-                        if (firstLines.isNotBlank()) {
-                            Text(
-                                text = firstLines,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 6,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    if (tool.toolName == ToolNames.EXECUTE_COMMAND && content != null) {
-                        val stdout = content.jsonObject["stdout"]?.jsonPrimitive?.contentOrNull ?: ""
-                        val stderr = content.jsonObject["stderr"]?.jsonPrimitive?.contentOrNull ?: ""
-                        val preview = (stdout.take(200) + stderr.take(100)).take(300)
-                        if (preview.isNotBlank()) {
-                            Text(
-                                text = preview + if (preview.length >= 300) "..." else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 4,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    if (tool.toolName == ToolNames.PRESENT_FILE && content != null) {
-                        val path = content.jsonObject["path"]?.jsonPrimitive?.contentOrNull ?: ""
-                        val size = content.jsonObject["size"]?.jsonPrimitive?.longOrNull
-                        val sizeStr = if (size != null) " (${formatToolSize(size)})" else ""
-                        if (path.isNotBlank()) {
-                            Text(
-                                text = stringResource(R.string.tool_shared, path, sizeStr),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
+                    renderer.Summary(context)
                     if (images.isNotEmpty()) {
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier.wrapContentWidth(),
                         ) {
-                            items(images, key = { it.url }) { image ->
+                            items(images) { image ->
                                 ZoomableAsyncImage(
                                     model = image.url,
                                     contentDescription = null,
@@ -729,302 +260,23 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     }
 
     if (showResult) {
-        if (renderer.toolName == tool.toolName) {
-            ModalBottomSheet(
-                sheetState = rememberBottomSheetState(
-                    initialValue = SheetValue.Hidden,
-                    enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
-                ),
-                onDismissRequest = { showResult = false },
-                content = {
-                    if (outputUnparsable) {
-                        DefaultToolPreview(context = context)
-                    } else {
-                        renderer.Preview(
-                            context = context,
-                            onDismissRequest = { showResult = false },
-                        )
-                    }
-                },
-            )
-        } else {
-            ToolCallPreviewSheet(
-                toolName = tool.toolName,
-                arguments = arguments,
-                content = content,
-                output = tool.output,
-                assistantId = assistant?.memoryId ?: "",
-                onDismissRequest = { showResult = false }
-            )
-        }
-    }
-
-}
-
-@Composable
-private fun ToolCallPreviewSheet(
-    toolName: String,
-    arguments: JsonElement,
-    content: JsonElement?,
-    output: List<UIMessagePart>,
-    assistantId: String,
-    onDismissRequest: () -> Unit = {}
-) {
-    val memoryRepo: MemoryRepository = koinInject()
-    val scope = rememberCoroutineScope()
-
-    val memoryAction = arguments.getStringContent("action")
-    val isMemoryOperation = toolName == ToolNames.MEMORY &&
-        memoryAction in listOf(MemoryActions.CREATE, MemoryActions.EDIT)
-    val memoryId = (content as? JsonObject)?.get("id")?.jsonPrimitiveOrNull?.intOrNull
-
-    ModalBottomSheet(
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        onDismissRequest = onDismissRequest,
-        content = {
-            when {
-                content == null -> GenericToolPreview(
-                    toolName = toolName,
-                    arguments = arguments,
-                    output = emptyList(),
-                    isMemoryOperation = false,
-                    memoryId = null,
-                    memoryRepo = memoryRepo,
-                    scope = scope,
-                    onDismissRequest = onDismissRequest
-                )
-
-                toolName == ToolNames.SEARCH_WEB -> SearchWebPreview(
-                    arguments = arguments,
-                    content = content,
-                )
-
-                toolName == ToolNames.SCRAPE_WEB -> ScrapeWebPreview(content = content)
-                else -> GenericToolPreview(
-                    toolName = toolName,
-                    arguments = arguments,
-                    output = output,
-                    isMemoryOperation = isMemoryOperation,
-                    memoryId = memoryId,
-                    memoryRepo = memoryRepo,
-                    scope = scope,
-                    onDismissRequest = onDismissRequest
-                )
-            }
-        },
-    )
-}
-
-@Composable
-private fun SearchWebPreview(
-    arguments: JsonElement,
-    content: JsonElement,
-) {
-    val context = LocalContext.current
-    val items = content.jsonObject["items"]?.jsonArray ?: emptyList()
-    val answer = content.getStringContent("answer")
-    val query = arguments.getStringContent("query") ?: ""
-
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxHeight(0.8f)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item {
-            Text(stringResource(R.string.chat_message_tool_search_prefix, query))
-        }
-
-        if (answer != null) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
-                ) {
-                    MarkdownBlock(
-                        content = answer,
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .fillMaxWidth(),
-                        style = MaterialTheme.typography.bodySmall
+        ModalBottomSheet(
+            sheetState = rememberBottomSheetState(
+                initialValue = SheetValue.Hidden,
+                enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
+            ),
+            onDismissRequest = { showResult = false },
+            content = {
+                if (outputUnparsable) {
+                    DefaultToolPreview(context = context)
+                } else {
+                    renderer.Preview(
+                        context = context,
+                        onDismissRequest = { showResult = false },
                     )
                 }
-            }
-        }
-
-        if (items.isNotEmpty()) {
-            // 同上：key 用下标（原先 items.indexOf(it) 是 O(n²) 且同样依赖元素自身）
-            itemsIndexed(items, key = { index, _ -> index }) { _, item ->
-                val url = item.getStringContent("url") ?: return@itemsIndexed
-                val title = item.getStringContent("title") ?: return@itemsIndexed
-                val text = item.getStringContent("text") ?: return@itemsIndexed
-
-                Card(
-                    onClick = { context.openUrl(url) },
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp, horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Favicon(
-                            url = url,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Column {
-                            Text(text = title, maxLines = 1)
-                            Text(
-                                text = text,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Text(
-                                text = url,
-                                maxLines = 1,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
-                        }
-                    }
-                }
-            }
-        } else {
-            item {
-                CodeHighlightText(
-                    code = JsonInstantPretty.encodeToString(content),
-                    language = "json",
-                    fontSize = 12.sp
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScrapeWebPreview(content: JsonElement) {
-    val urls = content.jsonObject["urls"]?.jsonArray ?: emptyList()
-
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxHeight(0.8f)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item {
-            Text(
-                text = stringResource(
-                    R.string.chat_message_tool_scrape_prefix,
-                    urls.joinToString(", ") { it.getStringContent("url") ?: "" }
-                )
-            )
-        }
-
-        // key 必须能存进 Bundle：JsonElement 不行（SaveableStateHolder 会抛
-        // "Type of the key ... is not supported"）。这里用下标，既稳定又不会因重复 URL 撞 key。
-        itemsIndexed(urls, key = { index, _ -> index }) { _, url ->
-            val urlObject = url.jsonObject
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = urlObject["url"]?.jsonPrimitive?.content ?: "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Card {
-                    MarkdownBlock(
-                        content = urlObject["content"]?.jsonPrimitive?.content ?: "",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GenericToolPreview(
-    toolName: String,
-    arguments: JsonElement,
-    output: List<UIMessagePart>,
-    isMemoryOperation: Boolean,
-    memoryId: Int?,
-    memoryRepo: MemoryRepository,
-    scope: kotlinx.coroutines.CoroutineScope,
-    onDismissRequest: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxHeight(0.8f)
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(R.string.chat_message_tool_call_title),
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center
-            )
-
-        }
-        FormItem(
-            label = {
-                Text(stringResource(R.string.chat_message_tool_call_label, toolName))
-            }
-        ) {
-            HighlightCodeBlock(
-                code = JsonInstantPretty.encodeToString(arguments),
-                language = "json",
-                style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
-            )
-        }
-        if (output.isNotEmpty()) {
-            FormItem(
-                label = {
-                    Text(stringResource(R.string.chat_message_tool_call_result))
-                }
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    output.fastForEach { part ->
-                        when (part) {
-                            is UIMessagePart.Text -> HighlightCodeBlock(
-                                code = runCatching {
-                                    JsonInstantPretty.encodeToString(
-                                        JsonInstant.parseToJsonElement(part.text)
-                                    )
-                                }.getOrElse { part.text },
-                                language = "json",
-                                style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
-                            )
-
-                            is UIMessagePart.Image -> ZoomableAsyncImage(
-                                model = part.url,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-
-                            else -> {}
-                        }
-                    }
-                }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -1274,22 +526,4 @@ private fun ToolDenyReasonDialog(
             }
         }
     )
-}
-
-/**
- * 从原始 tool.input 字符串中提取 JSON 字段值（即使 JSON 不完整也能工作）
- * 用于流式加载阶段预览工具参数
- */
-private fun extractToolField(rawInput: String, field: String): String? {
-    // Match pattern: "field":"value" — works on incomplete JSON strings
-    val match = Regex(""""${field}"\s*:\s*"([^"]*)""").find(rawInput) ?: return null
-    val value = match.groupValues[1]
-    if (value.isBlank()) return null
-    return value
-}
-
-private fun formatToolSize(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-    else -> "${bytes / (1024 * 1024)} MB"
 }

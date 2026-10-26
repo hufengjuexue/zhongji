@@ -68,22 +68,12 @@ data class TextGenerationParams(
     val model: Model,
     val temperature: Float? = null,
     val topP: Float? = null,
-    val topK: Int? = null,
     val maxTokens: Int? = null,
     val tools: List<Tool> = emptyList(),
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
-    val sessionId: String? = null,
-    // 防空回复（Gemini）：系统提示词不走 systemInstruction，而是作为对话流中的
-    // user/model 假历史轮注入（SYSTEM 消息原位转为 user 轮，保留世界书等深度注入位置）
-    val systemPromptInChat: Boolean = false,
-    // 中转站兼容：修复 Gemini 经 OpenAI 兼容中转时 reasoning_content 吞掉正文的问题
-    val enableProxyFix: Boolean = false,
-    // 强制关闭深度思考：置位后本请求不写入任何思考相关字段（reasoning_effort /
-    // reasoning / thinking），而不是传 "none" 之类的关闭值——实测部分中转站
-    // 只要收到该字段就会开启思考链，故必须整个字段都不出现。
-    val disableReasoning: Boolean = false,
+    val sessionId: String? = Uuid.random().toString(),
 )
 
 @Serializable
@@ -92,11 +82,6 @@ data class ImageGenerationParams(
     val prompt: String,
     val numOfImages: Int = 1,
     val size: String = ImageGenSize.AUTO.value,
-    /**
-     * 思考强度。AUTO 表示不显式指定，由站点自己决定——多数站点没有这个参数，
-     * 发了反而可能被拒，所以只有用户显式选过才带。
-     */
-    val reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
     val partialImages: Int = 2,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
@@ -109,7 +94,6 @@ data class ImageEditParams(
     val images: List<String>,
     val numOfImages: Int = 1,
     val size: String = ImageGenSize.AUTO.value,
-    val reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
     val partialImages: Int = 2,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),

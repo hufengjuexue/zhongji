@@ -42,7 +42,7 @@ object BochaSearchService : SearchService<SearchServiceOptions.BochaOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -73,7 +73,7 @@ object BochaSearchService : SearchService<SearchServiceOptions.BochaOptions> {
 
             val response = httpClient.newCall(request).execute()
             if (response.isSuccessful) {
-                val bodyRaw = response.body!!.string()
+                val bodyRaw = response.body.string()
                 val bochaResponse = runCatching {
                     json.decodeFromString<BochaResponse>(bodyRaw)
                 }.onFailure {
@@ -98,7 +98,7 @@ object BochaSearchService : SearchService<SearchServiceOptions.BochaOptions> {
                     )
                 )
             } else {
-                println(response.body!!.string())
+                println(response.body.string())
                 error("response failed #${response.code}")
             }
         }

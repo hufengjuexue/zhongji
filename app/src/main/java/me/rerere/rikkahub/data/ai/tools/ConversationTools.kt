@@ -12,12 +12,10 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
 import me.rerere.rikkahub.data.db.fts.MessageSearchResult
 import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
-import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.JsonInstantPretty
 import me.rerere.rikkahub.utils.toLocalDate
 import kotlin.uuid.Uuid
@@ -66,7 +64,7 @@ fun createConversationTools(
                     })
                 }
             }
-            listOf(UIMessagePart.Text(JsonInstant.encodeToString(payload)))
+            listOf(UIMessagePart.Text(JsonInstantPretty.encodeToString(payload)))
         }
     ),
     conversationSearchTool { query -> conversationRepo.searchMessages(query, MessageSearchSort.RELEVANCE) },
@@ -182,134 +180,10 @@ fun createMemoryConversationTools(
                     }
                 })
             }
-            listOf(UIMessagePart.Text(JsonInstant.encodeToString(payload)))
+            listOf(UIMessagePart.Text(payload.toString()))
         }
     ),
 )
-
-/**
- * 取回被上下文裁剪省略的历史消息原文（瞬态内容裁剪的配套工具）。
- * 占位说明里带有消息 ID，AI 需要原文时按 ID 调用本工具。
- *
- * @param supportsImageInput 当前模型是否支持图片输入。支持时图片以真实 Image 部件回灌（模型
- *   能看到像素）；不支持时改回灌 OCR 文本——否则 provider 层会把图片直接丢弃成一句占位符，
- *   AI 依然拿不到任何内容。
- */
-fun createHistoryMessageTool(
-    conversationRepo: ConversationRepository,
-    conversationId: Uuid,
-    supportsImageInput: Boolean = true,
-): Tool = Tool(
-    name = "read_history_message",
-    description = """
-        Retrieve the original content of a past message in the current conversation by its message ID.
-        Use it when a placeholder in the history says content was omitted (omitted images, web search
-        results, media attachments) and you need the original text/content again.
-        Images in the retrieved message are returned as real images you can see directly.
-    """.trimIndent(),
-    parameters = {
-        InputSchema.Obj(
-            properties = buildJsonObject {
-                put("message_id", buildJsonObject {
-                    put("type", "string")
-                    put("description", "The message ID shown in the omission placeholder")
-                })
-            },
-            required = listOf("message_id")
-        )
-    },
-    execute = { args ->
-        val messageId = args.jsonObject["message_id"]?.jsonPrimitive?.contentOrNull
-            ?: error("message_id is required")
-        val targetId = runCatching { Uuid.parse(messageId) }
-            .getOrElse { error("invalid message_id: $messageId") }
-        val conversation = conversationRepo.getConversationById(conversationId)
-            ?: error("conversation not found")
-        val message = conversation.currentMessages.firstOrNull { it.id == targetId }
-            ?: error("message not found in current conversation: $messageId")
-
-        val images = message.parts.filterIsInstance<UIMessagePart.Image>()
-        // 支持视觉的模型直接回灌真实图片；不支持的模型跑一次 OCR 换成文字。
-        // 不这样做的话 provider 层会把图片替换成一句"当前模型不支持图片输入"的占位符，
-        // AI 取回的仍然只有路径字符串——这正是"压缩后取不回图片"的根因。
-        val imageParts = if (supportsImageInput) {
-            images.take(MAX_RETRIEVED_IMAGES)
-        } else {
-            images.take(MAX_RETRIEVED_IMAGES).map { UIMessagePart.Text(OcrTransformer.performOcr(it)) }
-        }
-
-        buildHistoryMessageResult(messageId, message, imageParts)
-    }
-)
-
-/**
- * 组装 read_history_message 的返回部件。
- *
- * 文本部件序列化成 JSON 文本；图片不能只留一个 URL 字符串——必须以真实
- * [UIMessagePart.Image] 部件回灌，模型才能看到像素（非视觉模型由调用方预先换成 OCR 文本）。
- * 抽成纯函数便于单测覆盖。
- */
-internal fun buildHistoryMessageResult(
-    messageId: String,
-    message: UIMessage,
-    imageParts: List<UIMessagePart>,
-): List<UIMessagePart> {
-    val payload = buildJsonObject {
-            put("message_id", messageId)
-            put("role", message.role.name)
-            if (message.name != null) put("name", message.name.orEmpty())
-            put("parts", buildJsonArray {
-                message.parts.forEach { part ->
-                    when (part) {
-                        is UIMessagePart.Text -> add(buildJsonObject {
-                            put("type", "text")
-                            put("text", part.text.truncateForToolResult())
-                        })
-                        is UIMessagePart.Image -> add(buildJsonObject {
-                            put("type", "image")
-                            // data: URI 是整段 base64（可达数 MB），塞进 JSON 文本会吃掉裁剪省下的全部
-                            // token；真正的像素改由 imageParts 以图片部件回灌
-                            put("url", if (part.url.startsWith("data:")) "[inline base64 image]" else part.url)
-                        })
-                        is UIMessagePart.Video -> add(buildJsonObject {
-                            put("type", "video")
-                            put("url", if (part.url.startsWith("data:")) "[inline base64 video omitted]" else part.url)
-                        })
-                        is UIMessagePart.Audio -> add(buildJsonObject {
-                            put("type", "audio")
-                            put("url", if (part.url.startsWith("data:")) "[inline base64 audio omitted]" else part.url)
-                        })
-                        is UIMessagePart.Document -> add(buildJsonObject {
-                            put("type", "document")
-                            put("file_name", part.fileName)
-                            put("url", if (part.url.startsWith("data:")) "[inline base64 document omitted]" else part.url)
-                        })
-                        is UIMessagePart.Tool -> add(buildJsonObject {
-                            put("type", "tool_result")
-                            put("tool_name", part.toolName)
-                            put("tool_input", part.input.truncateForToolResult(2_000))
-                            put("output", part.output.joinToString("\n") { outputPart ->
-                                (outputPart as? UIMessagePart.Text)?.text.orEmpty()
-                            }.truncateForToolResult())
-                        })
-                        is UIMessagePart.ServerTool -> add(buildJsonObject {
-                            put("type", "server_tool_result")
-                            put("tool_name", part.toolName)
-                            put("output", part.output?.toString().orEmpty().truncateForToolResult())
-                        })
-                        else -> add(buildJsonObject {
-                            put("type", part::class.simpleName?.lowercase().orEmpty())
-                        })
-                    }
-                }
-            })
-    }
-
-    return listOf(UIMessagePart.Text(JsonInstant.encodeToString(payload))) + imageParts
-}
-
-/** 单次取回最多回灌的图片数，防止一条含大量图片的历史消息把上下文撑爆 */
-private const val MAX_RETRIEVED_IMAGES = 4
 
 /** 当前分支上用户和助手的消息，位置编号以这个列表为准 */
 internal fun Conversation.dialogueMessages(): List<UIMessage> =

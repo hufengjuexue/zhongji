@@ -48,9 +48,6 @@ class ChatDrawerVM(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val _selectedFolderId = MutableStateFlow<Uuid?>(null)
-    val selectedFolderId: StateFlow<Uuid?> = _selectedFolderId.asStateFlow()
-
     private val assistantIdFlow = settingsStore.settingsFlow
         .map { it.assistantId }
         .distinctUntilChanged()
@@ -58,6 +55,10 @@ class ChatDrawerVM(
     private val sortOrderFlow = settingsStore.settingsFlow
         .map { it.displaySetting.conversationSortOrder }
         .distinctUntilChanged()
+
+    // 当前选中的文件夹筛选，null 表示「未归类」视图
+    private val _selectedFolderId = MutableStateFlow<Uuid?>(null)
+    val selectedFolderId: StateFlow<Uuid?> = _selectedFolderId.asStateFlow()
 
     // 当前助手的文件夹列表（Room Flow，增删改自动刷新）
     val folders: StateFlow<List<Folder>> = assistantIdFlow
@@ -139,16 +140,16 @@ class ChatDrawerVM(
 
     fun createFolder(name: String) {
         val trimmed = name.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isEmpty()) return
         viewModelScope.launch {
-            val assistantId = settingsStore.settingsFlow.first().assistantId
+            val assistantId = assistantIdFlow.first()
             folderRepo.createFolder(assistantId, trimmed)
         }
     }
 
     fun renameFolder(folderId: Uuid, name: String) {
         val trimmed = name.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isEmpty()) return
         viewModelScope.launch {
             folderRepo.renameFolder(folderId, trimmed)
         }
@@ -162,9 +163,8 @@ class ChatDrawerVM(
             return false
         }
         viewModelScope.launch {
-            // 经 ChatService 清理活跃 session 内存态的 folderId，避免整对象保存写回已删文件夹
-            chatService.clearFolderFromSessions(folderId)
-            folderRepo.deleteFolder(folderId)
+            // 经 ChatService 删除：会同步清空活跃 session 内存态的 folderId，避免整对象保存写回已删文件夹
+            chatService.deleteFolder(folderId)
             if (_selectedFolderId.value == folderId) {
                 _selectedFolderId.value = null
             }

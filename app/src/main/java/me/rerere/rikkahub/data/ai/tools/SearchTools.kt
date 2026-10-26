@@ -18,44 +18,40 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 fun createSearchTools(settings: Settings): Set<Tool> {
-    // 酒馆模式用精简描述：完整版里有两条指令会直接改变角色扮演的输出形态——
-    // "Images: embed 2-4 relevant ones as ![](url) at the start of your reply"
-    // 要求模型在回复开头插搜索结果图，
-    // "Citations: ... add `[citation,domain](id)` after the sentence"
-    // 要求句末挂角标。这两条在普通助手场景是合理的溯源要求，但在角色扮演里
-    // 会让 AI 的回复带上出戏的插图与引用角标。角色扮演中联网只用来查事实，
-    // 查到什么由模型自己自然地写进对话即可。
-    //
-    // 顺带去掉 "Today is <日期>"：它每天变化，而工具描述处于请求前缀区，
-    // 跨天复用同一对话时会让前缀缓存从这处分叉；酒馆模式也不需要它。
-    val tavernMode = settings.huadengSettings.enableTavernMode
-    val searchWebDescription = if (tavernMode) {
-        """
-        Search the web for up-to-date or specific information (latest news, current facts, verification).
-        Inspect each result's title, URL, and date before making a current claim; if sources conflict or a
-        primary source is missing, run another focused search or use scrape_web on the best source.
-
-        Results: items[].id, index, title, url, publishedDate/highlights (if supplied), text.
-        retrievedAt is retrieval time, never a publication date.
-        """.trimIndent()
-    } else {
-        """
-        Search the web for up-to-date or specific information (latest news, current facts, verification).
-        Inspect each result's title, URL, and date before making a current claim; if sources conflict or a
-        primary source is missing, run another focused search or use scrape_web on the best source.
-        Today is ${LocalDate.now().toLocalString(true)}.
-
-        Results: items[].id, index, title, url, publishedDate/highlights (if supplied), text.
-        retrievedAt is retrieval time, never a publication date.
-        Citations: after using a result, add `[citation,domain](id)` after the sentence; omit if none cited.
-        Images: embed 2-4 relevant ones as `![](url)` at the start of your reply, only urls from images[].
-        """.trimIndent()
-    }
     return buildSet {
         add(
             Tool(
                 name = "search_web",
-                description = searchWebDescription,
+                description = """
+                    Search the web for up-to-date or specific information.
+                    Use this when the user asks for the latest news, current facts, or needs verification.
+                    Do not treat result order as proof of freshness. Prefer primary sources and inspect
+                    each result's title, URL, publication date, and content before making a current claim.
+                    Use the optional publication-date and domain filters only when they match the question.
+                    If a date or primary source is missing, or sources conflict, run another focused search
+                    or use scrape_web to verify the most relevant source before answering.
+                    Generate focused keywords and run multiple searches if needed.
+                    Today is ${LocalDate.now().toLocalString(true)}.
+
+                    Response format:
+                    - retrievedAt is the local retrieval time, never a publication date
+                    - items[].id (short id), index, title, url, publishedDate (if supplied), highlights (if supplied), text
+                    - images[]: image urls related to the query (may be empty)
+
+                    Citations:
+                    - After using results, add `[citation,domain](id)` after the sentence.
+                    - Multiple citations are allowed.
+                    - If no results are cited, omit citations.
+
+                    Images:
+                    - When images help the user understand the answer, embed relevant ones using Markdown: `![](url)`.
+                    - Embed 2 to 4 images, and only use urls from `images[]` (never fabricate or alter urls).
+                    - Usually place the images at the very beginning of your reply; skip them entirely if none are relevant.
+
+                    Example:
+                    The capital of France is Paris. [citation,example.com](abc123)
+                    The population is about 2.1 million. [citation,example.com](abc123) [citation,example2.com](def456)
+                    """.trimIndent(),
                 parameters = {
                     val options = settings.searchServices.getOrElse(
                         index = settings.searchServiceSelected,
@@ -122,8 +118,7 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                             serviceOptions = options,
                         ).getOrThrow().copy(retrievedAt = Clock.System.now().toString())
                         val payload = JsonInstantPretty.encodeToJsonElement(result).jsonObject
-                        // scrape 返回整页正文，必须截断（历史每轮重复计费）
-                        listOf(UIMessagePart.Text(payload.toString().truncateForToolResult()))
+                        listOf(UIMessagePart.Text(payload.toString()))
                     }
                 ))
         }

@@ -14,9 +14,6 @@ interface GenMediaDAO {
     @Query("SELECT * FROM genmediaentity ORDER BY create_at DESC")
     suspend fun getAllMedia(): List<GenMediaEntity>
 
-    @Query("SELECT * FROM genmediaentity WHERE create_at <= :cutoffMillis")
-    suspend fun getMediaBefore(cutoffMillis: Long): List<GenMediaEntity>
-
     @Insert
     suspend fun insert(media: GenMediaEntity)
 

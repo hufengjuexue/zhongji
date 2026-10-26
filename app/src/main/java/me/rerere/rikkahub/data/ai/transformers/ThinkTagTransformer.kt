@@ -8,11 +8,7 @@ import me.rerere.ai.ui.UIMessagePart
 import kotlin.time.Clock
 import kotlin.time.Instant
 
-// 同时认 <think> 与 <thinking>；只识别回复最开头的思考块
-private val THINKING_REGEX = Regex(
-    "\\A\\s*<(think|thinking)>([\\s\\S]*?)(</(?:think|thinking)>|$)",
-    RegexOption.IGNORE_CASE,
-)
+private val THINKING_REGEX = Regex("\\A\\s*<think>([\\s\\S]*?)(</think>|$)")
 
 // 部分供应商不会返回reasoning parts, 所以需要这个transformer
 object ThinkTagTransformer : OutputMessageTransformer {
@@ -66,9 +62,9 @@ internal fun List<UIMessage>.transformThinkTags(
     val textPart = message.parts.getOrNull(textPartIndex) as? UIMessagePart.Text
         ?: return@map message
     val match = THINKING_REGEX.find(textPart.text) ?: return@map message
-    val hasClosingTag = match.groups[3]?.value?.isNotEmpty() == true
+    val hasClosingTag = match.groups[2]?.value == "</think>"
     val reasoning = UIMessagePart.Reasoning(
-        reasoning = match.groupValues[2].trim(),
+        reasoning = match.groupValues[1].trim(),
         createdAt = message.createdAt.toInstant(timeZone = TimeZone.currentSystemDefault()),
         finishedAt = if (generationFinished || hasClosingTag) now else null,
     )

@@ -23,7 +23,6 @@ data class Conversation(
     val messageNodes: List<MessageNode>,
     val chatSuggestions: List<String> = emptyList(),
     val isPinned: Boolean = false,
-    val speakerMap: Map<Uuid, Uuid> = emptyMap(),  // messageNodeId → assistantId（群聊发言人）
     @Serializable(with = InstantSerializer::class)
     val createAt: Instant = Instant.now(),
     @Serializable(with = InstantSerializer::class)
@@ -35,10 +34,8 @@ data class Conversation(
     val config: ConversationConfig? = null,
     // Absolute path inside the workspace rootfs
     val workspaceCwd: String? = null,
-    // 所属文件夹 ID（null = 未归类）
+    // 所属文件夹（助手内分组），null 表示未归入任何文件夹
     val folderId: Uuid? = null,
-    // 上下文滚动压缩摘要（覆盖 sourceMessageIds 对应的前缀，生成请求时替换前缀发送）
-    val rollingContextSummary: me.rerere.rikkahub.data.ai.context.RollingContextSummary? = null,
     @Transient
     val newConversation: Boolean = false
 ) {
@@ -55,10 +52,6 @@ data class Conversation(
         get(): List<UIMessage> {
             return messageNodes.map { node -> node.messages[node.selectIndex] }
         }
-
-    fun getMessageNodeByMessage(message: UIMessage): MessageNode? {
-        return messageNodes.firstOrNull { node -> node.messages.contains(message) }
-    }
 
     fun getMessageNodeByMessageId(messageId: Uuid): MessageNode? {
         return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
@@ -159,10 +152,6 @@ data class MessageNode(
     }
 }
 
-fun List<UIMessage>.toMergedMessageNode(): MessageNode {
-    return MessageNode(messages = this, selectIndex = 0)
-}
-
 /**
  * 最近一次回复结束时的上下文占用（token），取不到时返回 null。
  * 之后又插入了压缩检查点的话，记录的占用已经过时，同样返回 null。
@@ -189,6 +178,10 @@ internal fun Conversation.insertContextCheckpoint(afterNodeId: Uuid, summary: St
 /** 有工具调用在等待用户审批：这一轮还没结束，排队的消息要等审批完成后再发 */
 internal val Conversation.isAwaitingToolApproval: Boolean
     get() = currentMessages.any { message -> message.getTools().any { it.isPending } }
+
+/** 等待用户审批的工具调用，和 [isAwaitingToolApproval] 的判断一致 */
+internal val Conversation.pendingToolCalls: List<UIMessagePart.Tool>
+    get() = currentMessages.flatMap { message -> message.getTools().filter { it.isPending } }
 
 /**
  * 去掉还有未执行、又没法继续执行的工具调用的消息（比如还在等待审批），这样的消息发给模型会被拒绝。

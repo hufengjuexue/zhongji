@@ -7,14 +7,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.Lorebook
-import me.rerere.rikkahub.data.model.SelectiveLogic
-import me.rerere.rikkahub.data.model.TavernBookEntry
-import me.rerere.rikkahub.data.model.TavernCharacterData
-import me.rerere.rikkahub.data.model.TavernEmbeddedBook
-import me.rerere.rikkahub.data.model.isTriggered
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -25,32 +18,10 @@ class PromptInjectionTransformerTest {
     private fun createAssistant(
         modeInjectionIds: Set<Uuid> = emptySet(),
         lorebookIds: Set<Uuid> = emptySet(),
-        allowConversationPromptInjection: Boolean = false,
-        tavernData: TavernCharacterData? = null,
     ) = Assistant(
         modeInjectionIds = modeInjectionIds,
         lorebookIds = lorebookIds,
-        allowConversationPromptInjection = allowConversationPromptInjection,
-        tavernData = tavernData,
     )
-
-    private fun characterCardWithBook(
-        entries: List<TavernBookEntry> = emptyList(),
-        postHistoryInstructions: String = "",
-        depthPrompt: String = "",
-    ) = TavernCharacterData(
-        name = "Test Char",
-        embeddedBook = TavernEmbeddedBook(name = "Card Book", entries = entries),
-        postHistoryInstructions = postHistoryInstructions,
-        depthPrompt = depthPrompt,
-    )
-
-    private fun tavernEntry(
-        id: Int = 0,
-        keys: List<String> = listOf("dragon"),
-        content: String = "Dragon lore",
-        constant: Boolean = false,
-    ) = TavernBookEntry(id = id, keys = keys, content = content, constant = constant)
 
     private fun createModeInjection(
         id: Uuid = Uuid.random(),
@@ -82,16 +53,10 @@ class PromptInjectionTransformerTest {
         injectDepth: Int = 4,
         role: MessageRole = MessageRole.USER,
         keywords: List<String> = listOf("trigger"),
-        secondaryKeys: List<String> = emptyList(),
         useRegex: Boolean = false,
         caseSensitive: Boolean = false,
-        matchWholeWords: Boolean = false,
         scanDepth: Int = 5,
-        constantActive: Boolean = false,
-        selective: Boolean = false,
-        selectiveLogic: SelectiveLogic = SelectiveLogic.AND_ANY,
-        group: String = "",
-        delayUntilRecursion: Int = 0,
+        constantActive: Boolean = false
     ) = PromptInjection.RegexInjection(
         id = id,
         name = name,
@@ -102,16 +67,10 @@ class PromptInjectionTransformerTest {
         injectDepth = injectDepth,
         role = role,
         keywords = keywords,
-        secondaryKeys = secondaryKeys,
         useRegex = useRegex,
         caseSensitive = caseSensitive,
-        matchWholeWords = matchWholeWords,
         scanDepth = scanDepth,
-        constantActive = constantActive,
-        selective = selective,
-        selectiveLogic = selectiveLogic,
-        group = group,
-        delayUntilRecursion = delayUntilRecursion,
+        constantActive = constantActive
     )
 
     private fun createLorebook(
@@ -221,245 +180,6 @@ class PromptInjectionTransformerTest {
         )
 
         assertEquals(messages, result)
-    }
-
-    @Test
-    fun `conversation mode injection should apply only when assistant allows it`() {
-        val injectionId = Uuid.random()
-        val injection = createModeInjection(
-            id = injectionId,
-            content = "Conversation content"
-        )
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Hello")
-        )
-
-        val disabledResult = transformMessages(
-            messages = messages,
-            assistant = createAssistant(allowConversationPromptInjection = false),
-            modeInjections = listOf(injection),
-            lorebooks = emptyList(),
-            conversationModeInjectionIds = setOf(injectionId)
-        )
-        val enabledResult = transformMessages(
-            messages = messages,
-            assistant = createAssistant(allowConversationPromptInjection = true),
-            modeInjections = listOf(injection),
-            lorebooks = emptyList(),
-            conversationModeInjectionIds = setOf(injectionId)
-        )
-
-        assertEquals(messages, disabledResult)
-        assertTrue(getMessageText(enabledResult.first()).contains("Conversation content"))
-    }
-
-    @Test
-    fun `assistant mode injection should be ignored when conversation injection is allowed`() {
-        val assistantInjectionId = Uuid.random()
-        val conversationInjectionId = Uuid.random()
-        val assistantInjection = createModeInjection(
-            id = assistantInjectionId,
-            content = "Assistant content"
-        )
-        val conversationInjection = createModeInjection(
-            id = conversationInjectionId,
-            content = "Conversation content"
-        )
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Hello")
-        )
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = createAssistant(
-                modeInjectionIds = setOf(assistantInjectionId),
-                allowConversationPromptInjection = true
-            ),
-            modeInjections = listOf(assistantInjection, conversationInjection),
-            lorebooks = emptyList(),
-            conversationModeInjectionIds = setOf(conversationInjectionId)
-        )
-        val systemText = getMessageText(result.first())
-
-        assertFalse(systemText.contains("Assistant content"))
-        assertTrue(systemText.contains("Conversation content"))
-    }
-
-    @Test
-    fun `conversation lorebook should apply only when assistant allows it`() {
-        val lorebookId = Uuid.random()
-        val entry = createRegexInjection(
-            keywords = listOf("Hello"),
-            content = "Conversation lorebook content"
-        )
-        val lorebook = createLorebook(
-            id = lorebookId,
-            entries = listOf(entry)
-        )
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Hello")
-        )
-
-        val disabledResult = transformMessages(
-            messages = messages,
-            assistant = createAssistant(allowConversationPromptInjection = false),
-            modeInjections = emptyList(),
-            lorebooks = listOf(lorebook),
-            conversationLorebookIds = setOf(lorebookId)
-        )
-        val enabledResult = transformMessages(
-            messages = messages,
-            assistant = createAssistant(allowConversationPromptInjection = true),
-            modeInjections = emptyList(),
-            lorebooks = listOf(lorebook),
-            conversationLorebookIds = setOf(lorebookId)
-        )
-
-        assertEquals(messages, disabledResult)
-        assertTrue(getMessageText(enabledResult.first()).contains("Conversation lorebook content"))
-    }
-
-    @Test
-    fun `assistant lorebook should be ignored when conversation injection is allowed`() {
-        val assistantLorebookId = Uuid.random()
-        val conversationLorebookId = Uuid.random()
-        val assistantLorebook = createLorebook(
-            id = assistantLorebookId,
-            entries = listOf(
-                createRegexInjection(
-                    keywords = listOf("Hello"),
-                    content = "Assistant lorebook content"
-                )
-            )
-        )
-        val conversationLorebook = createLorebook(
-            id = conversationLorebookId,
-            entries = listOf(
-                createRegexInjection(
-                    keywords = listOf("Hello"),
-                    content = "Conversation lorebook content"
-                )
-            )
-        )
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Hello")
-        )
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = createAssistant(
-                lorebookIds = setOf(assistantLorebookId),
-                allowConversationPromptInjection = true
-            ),
-            modeInjections = emptyList(),
-            lorebooks = listOf(assistantLorebook, conversationLorebook),
-            conversationLorebookIds = setOf(conversationLorebookId)
-        )
-        val systemText = getMessageText(result.first())
-
-        assertFalse(systemText.contains("Assistant lorebook content"))
-        assertTrue(systemText.contains("Conversation lorebook content"))
-    }
-    // endregion
-
-    // region 角色卡内嵌世界书（官方模型：随卡生效，与全局书合并，不互相覆盖）
-    @Test
-    fun `character book entry injects even without any bound lorebook`() {
-        // 官方：character_book 是卡的一部分，未绑定任何外置书也应生效
-        val assistant = createAssistant(
-            tavernData = characterCardWithBook(entries = listOf(tavernEntry(keys = listOf("dragon")))),
-        )
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Tell me about the dragon"),
-        )
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = assistant,
-            modeInjections = emptyList(),
-            lorebooks = emptyList(),
-        )
-
-        // 卡内条目默认 position=after_char，注入位置不一定是首条 system 消息，故全文检索
-        assertTrue(result.joinToString("\n") { getMessageText(it) }.contains("Dragon lore"))
-    }
-
-    @Test
-    fun `character book and global lorebook both inject together`() {
-        // issue #3：内嵌书与全局书必须同时生效，而不是互相覆盖
-        val globalId = Uuid.random()
-        val globalLorebook = createLorebook(
-            id = globalId,
-            name = "Global",
-            entries = listOf(
-                createRegexInjection(keywords = listOf("dragon"), content = "Global dragon lore")
-            ),
-        )
-        val assistant = createAssistant(
-            lorebookIds = setOf(globalId),
-            tavernData = characterCardWithBook(entries = listOf(tavernEntry(keys = listOf("dragon")))),
-        )
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Tell me about the dragon"),
-        )
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = assistant,
-            modeInjections = emptyList(),
-            lorebooks = listOf(globalLorebook),
-        )
-
-        val text = result.joinToString("\n") { getMessageText(it) }
-        assertTrue(text.contains("Dragon lore"))
-        assertTrue(text.contains("Global dragon lore"))
-    }
-
-    @Test
-    fun `character book entries have stable ids across calls`() {
-        // sticky/cooldown/向量激活按 id 追踪：同一条目每次必须得到同一个 id
-        val tav = characterCardWithBook(entries = listOf(tavernEntry(keys = listOf("dragon"))))
-        val first = buildCharacterBookEntries(tav).single().id
-        val second = buildCharacterBookEntries(tav).single().id
-        assertEquals(first, second)
-    }
-
-    @Test
-    fun `different character book entries get different ids`() {
-        val tav = characterCardWithBook(
-            entries = listOf(
-                tavernEntry(id = 0, keys = listOf("dragon"), content = "Dragon lore"),
-                tavernEntry(id = 1, keys = listOf("sword"), content = "Sword lore"),
-            ),
-        )
-        val ids = buildCharacterBookEntries(tav).map { it.id }
-        assertEquals(2, ids.size)
-        assertNotEquals(ids[0], ids[1])
-    }
-
-    @Test
-    fun `post history instructions and depth prompt become character entries`() {
-        val tav = characterCardWithBook(
-            entries = listOf(tavernEntry(keys = listOf("dragon"))),
-            postHistoryInstructions = "Stay in character",
-            depthPrompt = "Depth reminder",
-        )
-        val entries = buildCharacterBookEntries(tav)
-        // 内嵌条目 + PHI + 深度提示
-        assertEquals(3, entries.size)
-        assertTrue(entries.any { it.content == "Stay in character" })
-        assertTrue(entries.any { it.content == "Depth reminder" })
-    }
-
-    @Test
-    fun `null tavern data yields no character entries`() {
-        assertTrue(buildCharacterBookEntries(null).isEmpty())
     }
     // endregion
 
@@ -785,14 +505,14 @@ class PromptInjectionTransformerTest {
         val injectedText = getMessageText(result[1])
         assertTrue(injectedText.contains("Higher priority"))
         assertTrue(injectedText.contains("Lower priority"))
-        // 官方语义：最终文本顺序 = order/priority 升序（低值在前）
-        assertTrue(injectedText.indexOf("Lower priority") < injectedText.indexOf("Higher priority"))
+        // Higher priority should come first
+        assertTrue(injectedText.indexOf("Higher priority") < injectedText.indexOf("Lower priority"))
     }
     // endregion
 
     // region Priority tests
     @Test
-    fun `injections should be ordered by priority ascending`() {
+    fun `injections should be ordered by priority descending`() {
         val id1 = Uuid.random()
         val id2 = Uuid.random()
         val id3 = Uuid.random()
@@ -816,10 +536,10 @@ class PromptInjectionTransformerTest {
         )
 
         val systemText = getMessageText(result[0])
-        // 官方语义：最终文本顺序 = order/priority 升序（低值在前）
-        assertTrue(systemText.contains("Priority 1"))
-        assertTrue(systemText.indexOf("Priority 1") < systemText.indexOf("Priority 2"))
-        assertTrue(systemText.indexOf("Priority 2") < systemText.indexOf("Priority 3"))
+        // Higher priority should come first when joining
+        assertTrue(systemText.contains("Priority 3"))
+        assertTrue(systemText.indexOf("Priority 3") < systemText.indexOf("Priority 2"))
+        assertTrue(systemText.indexOf("Priority 2") < systemText.indexOf("Priority 1"))
     }
     // endregion
 
@@ -1135,42 +855,6 @@ class PromptInjectionTransformerTest {
         val systemText = getMessageText(result[0])
         assertEquals("System prompt", systemText)
     }
-
-    @Test
-    fun `disabled entry should not trigger`() {
-        // 官方：entry.disable 的条目在扫描循环开头直接跳过（不参与匹配/预算）
-        val lorebookId = Uuid.random()
-        val disabledEntry = createRegexInjection(
-            keywords = listOf("magic"),
-            content = "Should not appear",
-            enabled = false,
-        )
-        val enabledEntry = createRegexInjection(
-            keywords = listOf("sword"),
-            content = "Enabled entry appears",
-            enabled = true,
-        )
-        val lorebook = createLorebook(
-            id = lorebookId,
-            entries = listOf(disabledEntry, enabledEntry),
-        )
-
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("magic sword"),
-        )
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(lorebook),
-        )
-
-        val text = result.joinToString("\n") { getMessageText(it) }
-        assertFalse(text.contains("Should not appear"))
-        assertTrue(text.contains("Enabled entry appears"))
-    }
     // endregion
 
     // region Multiple injections tests
@@ -1469,346 +1153,6 @@ class PromptInjectionTransformerTest {
         val injectedIndex = result.indexOfFirst { getMessageText(it).contains("Bottom injection") }
         val lastUserIndex = result.indexOfLast { it.role == MessageRole.USER && getMessageText(it) == "Thanks!" }
         assertEquals(lastUserIndex - 1, injectedIndex)
-    }
-
-    @Test
-    fun `match whole words should not match partial words`() {
-        val injectionId = Uuid.random()
-        // 整词匹配开启：只匹配完整单词 trigger，不匹配 triggering
-        val wholeWord = createRegexInjection(
-            id = injectionId,
-            keywords = listOf("trigger"),
-            matchWholeWords = true,
-            content = "Whole word injected"
-        )
-
-        // 上下文只含 triggering（包含 trigger 但不是整词）
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("I am triggering the event"),
-        )
-        val lorebookId = Uuid.random()
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(createLorebook(id = lorebookId, entries = listOf(wholeWord)))
-        )
-
-        // 整词不匹配 → 消息原样返回（无注入）
-        assertEquals(messages, result)
-
-        // 整词匹配：上下文含完整单词 trigger 时注入
-        val messages2 = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("Please trigger the event"),
-        )
-        val result2 = transformMessages(
-            messages = messages2,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(createLorebook(id = lorebookId, entries = listOf(wholeWord)))
-        )
-        assertTrue(result2.any { getMessageText(it).contains("Whole word injected") })
-    }
-
-    @Test
-    fun `world info budget should limit activated entries`() {
-        val highPriority = createRegexInjection(
-            id = Uuid.random(),
-            priority = 100,
-            keywords = listOf("alpha"),
-            content = "High priority entry"
-        )
-        val lowPriority = createRegexInjection(
-            id = Uuid.random(),
-            priority = 0,
-            keywords = listOf("beta"),
-            content = "Low priority entry"
-        )
-
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("alpha beta both trigger"),
-        )
-        val lorebookId = Uuid.random()
-
-        val result = transformMessages(
-            messages = messages,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(createLorebook(id = lorebookId, entries = listOf(highPriority, lowPriority))),
-            worldInfoBudget = 100,
-            worldInfoBudgetCap = 6,
-        )
-
-        // 预算 = min(100% of context ≈ 10, cap 6) = 6：高优先级条目(5 tokens)可接受，低优先级累计超预算被跳过
-        val injected = result.filter { getMessageText(it).contains("entry") }.joinToString { getMessageText(it) }
-        assertTrue(injected.contains("High priority entry"))
-        assertFalse(injected.contains("Low priority entry"))
-    }
-
-    @Test
-    fun `min activations should rescan earlier messages`() {
-        // 无条目 scanDepth → 用全局深度 worldInfoDepth=2，首轮只扫最后 2 条（不含 ancient）
-        val entry = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("ancient"),
-            content = "Ancient lore injected",
-        )
-
-        // ancient 出现在较早消息，最后一条不含
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("ancient text here"),
-            UIMessage.assistant("recent reply"),
-            UIMessage.user("latest message"),
-        )
-        val lorebookId = Uuid.random()
-
-        // minActivations=1：应扩大扫描深度补足，注入 ancient
-        val result = transformMessages(
-            messages = messages,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(createLorebook(id = lorebookId, entries = listOf(entry))),
-            worldInfoMinActivations = 1,
-        )
-
-        assertTrue(result.any { getMessageText(it).contains("Ancient lore injected") })
-    }
-
-    @Test
-    fun `recursive scanning should chain related entries`() {
-        // 条目A: 关键词 alpha, 内容提到 beta（条目B的关键词）
-        val entryA = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("alpha"),
-            content = "Alpha lore mentions beta",
-        )
-        val entryB = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("beta"),
-            content = "Beta lore injected",
-        )
-
-        val messages = listOf(
-            UIMessage.system("System prompt"),
-            UIMessage.user("the alpha event"),
-        )
-        val lorebookId = Uuid.random()
-
-        // 关闭递归：只注入 A
-        val plain = transformMessages(
-            messages = messages,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(createLorebook(id = lorebookId, entries = listOf(entryA, entryB))),
-        )
-        assertTrue(plain.any { getMessageText(it).contains("Alpha lore") })
-        assertFalse(plain.any { getMessageText(it).contains("Beta lore injected") })
-
-        // 开启递归：A 内容含 beta → 链式带出 B（官方默认 max_recursion_steps=1 只扫首轮，这里显式开 2 轮）
-        val recursive = transformMessages(
-            messages = messages,
-            assistant = createAssistant(lorebookIds = setOf(lorebookId)),
-            modeInjections = emptyList(),
-            lorebooks = listOf(createLorebook(id = lorebookId, entries = listOf(entryA, entryB))),
-            worldInfoRecursive = true,
-            worldInfoMaxRecursionSteps = 2,
-        )
-        assertTrue(recursive.any { getMessageText(it).contains("Alpha lore") })
-        assertTrue(recursive.any { getMessageText(it).contains("Beta lore injected") })
-    }
-    // endregion
-
-    // region 官方选择性逻辑语义（world-info.js checkWorldInfo：主键先行）
-    @Test
-    fun `official AND ALL requires any primary and all secondary keys`() {
-        val entry = createRegexInjection(
-            keywords = listOf("alpha", "zeta"),
-            secondaryKeys = listOf("beta", "gamma"),
-            selective = true,
-            selectiveLogic = SelectiveLogic.AND_ALL,
-        )
-        // 任一主键命中 + 全部二级键命中 → 触发
-        assertTrue(entry.isTriggered("alpha beta gamma"))
-        assertTrue(entry.isTriggered("zeta beta gamma"))
-        // 主键命中但二级键未全命中 → 不触发
-        assertFalse(entry.isTriggered("alpha beta"))
-        // 主键未命中 → 不触发
-        assertFalse(entry.isTriggered("beta gamma"))
-    }
-
-    @Test
-    fun `official NOT ANY requires primary match and no secondary match`() {
-        val entry = createRegexInjection(
-            keywords = listOf("alpha"),
-            secondaryKeys = listOf("beta"),
-            selective = true,
-            selectiveLogic = SelectiveLogic.NOT_ANY,
-        )
-        assertTrue(entry.isTriggered("alpha"))
-        assertTrue(entry.isTriggered("alpha gamma"))
-        assertFalse(entry.isTriggered("alpha beta"))
-        // 主键没命中时不能靠“全都不匹配”触发
-        assertFalse(entry.isTriggered("gamma"))
-    }
-
-    @Test
-    fun `official NOT ALL requires primary match and not all secondary match`() {
-        val entry = createRegexInjection(
-            keywords = listOf("alpha"),
-            secondaryKeys = listOf("beta", "gamma"),
-            selective = true,
-            selectiveLogic = SelectiveLogic.NOT_ALL,
-        )
-        assertTrue(entry.isTriggered("alpha beta"))
-        assertTrue(entry.isTriggered("alpha"))
-        assertFalse(entry.isTriggered("alpha beta gamma"))
-        assertFalse(entry.isTriggered("beta gamma"))
-    }
-
-    @Test
-    fun `official AND ANY with empty secondary keys activates on primary match`() {
-        val entry = createRegexInjection(
-            keywords = listOf("alpha"),
-            secondaryKeys = emptyList(),
-            selective = true,
-            selectiveLogic = SelectiveLogic.AND_ANY,
-        )
-        assertTrue(entry.isTriggered("alpha"))
-    }
-
-    @Test
-    fun `constant entry activates without keywords`() {
-        val entry = createRegexInjection(keywords = emptyList(), constantActive = true)
-        assertTrue(entry.isTriggered("anything at all"))
-    }
-
-    @Test
-    fun `official slash wrapped regex key matches regardless of useRegex flag`() {
-        val entry = createRegexInjection(keywords = listOf("/alpha/i"))
-        assertTrue(entry.isTriggered("ALPHA here"))
-        assertFalse(entry.isTriggered("beta"))
-    }
-    // endregion
-
-    // region 官方 inclusion group 语义（filterByInclusionGroups）
-    @Test
-    fun `inclusion group picks one winner across lorebooks`() {
-        val entryA = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("alpha"),
-            group = "g1",
-            content = "A content",
-        )
-        val entryB = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("alpha"),
-            group = "g1",
-            content = "B content",
-        )
-        val lb1Id = Uuid.random()
-        val lb2Id = Uuid.random()
-        val assistant = createAssistant(lorebookIds = setOf(lb1Id, lb2Id))
-        val lorebooks = listOf(
-            createLorebook(id = lb1Id, entries = listOf(entryA)),
-            createLorebook(id = lb2Id, entries = listOf(entryB)),
-        )
-        val messages = listOf(UIMessage.user("alpha"))
-
-        val result = transformMessages(messages, assistant, emptyList(), lorebooks)
-        val allText = result.joinToString("\n") { getMessageText(it) }
-        assertTrue(allText.contains("A content") xor allText.contains("B content"))
-    }
-
-    @Test
-    fun `recursion does not activate second entry of already activated group`() {
-        val entryA = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("alpha"),
-            group = "g1",
-            content = "A mentions beta",
-        )
-        val entryB = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("beta"),
-            group = "g1",
-            content = "B content",
-        )
-        val entryC = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("beta"),
-            group = "g2",
-            content = "C content",
-        )
-        val lbId = Uuid.random()
-        val assistant = createAssistant(lorebookIds = setOf(lbId))
-        val lorebooks = listOf(
-            createLorebook(id = lbId, entries = listOf(entryA, entryB, entryC)),
-        )
-        val messages = listOf(UIMessage.user("alpha"))
-
-        val result = transformMessages(
-            messages,
-            assistant,
-            emptyList(),
-            lorebooks,
-            worldInfoRecursive = true,
-            worldInfoMaxRecursionSteps = 2,
-        )
-        val allText = result.joinToString("\n") { getMessageText(it) }
-        assertTrue(allText.contains("A mentions beta"))
-        assertTrue(allText.contains("C content"))
-        assertFalse(allText.contains("B content"))
-    }
-
-    @Test
-    fun `delay until recursion levels open level by level`() {
-        val entryA = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("alpha"),
-            content = "A mentions beta",
-        )
-        val entryB = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("beta"),
-            content = "B mentions gamma",
-            delayUntilRecursion = 2,
-        )
-        val entryC = createRegexInjection(
-            id = Uuid.random(),
-            keywords = listOf("gamma"),
-            content = "C content",
-            delayUntilRecursion = 3,
-        )
-        val lbId = Uuid.random()
-        val assistant = createAssistant(lorebookIds = setOf(lbId))
-        val lorebooks = listOf(createLorebook(id = lbId, entries = listOf(entryA, entryB, entryC)))
-        val messages = listOf(UIMessage.user("alpha"))
-
-        // 关闭递归：延迟条目一律不参与（只注入 A）
-        val plain = transformMessages(messages, assistant, emptyList(), lorebooks)
-        val plainText = plain.joinToString("\n") { getMessageText(it) }
-        assertTrue(plainText.contains("A mentions beta"))
-        assertFalse(plainText.contains("B mentions gamma"))
-        assertFalse(plainText.contains("C content"))
-
-        // 开启递归：层级 2 → 3 逐级开放，B、C 依次被链式带出（3 轮）
-        val recursive = transformMessages(
-            messages,
-            assistant,
-            emptyList(),
-            lorebooks,
-            worldInfoRecursive = true,
-            worldInfoMaxRecursionSteps = 3,
-        )
-        val recursiveText = recursive.joinToString("\n") { getMessageText(it) }
-        assertTrue(recursiveText.contains("A mentions beta"))
-        assertTrue(recursiveText.contains("B mentions gamma"))
-        assertTrue(recursiveText.contains("C content"))
     }
     // endregion
 }

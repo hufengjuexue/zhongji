@@ -36,7 +36,8 @@ import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -82,7 +83,6 @@ import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.ui.components.message.MessagePartBlock
 import me.rerere.rikkahub.ui.components.message.ThinkingStep
-import me.rerere.rikkahub.ui.components.message.tools.toolDisplayName
 import me.rerere.rikkahub.ui.components.message.ChatMessageServerToolStep
 import me.rerere.rikkahub.ui.components.message.groupMessageParts
 import me.rerere.rikkahub.ui.components.message.tools.memoryToolTitle
@@ -125,7 +125,7 @@ fun ChatExportSheet(
     if (visible) {
         ModalBottomSheet(
             onDismissRequest = onDismissRequest,
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
         ) {
             Column(
                 modifier = Modifier
@@ -743,7 +743,7 @@ private fun ChainOfThoughtScope.ExportedToolStep(
 
         "scrape_web" -> stringResource(R.string.chat_message_tool_scrape_web)
         else -> memoryToolTitle(tool.toolName, runCatching { tool.inputAsJson() }.getOrNull())
-            ?: stringResource(R.string.chat_message_tool_call_generic, toolDisplayName(tool.toolName))
+            ?: stringResource(R.string.chat_message_tool_call_generic, tool.toolName)
     }
     ControlledChainOfThoughtStep(
         expanded = true,

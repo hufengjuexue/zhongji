@@ -16,12 +16,7 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
-    ): List<UIMessage> = transformDocumentContents(messages)
-
-    /**
-     * 将消息中的 Document 部分读出并转为提示词文本（供上下文压缩等后台流程复用）
-     */
-    suspend fun transformDocumentContents(messages: List<UIMessage>): List<UIMessage> {
+    ): List<UIMessage> {
         return withContext(Dispatchers.IO) {
             messages.map { message ->
                 message.copy(
@@ -33,48 +28,18 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
                                 val path = resolveWorkspacePath(document)
                                 val pathAttr = path?.let { " path=\"$it\"" } ?: ""
                                 val prompt = """
-                  <UploadFile name="${document.fileName}"$pathAttr>
-                  ```
-                  $content
-                  ```
-                  </UploadFile>
-                  """.trimMargin()
+                                  <UploadFile name="${document.fileName}"$pathAttr>
+                                  ```
+                                  $content
+                                  ```
+                                  </UploadFile>
+                                  """.trimMargin()
                                 add(0, UIMessagePart.Text(prompt))
                             }
                         }
                     }
                 )
             }
-        }
-    }
-
-    // 上传文件保存在 filesDir/upload 下, 该目录通过 proot 挂载到 workspace 的 /upload
-    // 返回文件在 workspace 内的绝对路径, 便于 AI 用 workspace 工具直接读取原始文件
-    private fun resolveWorkspacePath(document: UIMessagePart.Document): String? {
-        val file = runCatching { document.url.toUri().toFile() }.getOrNull() ?: return null
-        if (file.parentFile?.name != "upload") return null
-        return "/upload/${file.name}"
-    }
-
-    private fun readDocumentContent(document: UIMessagePart.Document): String {
-        val file = runCatching { document.url.toUri().toFile() }.getOrNull()
-            ?: return "[ERROR, invalid file uri: ${document.fileName}]"
-        if (!file.exists() || !file.isFile) {
-            return "[ERROR, file not found: ${document.fileName}]"
-        }
-        if (file.length() > 5 * 1024 * 1024) {
-            return "[ERROR, 文件超过 5MB 无法读取: ${document.fileName}]"
-        }
-        return runCatching {
-            when (document.mime) {
-                "application/pdf" -> parsePdfAsText(file)
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> parseDocxAsText(file)
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> parsePptxAsText(file)
-                "application/epub+zip" -> parseEpubAsText(file)
-                else -> file.readText()
-            }
-        }.getOrElse {
-            "[ERROR, failed to read file: ${document.fileName}]"
         }
     }
 
@@ -92,5 +57,32 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
 
     private fun parseEpubAsText(file: File): String {
         return EpubParser.parse(file)
+    }
+
+    // 上传文件保存在 filesDir/upload 下, 该目录通过 proot 挂载到 workspace 的 /upload
+    // 返回文件在 workspace 内的绝对路径, 便于 AI 用 workspace 工具直接读取原始文件
+    private fun resolveWorkspacePath(document: UIMessagePart.Document): String? {
+        val file = runCatching { document.url.toUri().toFile() }.getOrNull() ?: return null
+        if (file.parentFile?.name != "upload") return null
+        return "/upload/${file.name}"
+    }
+
+    private fun readDocumentContent(document: UIMessagePart.Document): String {
+        val file = runCatching { document.url.toUri().toFile() }.getOrNull()
+            ?: return "[ERROR, invalid file uri: ${document.fileName}]"
+        if (!file.exists() || !file.isFile) {
+            return "[ERROR, file not found: ${document.fileName}]"
+        }
+        return runCatching {
+            when (document.mime) {
+                "application/pdf" -> parsePdfAsText(file)
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> parseDocxAsText(file)
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> parsePptxAsText(file)
+                "application/epub+zip" -> parseEpubAsText(file)
+                else -> file.readText()
+            }
+        }.getOrElse {
+            "[ERROR, failed to read file: ${document.fileName}]"
+        }
     }
 }

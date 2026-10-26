@@ -8,24 +8,25 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.io.File
-import java.io.InputStream
-import java.io.OutputStream
-import me.rerere.rikkahub.utils.l10n
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.RootfsInstallProgress
 import me.rerere.workspace.RootfsInstallStage
-import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceCommandResult
+import me.rerere.workspace.WorkspaceFileEntry
+import me.rerere.workspace.WorkspaceLayout
 import me.rerere.workspace.WorkspaceStorageArea
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 
 class WorkspaceDetailVM(
     private val id: String,
@@ -51,14 +52,22 @@ class WorkspaceDetailVM(
     fun exportFilesToDirectory(treeUri: Uri?, resolver: ContentResolver) {
         val (area, entries) = pendingExport.also { pendingExport = null } ?: return
         if (treeUri == null) return
-        _state.update { it.copy(exporting = true, exportCompleted = 0, exportTotal = entries.size, exportResult = null) }
+        _state.update {
+            it.copy(
+                exporting = true,
+                exportCompleted = 0,
+                exportTotal = entries.size,
+                exportResult = null
+            )
+        }
         viewModelScope.launch {
             var succeeded = 0
             val failures = mutableListOf<String>()
             try {
                 withContext(Dispatchers.IO) {
                     val parent = DocumentsContract.buildDocumentUriUsingTree(
-                        treeUri, DocumentsContract.getTreeDocumentId(treeUri)
+                        treeUri,
+                        DocumentsContract.getTreeDocumentId(treeUri)
                     )
                     entries.forEachIndexed { index, entry ->
                         ensureActive()
@@ -68,16 +77,16 @@ class WorkspaceDetailVM(
                                 entry.name.substringAfterLast('.', "").lowercase()
                             ) ?: "application/octet-stream"
                             val document = DocumentsContract.createDocument(resolver, parent, mime, entry.name)
-                                ?: error(l10n("无法创建目标文件", "Unable to create the target file"))
+                                ?: error("无法创建目标文件")
                             destination = document
-                            val output = resolver.openOutputStream(document) ?: error(l10n("无法打开目标文件", "Unable to open the target file"))
+                            val output = resolver.openOutputStream(document) ?: error("无法打开目标文件")
                             output.use { repository.exportFile(id, area, entry.path, it) }
                             succeeded++
                             destination = null
                         } catch (error: CancellationException) {
                             throw error
                         } catch (error: Exception) {
-                            failures += "${entry.name}：${error.message ?: l10n("导出失败", "Export failed")}"
+                            failures += "${entry.name}：${error.message ?: "导出失败"}"
                         } finally {
                             // 只清理本次创建但未完整写入的文件。
                             destination?.let { runCatching { DocumentsContract.deleteDocument(resolver, it) } }
@@ -87,14 +96,14 @@ class WorkspaceDetailVM(
                 }
                 _state.update {
                     it.copy(exportResult = buildString {
-                        append(l10n("已导出 $succeeded/${entries.size} 个文件", "Exported $succeeded/${entries.size} files"))
+                        append("已导出 $succeeded/${entries.size} 个文件")
                         if (failures.isNotEmpty()) append("\n\n" + failures.joinToString("\n"))
                     })
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _state.update { it.copy(exportResult = l10n("导出失败：${error.message}", "Export failed: ${error.message}")) }
+                _state.update { it.copy(exportResult = "导出失败：${error.message}") }
             } finally {
                 _state.update { it.copy(exporting = false) }
             }
@@ -153,23 +162,28 @@ class WorkspaceDetailVM(
         refresh()
     }
 
+    private var refreshJob: Job? = null
+
     fun refresh() {
-        viewModelScope.launch {
+        // 远程工作区列目录要走网络, 快速切换目录时旧请求可能晚到, 只保留最新一次
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
-            runCatching {
-                repository.listFiles(
+            try {
+                val entries = repository.listFiles(
                     id = id,
                     area = state.value.area,
                     path = state.value.path,
                 )
-            }.onSuccess { entries ->
                 _state.update { it.copy(entries = entries, loading = false) }
-            }.onFailure { error ->
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
                 _state.update {
                     it.copy(
                         entries = emptyList(),
                         loading = false,
-                        error = error.message ?: l10n("加载工作区文件失败", "Failed to load workspace files"),
+                        error = error.message ?: "加载工作区文件失败",
                     )
                 }
             }
@@ -188,7 +202,7 @@ class WorkspaceDetailVM(
             }.onSuccess {
                 refresh()
             }.onFailure { error ->
-                _state.update { it.copy(error = error.message ?: l10n("删除失败", "Delete failed")) }
+                _state.update { it.copy(error = error.message ?: "删除失败") }
             }
         }
     }
@@ -206,7 +220,7 @@ class WorkspaceDetailVM(
             }.onSuccess {
                 refresh()
             }.onFailure { error ->
-                _state.update { it.copy(error = error.message ?: l10n("导入文件失败", "Failed to import the file")) }
+                _state.update { it.copy(error = error.message ?: "导入文件失败") }
             }
         }
     }
@@ -221,7 +235,7 @@ class WorkspaceDetailVM(
                     outputStream = outputStream,
                 )
             }.onFailure { error ->
-                _state.update { it.copy(error = error.message ?: l10n("导出文件失败", "Failed to export the file")) }
+                _state.update { it.copy(error = error.message ?: "导出文件失败") }
             }
         }
     }
@@ -229,7 +243,7 @@ class WorkspaceDetailVM(
     suspend fun resolveImageFile(
         entry: WorkspaceFileEntry,
         area: WorkspaceStorageArea,
-    ): File = repository.resolveFile(id, area, entry.path)
+    ): File? = repository.resolveFile(id, area, entry.path)
 
     /**
      * 把当前区域下的文件导出到 cacheDir 的临时文件, 完成后回调 [onReady].
@@ -250,7 +264,7 @@ class WorkspaceDetailVM(
                 }
                 file
             }.onSuccess(onReady).onFailure { error ->
-                _state.update { it.copy(error = error.message ?: l10n("导出文件失败", "Failed to export the file")) }
+                _state.update { it.copy(error = error.message ?: "导出文件失败") }
             }
         }
     }
@@ -292,7 +306,7 @@ class WorkspaceDetailVM(
             } catch (e: CancellationException) {
                 throw e
             } catch (error: Throwable) {
-                _installError.value = error.message ?: l10n("Rootfs 安装失败", "Rootfs installation failed")
+                _installError.value = error.message ?: "Rootfs 安装失败"
             } finally {
                 _installProgress.value = null
             }
@@ -333,7 +347,7 @@ class WorkspaceDetailVM(
                 _terminalState.update {
                     it.copy(
                         running = false,
-                        history = it.history + WorkspaceTerminalEntry.Error(error.message ?: l10n("命令执行失败", "Command execution failed")),
+                        history = it.history + WorkspaceTerminalEntry.Error(error.message ?: "命令执行失败"),
                     )
                 }
             }
@@ -351,13 +365,15 @@ class WorkspaceDetailVM(
     private fun loadWorkspace() {
         viewModelScope.launch {
             val workspace = repository.getById(id)
-            _state.update { it.copy(workspace = workspace) }
+            val layout = repository.layout(id)
+            _state.update { it.copy(workspace = workspace, layout = layout) }
         }
     }
 }
 
 data class WorkspaceDetailState(
     val workspace: WorkspaceEntity? = null,
+    val layout: WorkspaceLayout? = null,
     val area: WorkspaceStorageArea = WorkspaceStorageArea.FILES,
     val path: String = "",
     val entries: List<WorkspaceFileEntry> = emptyList(),

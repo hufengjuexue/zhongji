@@ -37,7 +37,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -89,7 +89,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val bodyRaw = response.body!!.string()
+                val bodyRaw = response.body.string()
                 val searchResponse = runCatching {
                     json.decodeFromString<SearXNGResponse>(bodyRaw)
                 }.onFailure {

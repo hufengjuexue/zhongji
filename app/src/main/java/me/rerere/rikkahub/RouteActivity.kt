@@ -1,6 +1,7 @@
 package me.rerere.rikkahub
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -10,7 +11,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SharedTransitionLayout
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -48,10 +48,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import coil3.ImageLoader
-import coil3.compose.AsyncImage
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
@@ -71,8 +68,6 @@ import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.repository.MediaCreationRepository
 import me.rerere.rikkahub.service.MediaCreationForegroundService
 import me.rerere.rikkahub.ui.activity.SafeModeActivity
-import me.rerere.rikkahub.ui.components.ui.BACKUP_REMINDER_LAUNCH_INTERVAL
-import me.rerere.rikkahub.ui.components.ui.BackupLaunchReminderDialog
 import me.rerere.rikkahub.ui.components.ui.TTSController
 import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalNavController
@@ -96,29 +91,22 @@ import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantPromptPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantRequestPage
 import me.rerere.rikkahub.ui.pages.backup.BackupPage
 import me.rerere.rikkahub.ui.pages.chat.ChatPage
-import me.rerere.rikkahub.ui.pages.voice.VideoCallPage
-import me.rerere.rikkahub.ui.pages.voice.VoiceCallPage
-import me.rerere.rikkahub.ui.pages.chat.GroupChatListPage
-import me.rerere.rikkahub.ui.pages.chat.GroupChatPage
-import me.rerere.rikkahub.ui.pages.setting.PersonaPage
-import me.rerere.rikkahub.ui.pages.setting.AuthorsNotePage
 import me.rerere.rikkahub.ui.pages.debug.DebugPage
 import me.rerere.rikkahub.ui.pages.extensions.ExtensionsPage
 import me.rerere.rikkahub.ui.pages.extensions.PromptPage
 import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesPage
-// 本地 Skills 页仍位于 extensions 包（未随上游迁移到 .skills 子包），故此处保持本地路径
-import me.rerere.rikkahub.ui.pages.extensions.SkillDetailPage
-import me.rerere.rikkahub.ui.pages.extensions.SkillsPage
+import me.rerere.rikkahub.ui.pages.extensions.skills.SkillDetailPage
 import me.rerere.rikkahub.ui.pages.memory.MemoryFilePage
+import me.rerere.rikkahub.ui.pages.extensions.skills.SkillsPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspacePage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceDetailPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceFileEditorPage
+import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceSshEditorPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceTerminalPage
-import me.rerere.rikkahub.plugin.ui.PluginDetailPage
-import me.rerere.rikkahub.plugin.ui.PluginFolderPage
-import me.rerere.rikkahub.plugin.ui.PluginManagePage
+import me.rerere.workspace.WorkspaceStorageArea
 import me.rerere.rikkahub.ui.pages.favorite.FavoritePage
 import me.rerere.rikkahub.ui.pages.history.HistoryPage
+import me.rerere.rikkahub.ui.pages.imggen.ImageGenPage
 import me.rerere.rikkahub.ui.pages.log.LogPage
 import me.rerere.rikkahub.ui.pages.mediacreation.MediaCreationPage
 import me.rerere.rikkahub.ui.pages.mediacreation.MediaCreationSessionsPage
@@ -137,43 +125,37 @@ import me.rerere.rikkahub.ui.pages.setting.SettingMcpDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMcpPage
 import me.rerere.rikkahub.ui.pages.setting.SettingModelPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPage
-import me.rerere.rikkahub.ui.pages.setting.SettingProactiveMessagePage
 import me.rerere.rikkahub.ui.pages.setting.SettingProviderDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingProviderPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSearchDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSearchPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMediaPage
+import me.rerere.rikkahub.ui.pages.setting.SettingMediaProviderDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSpeechPage
-import me.rerere.rikkahub.ui.pages.setting.SettingTtsPlaybackPage
 import me.rerere.rikkahub.ui.pages.setting.SettingWebPage
-import me.rerere.rikkahub.ui.pages.setting.SettingSecurityPage
 import me.rerere.rikkahub.ui.pages.share.handler.ShareHandlerPage
 import me.rerere.rikkahub.ui.pages.stats.StatsPage
 import me.rerere.rikkahub.ui.pages.translator.TranslatorPage
 import me.rerere.rikkahub.ui.pages.webview.WebViewPage
-import me.rerere.rikkahub.ui.theme.LocalSettingsBackdropActive
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.openUsageAccessSettings
-import me.rerere.workspace.WorkspaceStorageArea
 import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
-import me.rerere.rikkahub.ui.pages.onboarding.OnboardingPage
-import me.rerere.rikkahub.ui.pages.onboarding.OnboardingState
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import kotlinx.coroutines.flow.first
-import androidx.compose.ui.platform.LocalContext
-import me.rerere.rikkahub.utils.l10n
 
 private const val TAG = "RouteActivity"
 private const val ACTION_TRANSLATE = "me.rerere.rikkahub.action.TRANSLATE"
 private const val ACTION_MEDIA_CREATION = "me.rerere.rikkahub.action.MEDIA_CREATION"
+private const val EXTRA_CONVERSATION_ID = "conversationId"
+
+/** 打开指定会话的聊天页 */
+fun conversationIntent(context: Context, conversationId: String): Intent =
+    Intent(context, RouteActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        putExtra(EXTRA_CONVERSATION_ID, conversationId)
+    }
 
 class RouteActivity : ComponentActivity() {
     private val okHttpClient by inject<OkHttpClient>()
@@ -206,12 +188,6 @@ class RouteActivity : ComponentActivity() {
             startActivity(Intent(this, SafeModeActivity::class.java))
             finish()
             return
-        }
-        // Android 13+ 请求通知权限（后台生成需要）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
         if (savedInstanceState == null) {
             handleIntent(intent)
@@ -274,7 +250,7 @@ class RouteActivity : ComponentActivity() {
                 text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString().orEmpty(),
             )
             else -> mediaCreationDestination(intent)
-                ?: intent.getStringExtra("conversationId")?.let { Screen.Chat(it) }
+                ?: intent.getStringExtra(EXTRA_CONVERSATION_ID)?.let { Screen.Chat(it) }
         }
         if (destination != null && backStack.lastOrNull() != destination) {
             backStack.add(destination)
@@ -315,68 +291,16 @@ class RouteActivity : ComponentActivity() {
         }
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
-        // 首次启动先走引导。
-        //
-        // 判定放在这里而不是更早的 Activity 生命周期里，是因为它需要
-        // 一个 Context 读偏好，而这里刚好有；同时它又必须早于任何
-        // 对话数据的加载——用户连模型都还没配，给他一个空对话列表
-        // 只会让人以为 App 坏了。
-        //
-        // **已经有模型就不弹。** 这一条比「看过没有」更准确：
-        //   · 从旧版本升级上来的用户，本地早有配好的模型，
-        //     给他看一遍「请选择提供商」纯属打扰
-        //   · 用户自己已经配过，说明他不需要引导
-        // 判断依据是「真的有可用的 provider + 至少一个模型」，
-        // 而不是某个标记位——标记位只记录「引导走过没有」，
-        // 表达不了「他已经能用了」。
-        //
-        // ⚠️ 必须等设置真正加载完再判。
-        //
-        // settingsFlow 的初值是 Settings.dummy()（providers 为空），
-        // DataStore 读完才换成真实值。若在首帧就下结论，hasUsableModel
-        // 会算出 false —— 刚导入完备份的用户重启后会被再弹一次引导，
-        // 而他明明什么都配好了。
-        //
-        // 而 startScreen 只算一次（rememberNavBackStack 持有它），
-        // 算错就定死了。所以这里先等一次「已加载」信号。
-        var settingsLoaded by remember { mutableStateOf(settings.init) }
-        LaunchedEffect(Unit) {
-            // 用 settingsFlowRaw 等第一次真实数据到达。
-            // settingsFlow 是 StateFlow，它会立刻给出初值，等不到加载完成。
-            settingsStore.settingsFlowRaw.first()
-            settingsLoaded = true
-        }
-
-        if (!settingsLoaded) {
-            // 加载中：先什么都不决定。这一屏通常只闪一下。
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-            return
-        }
-
-        val hasUsableModel = settings.providers.any { provider ->
-            provider.enabled && provider.models.isNotEmpty()
-        }
-        val needsOnboarding = !OnboardingState.isCompleted(this) && !hasUsableModel
-
-        val startScreen: Screen = if (needsOnboarding) {
-            Screen.Onboarding
-        } else {
-            Screen.Chat(
-                id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
+        val startScreen = Screen.Chat(
+            id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
+                Uuid.random().toString()
+            } else {
+                readStringPreference(
+                    "lastConversationId",
                     Uuid.random().toString()
-                } else {
-                    readStringPreference(
-                        "lastConversationId",
-                        Uuid.random().toString()
-                    ) ?: Uuid.random().toString()
-                }
-            )
-        }
+                ) ?: Uuid.random().toString()
+            }
+        )
 
         val backStack = rememberNavBackStack(startScreen)
         SideEffect {
@@ -396,36 +320,12 @@ class RouteActivity : ComponentActivity() {
                 LocalASRState provides asr,
             ) {
                 TTSController()
-                val settingBackdropPath = settings.displaySetting.settingBackgroundImagePath
-                val showSettingBackdrop = settingBackdropPath.isNotBlank() &&
-                    (backStack.lastOrNull() as? Screen)?.isSettingScreen() == true
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .semantics { testTagsAsResourceId = true }
                         .background(MaterialTheme.colorScheme.background)
                 ) {
-                    if (showSettingBackdrop) {
-                        AsyncImage(
-                            model = settingBackdropPath,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.matchParentSize(),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .matchParentSize()
-                                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.85f)),
-                        )
-                    }
-                    CompositionLocalProvider(LocalSettingsBackdropActive provides showSettingBackdrop) {
-                        MaterialTheme(
-                            colorScheme = if (showSettingBackdrop) {
-                                MaterialTheme.colorScheme.copy(background = Color.Transparent)
-                            } else {
-                                MaterialTheme.colorScheme
-                            },
-                        ) {
                     NavDisplay(
                         backStack = backStack,
                         entryDecorators = listOf(
@@ -436,34 +336,24 @@ class RouteActivity : ComponentActivity() {
                         // 同一帧内连续两次返回时 NavDisplay 的返回状态还没更新，会多回调一次，不加判断会把栈弹空
                         onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
                         transitionSpec = {
-                            if (targetState.key is Screen.Chat || initialState.key is Screen.Chat) {
-                                fadeIn(tween(300)) togetherWith fadeOut(tween(300))
-                            } else if (backStack.size == 1) fadeIn() togetherWith fadeOut()
+                            if (backStack.size == 1) fadeIn() togetherWith fadeOut()
                             else {
                                 slideInHorizontally { it } togetherWith
                                     slideOutHorizontally { -it / 2 } + scaleOut(targetScale = 0.7f) + fadeOut()
                             }
                         },
                         popTransitionSpec = {
-                            if (targetState.key is Screen.Chat || initialState.key is Screen.Chat) {
-                                fadeIn(tween(300)) togetherWith fadeOut(tween(300))
-                            } else {
-                                slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
-                                    slideOutHorizontally { it }
-                            }
+                            slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
+                                slideOutHorizontally { it }
                         },
                         predictivePopTransitionSpec = {
-                            if (targetState.key is Screen.Chat || initialState.key is Screen.Chat) {
-                                fadeIn(tween(300)) togetherWith fadeOut(tween(300))
-                            } else {
-                                slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
-                                    slideOutHorizontally { it }
-                            }
+                            slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
+                                slideOutHorizontally { it }
                         },
                         entryProvider = entryProvider {
                             entry<Screen.Chat>(
                                 metadata = NavDisplay.transitionSpec { fadeIn() togetherWith fadeOut() }
-                                        + NavDisplay.popTransitionSpec { fadeIn() togetherWith fadeOut() }
+                                    + NavDisplay.popTransitionSpec { fadeIn() togetherWith fadeOut() }
                             ) { key ->
                                 ChatPage(
                                     id = Uuid.parse(key.id),
@@ -532,21 +422,6 @@ class RouteActivity : ComponentActivity() {
                                 TranslatorPage()
                             }
 
-                            entry<Screen.Onboarding> {
-                                OnboardingPage(
-                                    // 可选项那几项要能跳进对应页面，
-                                    // 用户不用自己去找入口。
-                                    onNavigate = { destination -> backStack.add(destination) },
-                                    onFinish = {
-                                        // 先把引导从回退栈里摘掉，再进主界面。
-                                        // 顺序反过来的话，用户按返回键会退回引导，
-                                        // 而他明明已经配好了。
-                                        backStack.removeLastOrNull()
-                                        backStack.add(Screen.Chat(Uuid.random().toString()))
-                                    },
-                                )
-                            }
-
                             entry<Screen.Setting> {
                                 SettingPage()
                             }
@@ -555,7 +430,9 @@ class RouteActivity : ComponentActivity() {
                                 BackupPage()
                             }
 
-                            
+                            entry<Screen.ImageGen> {
+                                ImageGenPage()
+                            }
 
                             entry<Screen.MediaCreationSessions> {
                                 MediaCreationSessionsPage()
@@ -632,12 +509,12 @@ class RouteActivity : ComponentActivity() {
                                 SettingSpeechPage()
                             }
 
-                            entry<Screen.SettingTtsPlayback> {
-                                SettingTtsPlaybackPage()
-                            }
-
                             entry<Screen.SettingMedia> {
                                 SettingMediaPage()
+                            }
+
+                            entry<Screen.SettingMediaProviderDetail> { key ->
+                                SettingMediaProviderDetailPage(id = Uuid.parse(key.providerId))
                             }
 
                             entry<Screen.SettingMcp> {
@@ -658,14 +535,6 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SettingWeb> {
                                 SettingWebPage()
-                            }
-
-                            entry<Screen.SettingSecurity> {
-                                SettingSecurityPage()
-                            }
-
-                            entry<Screen.SettingProactiveMessage> {
-                                SettingProactiveMessagePage()
                             }
 
                             entry<Screen.Debug> {
@@ -692,46 +561,6 @@ class RouteActivity : ComponentActivity() {
                                 SkillsPage()
                             }
 
-                            entry<Screen.SkillDetail> { key ->
-                                SkillDetailPage(skillName = key.skillName)
-                            }
-
-                            entry<Screen.Plugins> {
-                                PluginManagePage(
-                                    onNavigateToFolder = { folderId ->
-                                        backStack.add(Screen.PluginFolder(folderId))
-                                    },
-                                    onNavigateToDetail = { pluginId ->
-                                        backStack.add(Screen.PluginDetail(pluginId))
-                                    },
-                                )
-                            }
-
-                            entry<Screen.PluginFolder> { key ->
-                                PluginFolderPage(
-                                    folderId = key.folderId,
-                                    onNavigateBack = { backStack.removeLastOrNull() },
-                                    onNavigateToDetail = { pluginId ->
-                                        backStack.add(Screen.PluginDetail(pluginId))
-                                    },
-                                )
-                            }
-
-                            entry<Screen.PluginDetail> { key ->
-                                PluginDetailPage(
-                                    pluginId = key.pluginId,
-                                    onNavigateBack = { backStack.removeLastOrNull() },
-                                )
-                            }
-
-                            entry<Screen.WorkspaceFileEditor> { key ->
-                                WorkspaceFileEditorPage(
-                                    id = key.id,
-                                    area = WorkspaceStorageArea.valueOf(key.area),
-                                    path = key.path,
-                                )
-                            }
-
                             entry<Screen.Workspaces> {
                                 WorkspacePage()
                             }
@@ -744,6 +573,22 @@ class RouteActivity : ComponentActivity() {
                                 WorkspaceTerminalPage(key.id)
                             }
 
+                            entry<Screen.WorkspaceSshEditor> { key ->
+                                WorkspaceSshEditorPage(key.id)
+                            }
+
+                            entry<Screen.WorkspaceFileEditor> { key ->
+                                WorkspaceFileEditorPage(
+                                    id = key.id,
+                                    area = WorkspaceStorageArea.valueOf(key.area),
+                                    path = key.path,
+                                )
+                            }
+
+                            entry<Screen.SkillDetail> { key ->
+                                SkillDetailPage(skillName = key.skillName)
+                            }
+
                             entry<Screen.MessageSearch> {
                                 SearchPage()
                             }
@@ -751,38 +596,11 @@ class RouteActivity : ComponentActivity() {
                             entry<Screen.Stats> {
                                 StatsPage()
                             }
-
-                            entry<Screen.Persona> {
-                                PersonaPage()
-                            }
-
-                            entry<Screen.AuthorsNote> {
-                                AuthorsNotePage()
-                            }
-
-                            entry<Screen.GroupChatList> {
-                                GroupChatListPage()
-                            }
-
-                            entry<Screen.GroupChat> { key ->
-                                GroupChatPage(groupId = key.id)
-                            }
-
-                            entry<Screen.VoiceCall> { key ->
-                                VoiceCallPage(conversationId = Uuid.parse(key.conversationId), onBack = { backStack.removeLastOrNull() })
-                            }
-
-                            entry<Screen.VideoCall> { key ->
-                                VideoCallPage(conversationId = Uuid.parse(key.conversationId), onBack = { backStack.removeLastOrNull() })
-                            }
-
                         }
                     )
-                        }
-                    }
                     if (BuildConfig.DEBUG) {
                         Text(
-                            text = l10n("[开发模式]", "[Developer mode]"),
+                            text = "[开发模式]",
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .padding(top = 4.dp),
@@ -826,76 +644,10 @@ class RouteActivity : ComponentActivity() {
                         state = toastState,
                         modifier = Modifier.align(Alignment.TopCenter),
                     )
-
-                    BackupLaunchReminderHost(
-                        onNavigateToBackup = { backStack.add(Screen.Backup) },
-                    )
                 }
             }
         }
     }
-}
-
-/**
- * 启动次数触发的备份提醒宿主。
- *
- * 只在「第 N 次启动」这种整数倍节点上弹一次：第 1 次启动不弹，
- * 第 15、30、45… 次才弹；勾过「不再提醒」后永久关闭。
- * 同一次进程里弹过就不再弹，避免读盘后 launchCount 变化导致重复弹出。
- */
-@Composable
-private fun BackupLaunchReminderHost(onNavigateToBackup: () -> Unit) {
-    val settingsStore = koinInject<SettingsStore>()
-    val scope = rememberCoroutineScope()
-    val launchCount by settingsStore.launchCountFlow.collectAsStateWithLifecycle(initialValue = 0)
-    val disabled by settingsStore.backupLaunchReminderDisabledFlow
-        .collectAsStateWithLifecycle(initialValue = false)
-    var shown by rememberSaveable { mutableStateOf(false) }
-
-    val due = !disabled && !shown &&
-        launchCount >= BACKUP_REMINDER_LAUNCH_INTERVAL &&
-        launchCount % BACKUP_REMINDER_LAUNCH_INTERVAL == 0
-    if (!due) return
-
-    val rememberChoice: (Boolean) -> Unit = { dontRemindAgain ->
-        shown = true
-        if (dontRemindAgain) scope.launch { settingsStore.setBackupLaunchReminderDisabled(true) }
-    }
-
-    BackupLaunchReminderDialog(
-        launchCount = launchCount,
-        onDismiss = rememberChoice,
-        onBackupNow = { dontRemindAgain ->
-            rememberChoice(dontRemindAgain)
-            onNavigateToBackup()
-        },
-    )
-}
-
-// 设置页背景图只作用于设置相关路由，避免透到聊天等页面
-private fun Screen.isSettingScreen(): Boolean = when (this) {
-    Screen.Setting, Screen.Backup,
-    Screen.SettingTheme,
-    Screen.SettingPreferences, Screen.SettingPreferencesTheme,
-    Screen.SettingPreferencesNotification, Screen.SettingPreferencesGeneral,
-    Screen.SettingPreferencesUI, Screen.SettingPreferencesNetwork,
-    Screen.SettingProvider, Screen.SettingModels, Screen.SettingAbout,
-    Screen.SettingSearch, Screen.SettingSpeech, Screen.SettingTtsPlayback,
-    Screen.SettingMedia, Screen.SettingMcp, Screen.SettingDonate,
-    Screen.SettingFiles, Screen.SettingWeb,
-    Screen.SettingSecurity,
-    Screen.SettingProactiveMessage,
-    Screen.Persona, Screen.AuthorsNote, Screen.Extensions, Screen.QuickMessages,
-    Screen.Prompts, Screen.Skills, Screen.Plugins, Screen.Workspaces,
-    Screen.Stats -> true
-
-    is Screen.SettingProviderDetail, is Screen.SettingSearchDetail,
-    is Screen.SettingMcpDetail, is Screen.SkillDetail,
-    is Screen.PluginFolder, is Screen.PluginDetail,
-    is Screen.WorkspaceDetail, is Screen.WorkspaceTerminal,
-    is Screen.WorkspaceFileEditor -> true
-
-    else -> false
 }
 
 sealed interface Screen : NavKey {
@@ -950,20 +702,14 @@ sealed interface Screen : NavKey {
     @Serializable
     data object Translator : Screen
 
-    /**
-     * 首次引导。
-     *
-     * 它是一个真正的路由页而不是弹层：引导要占满整屏，而且要能排到
-     * 数据加载之前——用户连 Key 都还没配，谈什么对话列表。
-     */
-    @Serializable
-    data object Onboarding : Screen
-
     @Serializable
     data object Setting : Screen
 
     @Serializable
     data object Backup : Screen
+
+    @Serializable
+    data object ImageGen : Screen
 
     @Serializable
     data object MediaCreationSessions : Screen
@@ -1017,10 +763,10 @@ sealed interface Screen : NavKey {
     data object SettingSpeech : Screen
 
     @Serializable
-    data object SettingTtsPlayback : Screen
+    data object SettingMedia : Screen
 
     @Serializable
-    data object SettingMedia : Screen
+    data class SettingMediaProviderDetail(val providerId: String) : Screen
 
     @Serializable
     data object SettingMcp : Screen
@@ -1036,12 +782,6 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingWeb : Screen
-
-    @Serializable
-    data object SettingSecurity : Screen
-
-    @Serializable
-    data object SettingProactiveMessage : Screen
 
     @Serializable
     data object Debug : Screen
@@ -1062,21 +802,6 @@ sealed interface Screen : NavKey {
     data object Skills : Screen
 
     @Serializable
-    data class SkillDetail(val skillName: String) : Screen
-
-    @Serializable
-    data object Plugins : Screen
-
-    @Serializable
-    data class PluginFolder(val folderId: String) : Screen
-
-    @Serializable
-    data class PluginDetail(val pluginId: String) : Screen
-
-    @Serializable
-    data class WorkspaceFileEditor(val id: String, val area: String, val path: String) : Screen
-
-    @Serializable
     data object Workspaces : Screen
 
     @Serializable
@@ -1085,27 +810,19 @@ sealed interface Screen : NavKey {
     @Serializable
     data class WorkspaceTerminal(val id: String) : Screen
 
+    /** [id] 为 null 时新建 */
+    @Serializable
+    data class WorkspaceSshEditor(val id: String? = null) : Screen
+
+    @Serializable
+    data class WorkspaceFileEditor(val id: String, val area: String, val path: String) : Screen
+
+    @Serializable
+    data class SkillDetail(val skillName: String) : Screen
+
     @Serializable
     data object MessageSearch : Screen
 
     @Serializable
     data object Stats : Screen
-
-    @Serializable
-    data object Persona : Screen
-
-    @Serializable
-    data object AuthorsNote : Screen
-
-    @Serializable
-    data class GroupChat(val id: String) : Screen
-
-    @Serializable
-    data object GroupChatList : Screen
-
-    @Serializable
-    data class VoiceCall(val conversationId: String) : Screen
-
-    @Serializable
-    data class VideoCall(val conversationId: String) : Screen
 }

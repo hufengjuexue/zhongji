@@ -39,11 +39,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import me.rerere.rikkahub.utils.l10n
 import me.rerere.ui.toast.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.common.android.Logging
@@ -52,7 +49,6 @@ import me.rerere.hugeicons.stroke.Bug01
 import me.rerere.hugeicons.stroke.File01
 import me.rerere.hugeicons.stroke.PaintBoard
 import me.rerere.hugeicons.stroke.Wrench01
-import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -128,7 +124,6 @@ fun DebugPage(vm: DebugVM = koinViewModel()) {
 @Composable
 private fun MainPage(vm: DebugVM) {
     val settings = LocalSettings.current
-    val context = LocalContext.current
     val conversationCount by vm.conversationCount.collectAsStateWithLifecycle()
     Column(
         modifier = Modifier
@@ -175,9 +170,9 @@ private fun MainPage(vm: DebugVM) {
         val toaster = LocalToaster.current
         Button(
             onClick = {
-                toaster.show(context.getString(R.string.debug_toast_test, counter++))
-                toaster.show(context.getString(R.string.debug_toast_test, counter++), type = ToastType.Info)
-                toaster.show(context.getString(R.string.debug_toast_test, counter++), type = ToastType.Error)
+                toaster.show("测试 ${counter++}")
+                toaster.show("测试 ${counter++}", type = ToastType.Info)
+                toaster.show("测试 ${counter++}", type = ToastType.Error)
             }
         ) {
             Text("toast")
@@ -191,7 +186,7 @@ private fun MainPage(vm: DebugVM) {
                 }
             }
         ) {
-            Text(stringResource(R.string.debug_reset_chat_model))
+            Text("重置Chat模型")
         }
 
         Button(
@@ -199,7 +194,7 @@ private fun MainPage(vm: DebugVM) {
                 error("测试崩溃 ${Random.nextInt(0..1000)}")
             }
         ) {
-            Text(stringResource(R.string.debug_crash))
+            Text("崩溃")
         }
 
         Row(
@@ -207,33 +202,30 @@ private fun MainPage(vm: DebugVM) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = stringResource(
-                    R.string.debug_conversation_count,
-                    conversationCount?.toString() ?: "...",
-                ),
+                text = "Conversation 数量: ${conversationCount?.toString() ?: "..."}",
                 modifier = Modifier.weight(1f),
             )
             Button(onClick = { vm.refreshConversationCount() }) {
-                Text(stringResource(R.string.debug_refresh))
+                Text("刷新")
             }
         }
 
         Button(
             onClick = {
                 vm.createOversizedConversation(30)
-                toaster.show(context.getString(R.string.debug_creating_oversized_toast))
+                toaster.show("正在创建 30MB 超大对话...")
             }
         ) {
-            Text(stringResource(R.string.debug_create_oversized))
+            Text("创建超大对话 (30MB)")
         }
 
         Button(
             onClick = {
                 vm.createConversationWithMessages(1024)
-                toaster.show(context.getString(R.string.debug_creating_messages_toast))
+                toaster.show("正在创建 1024 条消息对话...")
             }
         ) {
-            Text(stringResource(R.string.debug_create_messages))
+            Text("创建 1024 个消息的聊天")
         }
 
         HorizontalDivider()
@@ -315,23 +307,23 @@ private fun RecoveryPage(vm: DebugVM) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            l10n("扫描聊天记录中引用的角色卡，为设置中缺失的角色卡创建占位角色卡，使对应聊天记录重新可见。角色卡的其他配置无法恢复。", "Scan character cards referenced in chat history and create placeholders for cards missing from settings so the related chats become visible again. Other card settings cannot be restored."),
+            "扫描聊天记录中引用的助手，为设置中缺失的助手创建占位助手，使对应聊天记录重新可见。助手的其他配置无法恢复。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(l10n("设置中的角色卡数: ${settings.assistants.size}", "Character cards in settings: ${settings.assistants.size}"))
-        Text(l10n("聊天记录中的角色卡数: ${conversationAssistants?.size?.toString() ?: "..."}", "Character cards in chat history: ${conversationAssistants?.size?.toString() ?: "..."}"))
-        Text(l10n("缺失的角色卡数: ${missing?.size?.toString() ?: "..."}", "Missing character cards: ${missing?.size?.toString() ?: "..."}"))
+        Text("设置中的助手数: ${settings.assistants.size}")
+        Text("聊天记录中的助手数: ${conversationAssistants?.size?.toString() ?: "..."}")
+        Text("缺失的助手数: ${missing?.size?.toString() ?: "..."}")
         missing?.forEach { (id, count) ->
             Text(
-                l10n("$id ($count 个对话)", "$id ($count chats)"),
+                "$id ($count 个对话)",
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = JetbrainsMono,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { vm.scanConversationAssistants() }) {
-                Text(l10n("重新扫描", "Rescan"))
+                Text("重新扫描")
             }
             Button(
                 enabled = !recovering && !settings.init && !missing.isNullOrEmpty(),
@@ -341,19 +333,19 @@ private fun RecoveryPage(vm: DebugVM) {
                         runCatching { vm.recoverAssistantsFromConversations() }
                             .onSuccess { count ->
                                 when (count) {
-                                    null -> toaster.show(l10n("设置尚未加载", "Settings have not loaded yet"), type = ToastType.Error)
-                                    0 -> toaster.show(l10n("没有需要恢复的角色卡", "No character cards need recovery"))
-                                    else -> toaster.show(l10n("已恢复 $count 个角色卡", "Recovered $count character cards"), type = ToastType.Success)
+                                    null -> toaster.show("设置尚未加载", type = ToastType.Error)
+                                    0 -> toaster.show("没有需要恢复的助手")
+                                    else -> toaster.show("已恢复 $count 个助手", type = ToastType.Success)
                                 }
                             }
                             .onFailure {
-                                toaster.show(l10n("恢复失败: ${it.message}", "Recovery failed: ${it.message}"), type = ToastType.Error)
+                                toaster.show("恢复失败: ${it.message}", type = ToastType.Error)
                             }
                         recovering = false
                     }
                 }
             ) {
-                Text(l10n("恢复", "Recover"))
+                Text("恢复")
             }
         }
     }

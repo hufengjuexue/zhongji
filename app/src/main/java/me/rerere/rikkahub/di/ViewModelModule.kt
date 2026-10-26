@@ -5,24 +5,24 @@ import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantDetailVM
 import me.rerere.rikkahub.ui.pages.backup.BackupVM
 import me.rerere.rikkahub.ui.pages.chat.ChatDrawerVM
 import me.rerere.rikkahub.ui.pages.chat.ChatVM
-import android.content.Context
 import me.rerere.rikkahub.ui.pages.debug.DebugVM
+import me.rerere.rikkahub.ui.pages.extensions.PromptVM
+import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesVM
+import me.rerere.rikkahub.ui.pages.extensions.skills.SkillDetailVM
+import me.rerere.rikkahub.ui.pages.extensions.skills.SkillsVM
+import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceDetailVM
+import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceSshEditorVM
+import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceVM
 import me.rerere.rikkahub.ui.pages.favorite.FavoriteVM
-import me.rerere.rikkahub.ui.pages.onboarding.OnboardingVM
-import me.rerere.rikkahub.ui.pages.search.SearchVM
 import me.rerere.rikkahub.ui.pages.history.HistoryVM
-import me.rerere.rikkahub.ui.pages.stats.StatsVM
+import me.rerere.rikkahub.ui.pages.imggen.ImgGenVM
 import me.rerere.rikkahub.ui.pages.mediacreation.MediaCreationSessionsVM
 import me.rerere.rikkahub.ui.pages.mediacreation.MediaCreationVM
 import me.rerere.rikkahub.ui.pages.memory.MemoryFileVM
-import me.rerere.rikkahub.ui.pages.extensions.PromptVM
-import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceDetailVM
-import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceVM
-import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesVM
-import me.rerere.rikkahub.ui.pages.extensions.SkillDetailVM
-import me.rerere.rikkahub.ui.pages.extensions.SkillsVM
+import me.rerere.rikkahub.ui.pages.search.SearchVM
 import me.rerere.rikkahub.ui.pages.setting.SettingVM
 import me.rerere.rikkahub.ui.pages.share.handler.ShareHandlerVM
+import me.rerere.rikkahub.ui.pages.stats.StatsVM
 import me.rerere.rikkahub.ui.pages.translator.TranslatorVM
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
@@ -34,17 +34,16 @@ val viewModelModule = module {
             id = params.get(),
             context = get(),
             settingsStore = get(),
-            conversationRepo = get(),
             chatService = get(),
             updateChecker = get(),
-            analytics = if (me.rerere.rikkahub.BuildConfig.ENABLE_FIREBASE) get() else null,
+            analytics = get(),
             filesManager = get(),
             favoriteRepository = get(),
         )
     }
     viewModelOf(::ChatDrawerVM)
     viewModelOf(::SettingVM)
-    viewModel<DebugVM> { DebugVM(get(), get(), get()) }
+    viewModelOf(::DebugVM)
     viewModelOf(::HistoryVM)
     viewModelOf(::AssistantVM)
     viewModel<AssistantDetailVM> {
@@ -73,7 +72,7 @@ val viewModelModule = module {
         )
     }
     viewModelOf(::BackupVM)
-    viewModelOf(::OnboardingVM)
+    viewModelOf(::ImgGenVM)
     viewModelOf(::MediaCreationSessionsVM)
     viewModel<MediaCreationVM> {
         MediaCreationVM(
@@ -90,9 +89,6 @@ val viewModelModule = module {
     viewModelOf(::QuickMessagesVM)
     viewModelOf(::SkillsVM)
     viewModelOf(::SkillDetailVM)
-    viewModelOf(::FavoriteVM)
-    viewModelOf(::SearchVM)
-    viewModelOf(::StatsVM)
     viewModelOf(::WorkspaceVM)
     viewModel<WorkspaceDetailVM> {
         WorkspaceDetailVM(
@@ -101,4 +97,13 @@ val viewModelModule = module {
             terminalSessionManager = get(),
         )
     }
+    viewModel<WorkspaceSshEditorVM> {
+        WorkspaceSshEditorVM(
+            id = it.getOrNull(),
+            repository = get(),
+        )
+    }
+    viewModelOf(::FavoriteVM)
+    viewModelOf(::SearchVM)
+    viewModelOf(::StatsVM)
 }

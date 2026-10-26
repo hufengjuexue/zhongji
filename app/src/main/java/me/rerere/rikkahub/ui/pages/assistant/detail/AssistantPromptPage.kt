@@ -4,7 +4,6 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Refresh03
 import me.rerere.hugeicons.stroke.Tick01
 import androidx.compose.animation.animateContentSize
@@ -28,7 +27,6 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
@@ -47,11 +45,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.key
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,8 +64,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
@@ -77,14 +71,13 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.transformers.DefaultPlaceholderProvider
-import me.rerere.rikkahub.data.ai.transformers.MacroEngine
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.ai.transformers.TransformerContext
 import me.rerere.rikkahub.data.datastore.Settings
-import me.rerere.rikkahub.data.export.SillyTavernRegexImporter
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AssistantRegex
+import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.ui.components.message.ChatMessage
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -96,7 +89,6 @@ import me.rerere.rikkahub.ui.components.ui.TextArea
 import me.rerere.rikkahub.ui.components.ui.cardGroupItemShape
 import me.rerere.rikkahub.ui.components.ui.longPressReorder
 import me.rerere.rikkahub.ui.components.ui.switchItem
-import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.ChatFontProvider
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.ui.theme.JetbrainsMono
@@ -110,9 +102,6 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
 import sh.calvin.reorderable.ReorderableColumn
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.uuid.Uuid
 
 @Composable
@@ -160,36 +149,6 @@ private fun AssistantPromptContent(
 ) {
     val context = LocalContext.current
     val templateTransformer = koinInject<TemplateTransformer>()
-    val toaster = LocalToaster.current
-    val scope = rememberCoroutineScope()
-    val currentAssistant by rememberUpdatedState(assistant)
-    val regexImportedMsg = stringResource(R.string.assistant_page_regex_imported)
-    val regexImportFailedMsg = stringResource(R.string.assistant_page_regex_import_failed)
-    val regexImportErrorMsg = stringResource(R.string.export_import_failed)
-    // 酒馆正则脚本导入（scriptName/findRegex 格式，单对象或数组）
-    val regexImportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val text = context.contentResolver.openInputStream(uri)
-                        ?.bufferedReader()?.use { it.readText() }
-                        ?: error(regexImportErrorMsg)
-                    val parsed = SillyTavernRegexImporter.parse(text)
-                    if (parsed.isEmpty()) error(regexImportFailedMsg)
-                    parsed
-                }
-            }
-            result.onSuccess { parsed ->
-                onUpdate(currentAssistant.copy(regexes = currentAssistant.regexes + parsed))
-                toaster.show(regexImportedMsg.format(parsed.size))
-            }.onFailure {
-                toaster.show(regexImportErrorMsg.format(it.message))
-            }
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -226,139 +185,23 @@ private fun AssistantPromptContent(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    var showMoreVariables by remember { mutableStateOf(false) }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.assistant_page_available_variables),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Tag(
-                            onClick = { showMoreVariables = !showMoreVariables },
-                        ) {
-                            Text(
-                                text = if (showMoreVariables) "收起扩展变量 ▲" else "更多宏与变量 ▼",
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-
-                    // 常用高频变量（常驻免折叠，包含时间、用户、角色等）
-                    val coreVariables = remember {
-                        listOf(
-                            "char" to "{{char}}",
-                            "user" to "{{user}}",
-                            "persona" to "{{persona}}",
-                            "cur_date" to "{{cur_date}}",
-                            "time" to "{{time}}",
-                            "weekday" to "{{weekday}}",
-                            "idleDuration" to "{{idleDuration}}",
-                            "timeDiff" to "{{timeDiff::A::B}}",
-                            "model_name" to "{{model_name}}",
-                        )
-                    }
-
+                    Text(
+                        text = stringResource(R.string.assistant_page_available_variables),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        coreVariables.forEach { (key, syntax) ->
-                            val info = DefaultPlaceholderProvider.placeholders[key]
+                        DefaultPlaceholderProvider.placeholders.forEach { (k, info) ->
                             Tag(
                                 onClick = {
-                                    systemPromptValue.insertAtCursor(syntax)
+                                    systemPromptValue.insertAtCursor("{{$k}}")
                                 }
                             ) {
-                                if (info != null) {
-                                    info.displayName()
-                                } else {
-                                    Text(key)
-                                }
-                                Text(": $syntax")
-                            }
-                        }
-                    }
-
-                    // 扩展宏与进阶变量分类展示（折叠展开，过滤重复别名）
-                    if (showMoreVariables) {
-                        // 进阶时间与环境
-                        Text(
-                            text = "时间与环境进阶",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                        val timeAndEnvKeys = remember {
-                            listOf("isodate", "isotime", "timezone", "locale", "battery_level", "device_info")
-                        }
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            timeAndEnvKeys.forEach { key ->
-                                val info = DefaultPlaceholderProvider.placeholders[key]
-                                if (info != null) {
-                                    Tag(onClick = { systemPromptValue.insertAtCursor("{{$key}}") }) {
-                                        info.displayName()
-                                        Text(": {{$key}}")
-                                    }
-                                }
-                            }
-                        }
-
-                        // 角色卡与上下文字段
-                        Text(
-                            text = "角色卡与上下文",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                        val contextKeys = remember {
-                            listOf("description", "personality", "scenario", "firstMessage", "creatorNotes", "lastMessage", "lastUserMessage", "lastCharMessage", "input", "group")
-                        }
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            contextKeys.forEach { key ->
-                                val info = DefaultPlaceholderProvider.placeholders[key]
-                                if (info != null) {
-                                    Tag(onClick = { systemPromptValue.insertAtCursor("{{$key}}") }) {
-                                        info.displayName()
-                                        Text(": {{$key}}")
-                                    }
-                                }
-                            }
-                        }
-
-                        // 宏引擎 2.0（逻辑控制、变量操作、掷骰、随机选一）
-                        MacroEngine.macroCatalog.groupBy { it.group }.forEach { (groupName, macros) ->
-                            Text(
-                                text = groupName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                macros.forEach { entry ->
-                                    Tag(
-                                        onClick = {
-                                            systemPromptValue.insertAtCursor("{{${entry.syntax}}}")
-                                        }
-                                    ) {
-                                        Text(entry.description)
-                                        Text(": {{${entry.syntax}}}")
-                                    }
-                                }
+                                info.displayName()
+                                Text(": {{$k}}")
                             }
                         }
                     }
@@ -466,8 +309,8 @@ private fun AssistantPromptContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     val rawMessages = listOf(
-                        UIMessage.user(stringResource(R.string.assistant_prompt_sample_user)),
-                        UIMessage.assistant(stringResource(R.string.assistant_prompt_sample_assistant)),
+                        UIMessage.user("你好啊"),
+                        UIMessage.assistant("你好，有什么我可以帮你的吗？"),
                     )
                     val preview by produceState<UiState<List<UIMessage>>>(
                         UiState.Success(rawMessages),
@@ -606,27 +449,17 @@ private fun AssistantPromptContent(
             title = stringResource(R.string.assistant_page_regex_title),
             description = stringResource(R.string.assistant_page_regex_desc),
             action = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    IconButton(
-                        onClick = { regexImportLauncher.launch(arrayOf("*/*")) },
-                    ) {
-                        Icon(
-                            HugeIcons.FileImport,
-                            contentDescription = stringResource(R.string.assistant_page_regex_import),
-                        )
-                    }
-                    SectionAddButton(
-                        onClick = {
-                            onUpdate(
-                                assistant.copy(
-                                    regexes = assistant.regexes + AssistantRegex(
-                                        id = Uuid.random()
-                                    )
+                SectionAddButton(
+                    onClick = {
+                        onUpdate(
+                            assistant.copy(
+                                regexes = assistant.regexes + AssistantRegex(
+                                    id = Uuid.random()
                                 )
                             )
-                        }
-                    )
-                }
+                        )
+                    }
+                )
             },
         )
         var expandedIds by remember { mutableStateOf(emptySet<Uuid>()) }
@@ -647,8 +480,8 @@ private fun AssistantPromptContent(
                     val expanded = regex.id in expandedIds
                     AssistantRegexCard(
                         regex = regex,
-                        regexes = assistant.regexes,
-                        onUpdate = { onUpdate(assistant.copy(regexes = it)) },
+                        onUpdate = onUpdate,
+                        assistant = assistant,
                         index = index,
                         shape = cardGroupItemShape(index, assistant.regexes.size),
                         expanded = expanded,
@@ -668,10 +501,10 @@ private fun AssistantPromptContent(
 }
 
 @Composable
-internal fun AssistantRegexCard(
+private fun AssistantRegexCard(
     regex: AssistantRegex,
-    regexes: List<AssistantRegex>,
-    onUpdate: (List<AssistantRegex>) -> Unit,
+    onUpdate: (Assistant) -> Unit,
+    assistant: Assistant,
     index: Int,
     shape: Shape,
     expanded: Boolean,
@@ -718,13 +551,15 @@ internal fun AssistantRegexCard(
                     checked = regex.enabled,
                     onCheckedChange = { enabled ->
                         onUpdate(
-                            regexes.mapIndexed { i, reg ->
-                                if (i == index) {
-                                    reg.copy(enabled = enabled)
-                                } else {
-                                    reg
+                            assistant.copy(
+                                regexes = assistant.regexes.mapIndexed { i, reg ->
+                                    if (i == index) {
+                                        reg.copy(enabled = enabled)
+                                    } else {
+                                        reg
+                                    }
                                 }
-                            }
+                            )
                         )
                     },
                     modifier = Modifier.padding(start = 8.dp)
@@ -750,17 +585,18 @@ internal fun AssistantRegexCard(
                         value = regex.name,
                         onValueChange = { name ->
                             onUpdate(
-                                regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
-                                        reg.copy(name = name)
-                                    } else {
-                                        reg
+                                assistant.copy(
+                                    regexes = assistant.regexes.mapIndexed { i, reg ->
+                                        if (i == index) {
+                                            reg.copy(name = name)
+                                        } else {
+                                            reg
+                                        }
                                     }
-                                }
+                                )
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
                         label = { Text(stringResource(R.string.assistant_page_regex_name)) }
                     )
 
@@ -768,18 +604,18 @@ internal fun AssistantRegexCard(
                         value = regex.findRegex,
                         onValueChange = { findRegex ->
                             onUpdate(
-                                regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
-                                        reg.copy(findRegex = findRegex.trim())
-                                    } else {
-                                        reg
+                                assistant.copy(
+                                    regexes = assistant.regexes.mapIndexed { i, reg ->
+                                        if (i == index) {
+                                            reg.copy(findRegex = findRegex.trim())
+                                        } else {
+                                            reg
+                                        }
                                     }
-                                }
+                                )
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        // 正则/替换串可能是整段 HTML，限制行数避免超高约束崩溃
-                        maxLines = 8,
                         label = { Text(stringResource(R.string.assistant_page_regex_find_regex)) },
                         placeholder = { Text("e.g., \\b\\w+@\\w+\\.\\w+\\b") },
                     )
@@ -788,17 +624,18 @@ internal fun AssistantRegexCard(
                         value = regex.replaceString,
                         onValueChange = { replaceString ->
                             onUpdate(
-                                regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
-                                        reg.copy(replaceString = replaceString)
-                                    } else {
-                                        reg
+                                assistant.copy(
+                                    regexes = assistant.regexes.mapIndexed { i, reg ->
+                                        if (i == index) {
+                                            reg.copy(replaceString = replaceString)
+                                        } else {
+                                            reg
+                                        }
                                     }
-                                }
+                                )
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        maxLines = 8,
                         label = { Text(stringResource(R.string.assistant_page_regex_replace_string)) },
                         placeholder = { Text("e.g., [EMAIL]") }
                     )
@@ -823,13 +660,15 @@ internal fun AssistantRegexCard(
                                         regex.affectingScope + scope
                                     }
                                     onUpdate(
-                                        regexes.mapIndexed { i, reg ->
-                                            if (i == index) {
-                                                reg.copy(affectingScope = newScopes)
-                                            } else {
-                                                reg
+                                        assistant.copy(
+                                            regexes = assistant.regexes.mapIndexed { i, reg ->
+                                                if (i == index) {
+                                                    reg.copy(affectingScope = newScopes)
+                                                } else {
+                                                    reg
+                                                }
                                             }
-                                        }
+                                        )
                                     )
                                 },
                                 label = {
@@ -861,42 +700,19 @@ internal fun AssistantRegexCard(
                             checked = regex.visualOnly,
                             onCheckedChange = { visualOnly ->
                                 onUpdate(
-                                    regexes.mapIndexed { i, reg ->
-                                        if (i == index) {
-                                            // 对齐酒馆：仅显示 / 仅提示词 互斥
-                                            reg.copy(visualOnly = visualOnly, promptOnly = if (visualOnly) false else reg.promptOnly)
-                                        } else {
-                                            reg
+                                    assistant.copy(
+                                        regexes = assistant.regexes.mapIndexed { i, reg ->
+                                            if (i == index) {
+                                                reg.copy(visualOnly = visualOnly)
+                                            } else {
+                                                reg
+                                            }
                                         }
-                                    }
+                                    )
                                 )
                             }
                         )
                     }
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Checkbox(
-                        checked = regex.promptOnly,
-                        onCheckedChange = { promptOnly ->
-                            onUpdate(
-                                regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
-                                        reg.copy(promptOnly = promptOnly, visualOnly = if (promptOnly) false else reg.visualOnly)
-                                    } else {
-                                        reg
-                                    }
-                                }
-                            )
-                        }
-                    )
-                    Text(
-                        text = stringResource(R.string.assistant_page_regex_prompt_only),
-                        style = MaterialTheme.typography.labelMedium
-                    )
                 }
             }
         }
@@ -909,7 +725,7 @@ internal fun AssistantRegexCard(
         dismissText = stringResource(R.string.cancel),
         onConfirm = {
             showDeleteDialog = false
-            onUpdate(regexes.filter { it.id != regex.id })
+            onUpdate(assistant.copy(regexes = assistant.regexes.filter { it.id != regex.id }))
         },
         onDismiss = { showDeleteDialog = false },
     ) {

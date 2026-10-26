@@ -47,7 +47,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
                 put("topic", buildJsonObject {
                     put("type", "string")
@@ -92,7 +92,11 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 put("max_results", commonOptions.resultSize)
                 put("search_depth", serviceOptions.depth.ifEmpty { "advanced" })
                 put("topic", topic)
-                put("include_answer", "advanced")
+                if (serviceOptions.includeAnswer) {
+                    put("include_answer", "advanced")
+                } else {
+                    put("include_answer", false)
+                }
                 put("include_images", true)
             }
             val apiKey = keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString())
@@ -104,7 +108,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 .build()
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val response = response.body!!.string().let {
+                val response = response.body.string().let {
                     json.decodeFromString<SearchResponse>(it)
                 }
 
@@ -146,7 +150,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 .build()
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val response = response.body!!.string().let {
+                val response = response.body.string().let {
                     json.decodeFromString<ScrapeResponse>(it)
                 }
                 return@withContext Result.success(

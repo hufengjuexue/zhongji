@@ -39,7 +39,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,17 +48,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import me.rerere.rikkahub.utils.l10n
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Mic01
-import me.rerere.hugeicons.stroke.SlidersHorizontal
 import me.rerere.hugeicons.stroke.StopCircle
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.R
-import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.DEFAULT_SYSTEM_TTS_ID
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -71,7 +67,6 @@ import me.rerere.rikkahub.ui.components.ui.PagerTabs
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
 import me.rerere.rikkahub.ui.components.ui.longPressReorder
-import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.pages.setting.components.ASRProviderConfigure
 import me.rerere.rikkahub.ui.pages.setting.components.ProviderEditSheet
@@ -85,9 +80,23 @@ import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
+private enum class SpeechTab(
+    override val icon: ImageVector,
+    @param:StringRes private val labelRes: Int,
+) : PagerTab {
+    TTS(HugeIcons.VolumeHigh, R.string.speech_tab_tts),
+    ASR(HugeIcons.Mic01, R.string.speech_tab_asr);
+
+    override val label: String
+        @Composable get() = stringResource(labelRes)
+}
+
 @Composable
 fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
-    val navController = LocalNavController.current
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    var editingTTSProvider by remember { mutableStateOf<TTSProviderSetting?>(null) }
+    var editingASRProvider by remember { mutableStateOf<ASRProviderSetting?>(null) }
+    val pagerState = rememberPagerState { SpeechTab.entries.size }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -100,25 +109,22 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                     BackButton()
                 },
                 actions = {
-                    IconButton(onClick = { navController.navigate(Screen.SettingTtsPlayback) }) {
-                        Icon(
-                            imageVector = HugeIcons.SlidersHorizontal,
-                            contentDescription = stringResource(R.string.setting_page_tts_settings),
-                        )
-                    }
-                    AddTTSProviderButton {
-                        vm.updateSettings { latest ->
-                            latest.copy(
-                                ttsProviders = listOf(it) + latest.ttsProviders
-                            )
+                    when (SpeechTab.entries[pagerState.targetPage]) {
+                        SpeechTab.TTS -> AddTTSProviderButton {
+                            vm.updateSettings { latest ->
+                                latest.copy(
+                                    ttsProviders = listOf(it) + latest.ttsProviders
+                                )
+                            }
                         }
-                    }
-                    AddASRProviderButton {
-                        vm.updateSettings { latest ->
-                            latest.copy(
-                                asrProviders = listOf(it) + latest.asrProviders,
-                                selectedASRProviderId = latest.selectedASRProviderId ?: it.id
-                            )
+
+                        SpeechTab.ASR -> AddASRProviderButton {
+                            vm.updateSettings { latest ->
+                                latest.copy(
+                                    asrProviders = listOf(it) + latest.asrProviders,
+                                    selectedASRProviderId = latest.selectedASRProviderId ?: it.id
+                                )
+                            }
                         }
                     }
                 },
@@ -129,43 +135,40 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
-        SpeechServicesContent(vm = vm, contentPadding = innerPadding)
-    }
-}
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+        ) {
+            PagerTabs(
+                pagerState = pagerState,
+                tabs = SpeechTab.entries,
+                modifier = Modifier.padding(bottom = 4.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+            )
 
-@Composable
-internal fun SpeechServicesContent(vm: SettingVM, contentPadding: PaddingValues) {
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    var editingTTSProvider by remember { mutableStateOf<TTSProviderSetting?>(null) }
-    var editingASRProvider by remember { mutableStateOf<ASRProviderSetting?>(null) }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) { page ->
+                when (SpeechTab.entries[page]) {
+                    SpeechTab.TTS -> TTSProviderList(
+                        settings = settings,
+                        onUpdateSettings = vm::updateSettings,
+                        onEdit = { editingTTSProvider = it },
+                    )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-    ) {
-        Text(
-            text = stringResource(R.string.speech_tab_tts),
-            style = MaterialTheme.typography.titleSmallEmphasized,
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 4.dp),
-        )
-        TTSProviderList(
-            settings = settings,
-            onUpdateSettings = vm::updateSettings,
-            onEdit = { editingTTSProvider = it },
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = stringResource(R.string.speech_tab_asr),
-            style = MaterialTheme.typography.titleSmallEmphasized,
-            modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
-        )
-        ASRProviderList(
-            settings = settings,
-            onUpdateSettings = vm::updateSettings,
-            onEdit = { editingASRProvider = it },
-            modifier = Modifier.weight(1f),
-        )
+                    SpeechTab.ASR -> ASRProviderList(
+                        settings = settings,
+                        onUpdateSettings = vm::updateSettings,
+                        onEdit = { editingASRProvider = it },
+                    )
+                }
+            }
+        }
     }
 
     editingTTSProvider?.let { provider ->
@@ -209,15 +212,11 @@ private fun TTSProviderList(
     modifier: Modifier = Modifier
 ) {
     val lazyListState = rememberLazyListState()
-    val currentProviders by rememberUpdatedState(settings.ttsProviders)
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val providers = currentProviders
-        if (from.index in providers.indices && to.index in 0..providers.size) {
-            val newProviders = providers.toMutableList().apply {
-                add(to.index, removeAt(from.index))
-            }
-            onUpdateSettings { it.copy(ttsProviders = newProviders) }
+        val newProviders = settings.ttsProviders.toMutableList().apply {
+            add(to.index, removeAt(from.index))
         }
+        onUpdateSettings { it.copy(ttsProviders = newProviders) }
     }
     var deleteTarget by remember { mutableStateOf<TTSProviderSetting?>(null) }
 
@@ -291,15 +290,11 @@ private fun ASRProviderList(
     modifier: Modifier = Modifier
 ) {
     val lazyListState = rememberLazyListState()
-    val currentProviders by rememberUpdatedState(settings.asrProviders)
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val providers = currentProviders
-        if (from.index in providers.indices && to.index in 0..providers.size) {
-            val newProviders = providers.toMutableList().apply {
-                add(to.index, removeAt(from.index))
-            }
-            onUpdateSettings { it.copy(asrProviders = newProviders) }
+        val newProviders = settings.asrProviders.toMutableList().apply {
+            add(to.index, removeAt(from.index))
         }
+        onUpdateSettings { it.copy(asrProviders = newProviders) }
     }
     var deleteTarget by remember { mutableStateOf<ASRProviderSetting?>(null) }
 
@@ -366,7 +361,7 @@ private fun ASRProviderList(
 
 // 类型在配置面板里选，新建时默认是系统 TTS
 @Composable
-internal fun AddTTSProviderButton(onAdd: (TTSProviderSetting) -> Unit) {
+private fun AddTTSProviderButton(onAdd: (TTSProviderSetting) -> Unit) {
     var newProvider by remember { mutableStateOf<TTSProviderSetting?>(null) }
 
     IconButton(
@@ -390,7 +385,7 @@ internal fun AddTTSProviderButton(onAdd: (TTSProviderSetting) -> Unit) {
 
 // 新建时先选类型，再进配置面板
 @Composable
-internal fun AddASRProviderButton(onAdd: (ASRProviderSetting) -> Unit) {
+private fun AddASRProviderButton(onAdd: (ASRProviderSetting) -> Unit) {
     var showTypeSheet by remember { mutableStateOf(false) }
     var newProvider by remember { mutableStateOf<ASRProviderSetting?>(null) }
     val factories = remember {
@@ -448,7 +443,7 @@ private val TTSProviderSetting.typeName: String
         is TTSProviderSetting.Step -> "Step"
         is TTSProviderSetting.ElevenLabs -> "ElevenLabs"
         is TTSProviderSetting.FishAudio -> "Fish Audio"
-        is TTSProviderSetting.Doubao -> l10n("火山引擎", "Volcano Engine")
+        is TTSProviderSetting.Volcengine -> "火山引擎"
     }
 
 // TTS 和 ASR 列表共用的服务商卡片，点卡片编辑，点单选圈设为当前使用

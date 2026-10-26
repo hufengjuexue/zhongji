@@ -1,8 +1,8 @@
 package me.rerere.rikkahub.utils
 
 import android.Manifest
-import android.app.AppOpsManager
 import android.app.Activity
+import android.app.AppOpsManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
@@ -72,6 +72,43 @@ fun Context.writeClipboardText(text: String) {
     }.onFailure {
         Log.e(TAG, "writeClipboardText: $text", it)
         Toast.makeText(this, "Failed to write text into clipboard", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
+ * Whether the app has been granted the "Usage access" special permission
+ * (android.permission.PACKAGE_USAGE_STATS), required to query screen usage time.
+ */
+fun Context.hasUsageStatsPermission(): Boolean {
+    val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        appOps.unsafeCheckOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            packageName
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            packageName
+        )
+    }
+    return mode == AppOpsManager.MODE_ALLOWED
+}
+
+/**
+ * Open the system "Usage access" settings page so the user can grant the
+ * PACKAGE_USAGE_STATS permission manually.
+ */
+fun Context.openUsageAccessSettings() {
+    runCatching {
+        startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+    }.onFailure {
+        Log.e(TAG, "openUsageAccessSettings failed", it)
     }
 }
 
@@ -217,43 +254,5 @@ fun Context.exportImageFile(
         Log.e(TAG, "Failed to save image file", e)
     } finally {
         outputStream?.close()
-    }
-}
-
-/**
- * Whether the app has been granted the "Usage access" special permission
- * (android.permission.PACKAGE_USAGE_STATS), required to query screen usage time.
- */
-fun Context.hasUsageStatsPermission(): Boolean {
-    val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-    val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        appOps.unsafeCheckOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS,
-            Process.myUid(),
-            packageName
-        )
-    } else {
-        @Suppress("DEPRECATION")
-        appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS,
-            Process.myUid(),
-            packageName
-        )
-    }
-    return mode == AppOpsManager.MODE_ALLOWED
-}
-
-/**
- * Open Android's Usage Access settings page.
- * Call this to prompt the user to grant the
- * PACKAGE_USAGE_STATS permission manually.
- */
-fun Context.openUsageAccessSettings() {
-    runCatching {
-        startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        })
-    }.onFailure {
-        Log.e(TAG, "openUsageAccessSettings failed", it)
     }
 }

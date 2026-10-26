@@ -12,70 +12,56 @@ import androidx.compose.runtime.tooling.ComposeStackTraceMode
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ProcessLifecycleOwner
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
-import me.rerere.rikkahub.data.skills.SkillManager
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import me.rerere.common.android.appTempFolder
-import com.whl.quickjs.android.QuickJSLoader
+import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.files.FileFolders
+import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.remote.ModelsDevUpdater
+import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.data.skills.SkillManager
+import me.rerere.rikkahub.data.sync.BackupManager
+import me.rerere.rikkahub.data.sync.RestoreFailedException
 import me.rerere.rikkahub.di.appModule
 import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
-import me.rerere.rikkahub.plugin.di.pluginModule
 import me.rerere.rikkahub.di.viewModelModule
-import me.rerere.rikkahub.data.files.FilesManager
-import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.sync.BackupManager
-import me.rerere.rikkahub.data.sync.RestoreFailedException
-import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.service.MediaCreationService
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
+import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.androidx.workmanager.koin.workManagerFactory
 import org.koin.core.context.startKoin
-import me.rerere.rikkahub.utils.l10n
+import java.io.File
 
 private const val TAG = "RikkaHubApp"
 
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
-const val CHAT_GENERATION_FOREGROUND_CHANNEL_ID = "chat_generation_foreground"
 const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
-const val VOICE_CALL_NOTIFICATION_CHANNEL_ID = "voice_call"
 const val MEDIA_CREATION_NOTIFICATION_CHANNEL_ID = "media_creation"
 const val MEMORY_DREAM_NOTIFICATION_CHANNEL_ID = "memory_dream"
 
 class RikkaHubApp : Application() {
-    private fun trace(msg: String) {
-        // 启动诊断打点：每次都是 /sdcard 主线程文件写入（FUSE IPC），release 下是纯启动开销，
-        // 仅 debug 构建保留
-        if (!BuildConfig.DEBUG) return
-        try {
-            java.io.File("/sdcard/rikkahub_trace.txt").appendText("${System.currentTimeMillis()} $msg\n")
-        } catch (_: Exception) {}
-    }
-
     override fun onCreate() {
         super.onCreate()
-        trace("onCreate start")
-        // 插件解密密钥依赖 APK 签名，必须在任何插件读取之前完成初始化
-        me.rerere.rikkahub.plugin.crypto.PluginCrypto.init(this)
-        trace("plugin crypto init")
         // Restore files and settings before eager Koin singletons or workers can access them.
         try {
             val restored = runBlocking(Dispatchers.IO) {
@@ -86,67 +72,45 @@ class RikkaHubApp : Application() {
             }
         } catch (e: RestoreFailedException) {
             Log.e(TAG, "Backup restore rolled back", e)
-            Toast.makeText(this, l10n("备份恢复失败，已保留原数据。请重新导入备份。", "Backup restore failed. Your original data was kept; please import the backup again."), Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "备份恢复失败，已保留原数据。请重新导入备份。", Toast.LENGTH_LONG).show()
         }
-        trace("koin config")
         startKoin {
-            // Koin 日志在 release 下只产生日志字符串拼接开销
-            if (BuildConfig.DEBUG) androidLogger()
+            androidLogger()
             androidContext(this@RikkaHubApp)
             workManagerFactory()
-            modules(appModule, viewModelModule, dataSourceModule, repositoryModule, pluginModule)
+            modules(appModule, viewModelModule, dataSourceModule, repositoryModule)
         }
-        trace("koin done")
         this.createNotificationChannel()
-        trace("notification done")
 
         // set cursor window size to 32MB
         DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
-        trace("cursor done")
-
-        // TaskManager 持久化：此前 setPersistenceDir 无任何调用方，任务状态只存在内存里，
-        // 进程被杀即全部丢失（.tasks/{id}.json 的注释形同虚设）
-        runCatching {
-            me.rerere.rikkahub.data.ai.tools.TaskManager.setPersistenceDir(
-                java.io.File(filesDir, ".tasks")
-            )
-        }
-        trace("taskmanager done")
 
         // install crash handler
         CrashHandler.install(this)
-        trace("crashhandler done")
-
-        // Init QuickJS native library
-        QuickJSLoader.init()
-        trace("quickjs done")
-
-        // 插件声明的供应商要随启动就位，顺带清掉已被外部删掉的插件留下的供应商
-        runCatching { get<me.rerere.rikkahub.plugin.manager.PluginManager>() }
-            .onFailure { Log.e(TAG, "plugin manager init failed", it) }
 
         // delete temp files
         deleteTempFiles()
-        trace("tempfiles done")
+
+        // cleanup stale tool output files
+        cleanupToolOutputs()
+
+        // cleanup workspace temp dirs (proot + rootfs /tmp)
+        cleanupWorkspaceTempDirs()
+
+        // check workspace integrity (mark workspaces with missing files as broken after backup restore)
+        checkWorkspaceIntegrity()
 
         // sync upload files to DB
         syncManagedFiles()
-        trace("sync done")
-
-        // 按保留天数清理旧附件与生成图片（移植自 Rikkahub-Revised 的按日文件清理）
-        cleanupExpiredFiles()
-        trace("cleanup done")
 
         // Extract builtin skills from assets after install/update
         extractBuiltinSkills()
 
+        // Load models.dev data for model capability matching, then refresh it in background
+        updateModelsDev()
+
         // Start WebServer if enabled in settings
         startWebServerIfEnabled()
-        trace("webserver done")
-
-        // AI 主动发消息：进程被杀后重启时重新排程（开机场景由 ProactiveMessageReceiver 处理）
-        rescheduleProactiveMessageIfEnabled()
-        trace("proactive done")
 
         // Resume media generations interrupted by the last process death
         resumeMediaCreations()
@@ -154,7 +118,6 @@ class RikkaHubApp : Application() {
 
         // Increment launch count
         incrementLaunchCount()
-        trace("onCreate complete")
 
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
     }
@@ -196,11 +159,42 @@ class RikkaHubApp : Application() {
         }
     }
 
+    private fun cleanupWorkspaceTempDirs() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<WorkspaceManager>().cleanupAllTempDirs()
+            }.onFailure {
+                Log.e(TAG, "cleanupWorkspaceTempDirs failed", it)
+            }
+        }
+    }
+
+    private fun checkWorkspaceIntegrity() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<WorkspaceRepository>().checkIntegrity()
+            }.onFailure {
+                Log.e(TAG, "checkWorkspaceIntegrity failed", it)
+            }
+        }
+    }
+
     private fun deleteTempFiles() {
         get<AppScope>().launch(Dispatchers.IO) {
             val dir = appTempFolder
             if (dir.exists()) {
                 dir.deleteRecursively()
+            }
+        }
+    }
+
+    private fun cleanupToolOutputs() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                val dir = File(filesDir, FileFolders.TOOL_OUTPUTS)
+                if (dir.exists()) {
+                    dir.deleteRecursively()
+                }
             }
         }
     }
@@ -211,43 +205,18 @@ class RikkaHubApp : Application() {
         }
     }
 
+    private fun updateModelsDev() {
+        get<AppScope>().launch {
+            get<ModelsDevUpdater>().start()
+        }
+    }
+
     private fun syncManagedFiles() {
         get<AppScope>().launch(Dispatchers.IO) {
             runCatching {
                 get<FilesManager>().syncFolder()
             }.onFailure {
                 Log.e(TAG, "syncManagedFiles failed", it)
-            }
-        }
-    }
-
-    private fun cleanupExpiredFiles() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
-                val retentionDays = get<SettingsStore>().settingsFlowRaw.first().fileRetentionDays
-                if (retentionDays > 0) {
-                    val result = get<FilesManager>().deleteFilesOlderThan(retentionDays)
-                    Log.i(TAG, "cleanupExpiredFiles: deleted ${result.totalDeleted}, failed ${result.failedFiles}")
-                }
-            }.onFailure {
-                Log.e(TAG, "cleanupExpiredFiles failed", it)
-            }
-        }
-    }
-
-    private fun rescheduleProactiveMessageIfEnabled() {
-        get<AppScope>().launch {
-            runCatching {
-                val settings = get<SettingsStore>().settingsFlowRaw.first()
-                if (settings.proactiveMessageSetting.enabled) {
-                    me.rerere.rikkahub.data.service.ProactiveMessageService.scheduleNext(
-                        this@RikkaHubApp,
-                        settings.proactiveMessageSetting
-                    )
-                    Log.i(TAG, "Rescheduled proactive message alarm on app start")
-                }
-            }.onFailure {
-                Log.e(TAG, "rescheduleProactiveMessageIfEnabled failed", it)
             }
         }
     }
@@ -320,22 +289,6 @@ class RikkaHubApp : Application() {
             .build()
         notificationManager.createNotificationChannel(webServerChannel)
 
-        val generationForegroundChannel = NotificationChannelCompat
-            .Builder(CHAT_GENERATION_FOREGROUND_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
-            .setName(getString(R.string.notification_channel_generation_foreground))
-            .setVibrationEnabled(false)
-            .setShowBadge(false)
-            .build()
-        notificationManager.createNotificationChannel(generationForegroundChannel)
-
-        val voiceCallChannel = NotificationChannelCompat
-            .Builder(VOICE_CALL_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
-            .setName(l10n("语音通话", "Voice call"))
-            .setVibrationEnabled(false)
-            .setShowBadge(false)
-            .build()
-        notificationManager.createNotificationChannel(voiceCallChannel)
-
         val mediaCreationChannel = NotificationChannelCompat
             .Builder(MEDIA_CREATION_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_DEFAULT)
             .setName(getString(R.string.media_creation_title))
@@ -359,10 +312,10 @@ class RikkaHubApp : Application() {
 }
 
 class AppScope : CoroutineScope by CoroutineScope(
-    SupervisorJob()
-        + Dispatchers.Main
-        + CoroutineName("AppScope")
-        + CoroutineExceptionHandler { _, e ->
-        Log.e(TAG, "AppScope exception", e)
-    }
+    SupervisorJob() +
+        Dispatchers.Main +
+        CoroutineName("AppScope") +
+        CoroutineExceptionHandler { _, e ->
+            Log.e(TAG, "AppScope exception", e)
+        }
 )

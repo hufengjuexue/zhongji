@@ -82,7 +82,7 @@ sealed class TTSProviderSetting {
         override var name: String = "MiniMax TTS",
         val apiKey: String = "",
         val baseUrl: String = "https://api.minimaxi.com/v1",
-        val model: String = "speech-2.6-turbo",
+        val model: String = "speech-2.8-hd",
         val voiceId: String = "female-shaonv",
         val speed: Float = 1.0f
     ) : TTSProviderSetting() {
@@ -284,34 +284,18 @@ sealed class TTSProviderSetting {
     }
 
     @Serializable
-    @SerialName("doubao")
-    // 默认值仅用于快捷起步 可在设置页任意修改
-    data class Doubao(
-        override var id: Uuid = Uuid.random(),
-        override var name: String = "Doubao TTS",
+    @SerialName("volcengine")
+    data class Volcengine(
+        override val id: Uuid = Uuid.random(),
+        override val name: String = "Volcengine TTS",
         val apiKey: String = "",
-        // 火山 Agent Plan 专用 HTTP 非流式接口; 标准控制台用户改成
-        // https://openspeech.bytedance.com/api/v3/tts/unidirectional
-        val baseUrl: String = "https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional",
-        // 资源 ID 决定模型版本与计费: seed-tts-2.0 | seed-tts-1.0
+        val baseUrl: String = "https://openspeech.bytedance.com",
         val resourceId: String = "seed-tts-2.0",
-        // 音色: 2.0 音色以 _uranus_bigtts/_saturn_bigtts 结尾, 1.0 音色为 _mars_bigtts;
-        // resourceId 与音色版本必须匹配, 否则报 55000000
-        val speaker: String = "zh_female_cancan_uranus_bigtts",
-        val format: String = "mp3",
-        val sampleRate: Int = 24000,
-        // 语速 0.2 - 2.0, 1.0 为正常; 仅在非 1.0 时下发
-        val speechRate: Float = 1.0f,
+        val speaker: String = "zh_female_vv_uranus_bigtts",
+        val speechRate: Int = 0,
     ) : TTSProviderSetting() {
-        override fun copyProvider(
-            id: Uuid,
-            name: String,
-        ): TTSProviderSetting {
-            return this.copy(
-                id = id,
-                name = name,
-            )
-        }
+        override fun copyProvider(id: Uuid, name: String): TTSProviderSetting =
+            copy(id = id, name = name)
     }
 
     companion object {
@@ -328,7 +312,7 @@ sealed class TTSProviderSetting {
                 ElevenLabs::class,
                 Step::class,
                 FishAudio::class,
-                Doubao::class,
+                Volcengine::class,
             )
         }
     }

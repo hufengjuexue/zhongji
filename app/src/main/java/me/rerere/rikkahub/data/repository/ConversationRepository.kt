@@ -14,13 +14,13 @@ import kotlinx.coroutines.flow.map
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.datastore.ConversationSortOrder
 import me.rerere.rikkahub.data.db.AppDatabase
-import me.rerere.rikkahub.data.db.fts.MessageFtsManager
-import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
+import me.rerere.rikkahub.data.db.fts.MessageFtsManager
+import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
@@ -54,21 +54,6 @@ class ConversationRepository(
         }
     }
 
-    /**
-     * 轻量版：只取 id/title/update_at，不加载消息节点（Recent Chats 注入只要这两个字段，
-     * 完整反序列化 10 个会话的全部消息是纯浪费）。
-     */
-    suspend fun getRecentConversationTitles(
-        assistantId: Uuid,
-        limit: Int = 10,
-        excludeConversationId: Uuid? = null,
-    ): List<LightConversationEntity> {
-        return conversationDAO.getRecentConversationTitles(
-            assistantId = assistantId.toString(),
-            limit = if (excludeConversationId != null) limit + 1 else limit,
-        ).filter { Uuid.parse(it.id) != excludeConversationId }.take(limit)
-    }
-
     fun getConversationsOfAssistant(assistantId: Uuid): Flow<List<Conversation>> {
         return conversationDAO
             .getConversationsOfAssistant(assistantId.toString())
@@ -79,6 +64,9 @@ class ConversationRepository(
                 }
             }
     }
+
+    suspend fun getTitlesOfAssistant(assistantId: Uuid): Set<String> =
+        conversationDAO.getTitlesOfAssistant(assistantId.toString()).toSet()
 
     fun getConversationsOfAssistantPaging(assistantId: Uuid): Flow<PagingData<Conversation>> = Pager(
         config = PagingConfig(
@@ -141,8 +129,31 @@ class ConversationRepository(
         limit: Int,
     ): ConversationPageResult {
         val pagingSource = conversationDAO.getConversationsOfAssistantPaging(assistantId.toString())
-        return loadConversationPage(pagingSource, offset, limit)
+        return try {
+            when (
+                val result = pagingSource.load(
+                    PagingSource.LoadParams.Refresh(
+                        key = if (offset == 0) null else offset,
+                        loadSize = limit,
+                        placeholdersEnabled = false
+                    )
+                )
+            ) {
+                is PagingSource.LoadResult.Page -> ConversationPageResult(
+                    items = result.data.map { entity ->
+                        conversationSummaryToConversation(entity)
+                    },
+                    nextOffset = result.nextKey
+                )
+
+                is PagingSource.LoadResult.Error -> throw result.throwable
+                is PagingSource.LoadResult.Invalid -> ConversationPageResult(emptyList(), null)
+            }
+        } finally {
+            pagingSource.invalidate()
+        }
     }
+
     suspend fun searchConversationsOfAssistantPage(
         assistantId: Uuid,
         titleKeyword: String,
@@ -285,15 +296,13 @@ class ConversationRepository(
         return if (entity != null) {
             val nodes = loadMessageNodes(entity.id)
             conversationEntityToConversation(entity, nodes)
-        } else null
+        } else {
+            null
+        }
     }
 
     suspend fun existsConversationById(uuid: Uuid): Boolean {
         return conversationDAO.existsById(uuid.toString())
-    }
-
-    suspend fun getMessageNodeCount(conversationId: Uuid): Int {
-        return messageNodeDAO.countNodesOfConversation(conversationId.toString())
     }
 
     suspend fun countConversations(): Int {
@@ -368,18 +377,12 @@ class ConversationRepository(
         }
     }
 
-    suspend fun deleteConversationOfAssistant(assistantId: Uuid) {
-        getConversationsOfAssistant(assistantId).first().forEach { conversation ->
-            deleteConversation(conversation)
-        }
-    }
-
     fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
         require(conversation.messageNodes.none { it.messages.any { message -> message.hasBase64Part() } })
         return ConversationEntity(
             id = conversation.id.toString(),
             title = conversation.title,
-            nodes = "[]",  // nodes 现在存储在单独的表中
+            nodes = "[]", // nodes 现在存储在单独的表中
             createAt = conversation.createAt.toEpochMilli(),
             updateAt = conversation.updateAt.toEpochMilli(),
             assistantId = conversation.assistantId.toString(),
@@ -390,8 +393,6 @@ class ConversationRepository(
             lorebookIds = JsonInstant.encodeToString(conversation.lorebookIds),
             workspaceCwd = conversation.workspaceCwd ?: "",
             folderId = conversation.folderId?.toString() ?: "",
-            rollingContextSummary = conversation.rollingContextSummary
-                ?.let { JsonInstant.encodeToString(it) } ?: "",
             config = conversation.config?.let { JsonInstant.encodeToString(it) } ?: "",
         )
     }
@@ -413,10 +414,7 @@ class ConversationRepository(
             modeInjectionIds = JsonInstant.decodeFromString(conversationEntity.modeInjectionIds),
             lorebookIds = JsonInstant.decodeFromString(conversationEntity.lorebookIds),
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
-            folderId = conversationEntity.folderId.toFolderUuidOrNull(),
-            rollingContextSummary = conversationEntity.rollingContextSummary
-                .takeIf(String::isNotEmpty)
-                ?.let { runCatching { JsonInstant.decodeFromString<me.rerere.rikkahub.data.ai.context.RollingContextSummary>(it) }.getOrNull() },
+            folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
             config = conversationEntity.config.ifEmpty { null }?.let { JsonInstant.decodeFromString(it) },
         )
     }
@@ -429,13 +427,6 @@ class ConversationRepository(
                     conversationEntityToConversation(entity, emptyList())
                 }
             }
-    }
-
-    suspend fun togglePinStatus(conversationId: Uuid) {
-        conversationDAO.updatePinStatus(
-            id = conversationId.toString(),
-            isPinned = !(getConversationById(conversationId)?.isPinned ?: false)
-        )
     }
 
     suspend fun updatePinStatus(conversationId: Uuid, isPinned: Boolean) {
@@ -487,19 +478,6 @@ class ConversationRepository(
         )
     }
 
-    /**
-     * 单列更新会话的滚动压缩摘要，summary 为 null 表示清除。
-     */
-    suspend fun updateRollingContextSummary(
-        conversationId: Uuid,
-        summary: me.rerere.rikkahub.data.ai.context.RollingContextSummary?,
-    ) {
-        conversationDAO.updateRollingContextSummary(
-            id = conversationId.toString(),
-            summary = summary?.let { JsonInstant.encodeToString(it) } ?: ""
-        )
-    }
-
     private fun conversationSummaryToConversation(entity: LightConversationEntity): Conversation {
         return Conversation(
             id = Uuid.parse(entity.id),
@@ -509,7 +487,7 @@ class ConversationRepository(
             createAt = Instant.ofEpochMilli(entity.createAt),
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             messageNodes = emptyList(),
-            folderId = entity.folderId.toFolderUuidOrNull(),
+            folderId = entity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
         )
     }
 

@@ -420,7 +420,6 @@ class ClaudeServerToolTest {
         val method = ClaudeProvider::class.java.getDeclaredMethod(
             "buildMessages",
             List::class.java,
-            UIMessage::class.java,
             Boolean::class.javaPrimitiveType,
             me.rerere.ai.provider.ClaudePromptCacheTtl::class.java,
         )
@@ -428,7 +427,6 @@ class ClaudeServerToolTest {
         return method.invoke(
             provider,
             messages,
-            messages.firstOrNull { it.role == me.rerere.ai.core.MessageRole.SYSTEM },
             false,
             me.rerere.ai.provider.ClaudePromptCacheTtl.FIVE_MINUTES,
         ) as JsonArray

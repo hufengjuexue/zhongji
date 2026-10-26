@@ -39,17 +39,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import kotlinx.datetime.toJavaLocalDateTime
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.Clock02
-import me.rerere.hugeicons.stroke.Download04
 import me.rerere.hugeicons.stroke.Layers01
 import me.rerere.hugeicons.stroke.Repeat
-import me.rerere.hugeicons.stroke.Upload02
 import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.findModelById
@@ -112,39 +108,22 @@ fun ChatMessageNerdLine(
                             content = { Text(text = stringResource(R.string.chat_message_usage_steps, stats.steps)) }
                         )
                     }
-                    // 输入含缓存命中：多轮工具调用只取最后一次请求，累计值放在详情里
-                    StatsItem(
-                        icon = { StatsIcon(HugeIcons.Upload02, stringResource(R.string.chat_message_usage_input)) },
-                        content = {
-                            Text(text = "${stats.lastUsage.promptTokens.formatNumber()} tokens")
-                            // Cached tokens（DeepSeek prompt_cache_hit_tokens 等）；总量有效时附带命中率
-                            val cached = stats.lastUsage.cachedTokens
-                            if (cached > 0) {
-                                val hitRate = if (stats.lastUsage.promptTokens > 0) {
-                                    " / ${(cached * 100f / stats.lastUsage.promptTokens).roundToInt()}%"
-                                } else {
-                                    ""
-                                }
-                                Text(text = "(${cached.formatNumber()} cached$hitRate)")
-                            }
-                        }
-                    )
-                    StatsItem(
-                        icon = { StatsIcon(HugeIcons.Download04, stringResource(R.string.chat_message_usage_output)) },
-                        content = { Text(text = "${stats.lastUsage.completionTokens.formatNumber()} tokens") }
-                    )
                     if (stats.tps != null) {
                         StatsItem(
                             icon = { StatsIcon(HugeIcons.Zap, stringResource(R.string.chat_message_usage_speed)) },
                             content = { Text(text = "${stats.tps.toFixed(1)} tok/s") }
                         )
                     }
-                    if (stats.durationMillis != null) {
-                        StatsItem(
-                            icon = { StatsIcon(HugeIcons.Clock02, stringResource(R.string.chat_message_usage_duration)) },
-                            content = { Text(text = "${(stats.durationMillis / 1000f).toFixed(1)}s") }
-                        )
-                    }
+                    StatsItem(
+                        icon = { StatsIcon(HugeIcons.Layers01, stringResource(R.string.chat_message_usage_context)) },
+                        content = {
+                            Text(text = stringResource(R.string.chat_message_usage_context_short, stats.contextTokens.formatNumber()))
+                            val cached = stats.lastUsage.cachedTokens
+                            if (cached > 0) {
+                                Text(text = stringResource(R.string.chat_message_usage_cached_short, cached.formatNumber()))
+                            }
+                        }
+                    )
                 }
             }
         }

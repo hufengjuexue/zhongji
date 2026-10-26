@@ -242,10 +242,9 @@ fun ExtensionEmptyState(
     buttonText: String? = null,
     onAction: (() -> Unit)? = null,
     icon: ImageVector = HugeIcons.Package,
-    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

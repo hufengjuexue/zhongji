@@ -20,29 +20,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import kotlinx.serialization.Serializable
-import me.rerere.rikkahub.data.datastore.DisplayMaterialMode
-import me.rerere.rikkahub.ui.components.ui.toComposeColor
-import me.rerere.rikkahub.ui.context.LocalDisplaySettings
 import me.rerere.rikkahub.ui.hooks.rememberAmoledDarkMode
 import me.rerere.rikkahub.ui.hooks.rememberCurrentColorMode
 import me.rerere.rikkahub.ui.hooks.rememberUserSettingsState
 import me.rerere.rikkahub.utils.getActivity
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Shapes
-import androidx.compose.ui.unit.dp
 
 private val ExtendLightColors = lightExtendColors()
 private val ExtendDarkColors = darkExtendColors()
 val LocalExtendColors = compositionLocalOf { ExtendLightColors }
 
 val LocalDarkMode = compositionLocalOf { false }
-
-val LocalMaterialMode = compositionLocalOf { DisplayMaterialMode.FOLLOW_THEME }
-
-// 设置页背景图生效时置位，页面可据此让自身底色透明以露出背景图
-val LocalSettingsBackdropActive = compositionLocalOf { false }
-
-const val LIQUID_GLASS_THEME_ID = "liquid_glass"
 
 private val AMOLED_DARK_BACKGROUND = Color(0xFF000000)
 
@@ -60,29 +47,12 @@ fun RikkahubTheme(
 ) {
     val settings by rememberUserSettingsState()
 
-    val systemDark = when (colorMode) {
+    val darkTheme = when (colorMode) {
         ColorMode.SYSTEM -> isSystemInDarkTheme()
         ColorMode.LIGHT -> false
         ColorMode.DARK -> true
     }
-    // 聊天外观自定义了聊天背景色时，全局深浅色跟随主题背景亮度，
-    // 避免系统暗黑模式下顶栏/抽屉/菜单是深色而聊天区是浅色主题的错乱
-    val chatBg = settings.displaySetting.chatBackgroundColor?.toComposeColor()
-    val darkTheme = if (chatBg != null) {
-        val luminance = 0.299f * chatBg.red + 0.587f * chatBg.green + 0.114f * chatBg.blue
-        luminance < 0.5f
-    } else {
-        systemDark
-    }
     val amoledDarkMode by rememberAmoledDarkMode()
-
-    val materialMode = when (settings.displaySetting.materialMode) {
-        DisplayMaterialMode.FOLLOW_THEME ->
-            if (settings.themeId == LIQUID_GLASS_THEME_ID) DisplayMaterialMode.GLASS
-            else DisplayMaterialMode.FLAT
-
-        else -> settings.displaySetting.materialMode
-    }
 
     val colorScheme = when {
         settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
@@ -106,33 +76,6 @@ fun RikkahubTheme(
         }
     }
     val extendColors = if (darkTheme) ExtendDarkColors else ExtendLightColors
-
-    // 聊天外观自定义覆盖层：在 dynamicColor/themeId 色板之上最后 copy() 覆盖
-    val finalColorScheme = remember(
-        colorSchemeConverted,
-        settings.displaySetting.primaryColor,
-        settings.displaySetting.globalTextColor,
-    ) {
-        var scheme = colorSchemeConverted
-        settings.displaySetting.primaryColor?.let { pc ->
-            val primaryColor = pc.toComposeColor()
-            val luminance = 0.299f * primaryColor.red + 0.587f * primaryColor.green + 0.114f * primaryColor.blue
-            val onPrimary = if (luminance > 0.5f) Color.Black else Color.White
-            scheme = scheme.copy(
-                primary = primaryColor,
-                onPrimary = onPrimary,
-            )
-        }
-        settings.displaySetting.globalTextColor?.let { gtc ->
-            val textColor = gtc.toComposeColor()
-            scheme = scheme.copy(
-                onBackground = textColor,
-                onSurface = textColor,
-                onSurfaceVariant = textColor,
-            )
-        }
-        scheme
-    }
 
     // 更新状态栏图标颜色
     val view = LocalView.current
@@ -159,30 +102,11 @@ fun RikkahubTheme(
     CompositionLocalProvider(
         LocalDarkMode provides darkTheme,
         LocalExtendColors provides extendColors,
-        LocalMaterialMode provides materialMode,
-        LocalDisplaySettings provides settings.displaySetting,
         LocalOverscrollFactory provides null,
     ) {
         MaterialExpressiveTheme(
-            colorScheme = finalColorScheme,
+            colorScheme = colorSchemeConverted,
             typography = Typography,
-            // 必须显式给一套 Shapes。
-            //
-            // MaterialExpressiveTheme 的默认形状是给「表达性」场景设计的：
-            // 按钮是全圆角胶囊、卡片 28dp。放在这个以信息密度为主的聊天
-            // 界面里，观感是「每个按钮都鼓成了药丸」，暗色下尤其明显——
-            // 深色背景把圆角的边缘衬得更突出，视觉上像是画错了。
-            //
-            // 这里换成一组克制的值：按钮保留 8dp 的中等圆角（既有可点按
-            // 的暗示，又不至于糊成一团），卡片 12dp，大容器 16dp。
-            // 层级关系（小 < 中 < 大）保持不变，Material 的语义才成立。
-            shapes = Shapes(
-                extraSmall = RoundedCornerShape(4.dp),
-                small = RoundedCornerShape(6.dp),
-                medium = RoundedCornerShape(8.dp),
-                large = RoundedCornerShape(12.dp),
-                extraLarge = RoundedCornerShape(16.dp),
-            ),
             content = content,
             motionScheme = MotionScheme.expressive()
         )

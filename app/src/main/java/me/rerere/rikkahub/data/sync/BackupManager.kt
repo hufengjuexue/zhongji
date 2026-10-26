@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.sync
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -42,12 +41,7 @@ class BackupManager(
 ) {
     private val restoreMutex = Mutex()
 
-    /** [upstreamCompatible] 为 true 时导出上游 rikkahub 能直接导入的备份，本地独有数据会被丢弃。 */
-    suspend fun createBackup(
-        includeDatabase: Boolean,
-        includeFiles: Boolean,
-        upstreamCompatible: Boolean = false,
-    ): File = withContext(Dispatchers.IO) {
+    suspend fun createBackup(includeDatabase: Boolean, includeFiles: Boolean): File = withContext(Dispatchers.IO) {
         val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
         val archive = File.createTempFile("backup_${timestamp}_", ".zip", context.cacheDir)
         val staging = Files.createTempDirectory(context.cacheDir.toPath(), "backup-").toFile()
@@ -56,14 +50,11 @@ class BackupManager(
             ZipOutputStream(FileOutputStream(archive)).use { zip ->
                 zip.putNextEntry(ZipEntry("settings.json"))
                 val settingsJson = json.encodeSettings(settings, settingsStore.launchCountFlow.first())
-                val payload =
-                    if (upstreamCompatible) UpstreamCompat.settingsJson(settingsJson, json) else settingsJson
-                zip.write(payload.toByteArray(Charsets.UTF_8))
+                zip.write(settingsJson.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
                 if (includeDatabase) {
                     val snapshot = File(staging, SQLiteConfiguration.DATABASE_NAME)
                     DatabaseBackup.createSnapshot(database.openHelper.writableDatabase, snapshot)
-                    if (upstreamCompatible) UpstreamCompat.downgradeDatabase(context, snapshot, json)
                     addFile(zip, snapshot, DatabaseBackup.ARCHIVE_DATABASE)
                 }
                 if (includeFiles) {
@@ -105,12 +96,9 @@ class BackupManager(
                     val seen = mutableSetOf<String>()
                     var restoredEntries = 0
                     ZipFile(archive).use { zip ->
-                        // 恢复资源预算（移植自 Rikkahub-Revised）：防御异常/恶意归档的 zip 炸弹
-                        val budget = BackupRestoreBudget()
                         for (entry in zip.entries()) {
                             currentCoroutineContext().ensureActive()
                             if (entry.isDirectory) continue
-                            budget.consume(entry)
                             val target = when (entry.name) {
                                 "settings.json" -> File(staging, "settings.json")
                                 DatabaseBackup.ARCHIVE_DATABASE -> if (includeDatabase) stagedDatabase else null
@@ -137,10 +125,8 @@ class BackupManager(
                     require(!stagedWal.exists() || stagedDatabase.exists()) { "Backup WAL has no matching database" }
                     if (stagedDatabase.exists()) {
                         DatabaseBackup.normalize(context, stagedDatabase)
-                        // 显式升级 + 结构对齐：恢复不再依赖 Room 的迁移容器，
-                        // 任意旧版本备份（v1 起）都能升到当前结构
-                        DatabaseBackup.upgradeToCurrent(context, stagedDatabase)
-                        val room = openStagedDatabase(context, stagedDatabase)
+                        // Reject unsupported schemas before publishing; run supported old migrations on the copy.
+                        val room = AppDatabaseFactory.create(context, stagedDatabase.absolutePath)
                         try {
                             DatabaseBackup.checkpoint(room.openHelper.writableDatabase)
                         } finally {
@@ -165,35 +151,6 @@ class BackupManager(
             }
         }
 
-    /**
-     * 打开暂存库并触发 Room 的 schema 校验。
-     *
-     * 正常情况下 Room 会拿当前 schema 校验对齐后的结构；上游合并遗留的结构漂移
-     * （上游某个版本有、本地中间版本又没有的列）会让校验失败，这时退回「写回当前
-     * identity hash」的宽松路径，让旧备份仍然能导入，问题只记在日志里。
-     */
-    private fun openStagedDatabase(context: Context, stagedDatabase: File): AppDatabase {
-        return try {
-            openRoomDatabase(context, stagedDatabase)
-        } catch (e: IllegalStateException) {
-            Log.w(TAG, "Staged database failed Room's schema validation, accepting the aligned schema", e)
-            DatabaseBackup.acceptAlignedSchema(context, stagedDatabase)
-            openRoomDatabase(context, stagedDatabase)
-        }
-    }
-
-    /** Room 的迁移与 schema 校验都发生在第一次拿到数据库连接时。 */
-    private fun openRoomDatabase(context: Context, stagedDatabase: File): AppDatabase {
-        val room = AppDatabaseFactory.create(context, stagedDatabase.absolutePath)
-        try {
-            room.openHelper.writableDatabase
-        } catch (e: Throwable) {
-            runCatching { room.close() }
-            throw e
-        }
-        return room
-    }
-
     private fun isAttachment(name: String): Boolean {
         val folder = name.substringBefore('/')
         if (folder !in ATTACHMENT_FOLDERS || '/' !in name) return false
@@ -203,30 +160,6 @@ class BackupManager(
         return true
     }
 
-    /**
-     * 备份恢复资源预算（移植自 Rikkahub-Revised BackupRestoreBudget）：
-     * 限制条目数、单条目大小与总解压大小，防止恶意或损坏的归档耗尽磁盘/内存。
-     */
-    private class BackupRestoreBudget(
-        private val maxEntries: Int = 100_000,
-        private val maxEntryBytes: Long = 2L * 1024 * 1024 * 1024,
-        private val maxTotalBytes: Long = 8L * 1024 * 1024 * 1024,
-    ) {
-        private var entries = 0
-        private var totalBytes = 0L
-
-        fun consume(entry: ZipEntry) {
-            entries += 1
-            require(entries <= maxEntries) { "Backup archive has too many entries" }
-            val size = entry.size
-            if (size >= 0) {
-                require(size <= maxEntryBytes) { "Backup entry too large: ${entry.name}" }
-                totalBytes += size
-                require(totalBytes <= maxTotalBytes) { "Backup archive too large to restore" }
-            }
-        }
-    }
-
     private fun addFile(zip: ZipOutputStream, file: File, name: String) {
         zip.putNextEntry(ZipEntry(name))
         file.inputStream().use { it.copyTo(zip) }
@@ -234,8 +167,6 @@ class BackupManager(
     }
 
     companion object {
-        private const val TAG = "BackupManager"
-
         private val ATTACHMENT_FOLDERS =
             listOf(FileFolders.UPLOAD, FileFolders.SKILLS, FileFolders.FONTS, FileFolders.MEDIA_CREATION)
 

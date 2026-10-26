@@ -14,11 +14,6 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-data class ToastAction(
-    val label: String,
-    val onClick: () -> Unit,
-)
-
 enum class ToastType {
     Normal,
     Success,
@@ -40,23 +35,17 @@ class ToasterState internal constructor(
         message: String,
         type: ToastType = ToastType.Normal,
         duration: Duration = DefaultDuration,
-        action: ToastAction? = null,
     ) {
-        enqueue(message, type, duration, action)
+        enqueue(message, type, duration)
     }
 
     /** 显示一条进行中的提示（如「正在保存」），不会自动消失，操作结束后调用返回句柄的 [ToastHandle.dismiss] 收起。 */
     fun showProgress(message: String): ToastHandle {
-        return ToastHandle(this, enqueue(message, ToastType.Normal, Duration.INFINITE, null))
+        return ToastHandle(this, enqueue(message, ToastType.Normal, Duration.INFINITE))
     }
 
-    private fun enqueue(
-        message: String,
-        type: ToastType,
-        duration: Duration,
-        action: ToastAction? = null,
-    ): ToastItem {
-        val item = ToastItem(id = nextId.getAndIncrement(), message = message, type = type, action = action)
+    private fun enqueue(message: String, type: ToastType, duration: Duration): ToastItem {
+        val item = ToastItem(id = nextId.getAndIncrement(), message = message, type = type)
         items.add(item)
         // 超出可见数量时让最早的先退出
         items.filter { it.visibleState.targetState }
@@ -95,7 +84,6 @@ internal class ToastItem(
     val id: Long,
     val message: String,
     val type: ToastType,
-    val action: ToastAction? = null,
 ) {
     val visibleState = MutableTransitionState(false).apply { targetState = true }
     var job: Job? = null

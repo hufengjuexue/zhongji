@@ -6,27 +6,14 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
-import me.rerere.rikkahub.data.model.GenerationType
-import me.rerere.rikkahub.data.model.MemoryFile
-import kotlin.uuid.Uuid
 
 class TransformerContext(
     val context: Context,
     val model: Model,
     val assistant: Assistant,
     val settings: Settings,
-    val conversationId: Uuid? = null,
-    val conversationModeInjectionIds: Set<Uuid> = emptySet(),
-    val conversationLorebookIds: Set<Uuid> = emptySet(),
     val processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     val workspaceCwd: String? = null,
-    /** 当前生成类型（官方 triggers 过滤用），默认普通发送 */
-    val generationType: GenerationType = GenerationType.NORMAL,
-    /** 当前对话真实用户消息数（完整对话，未截断、不含注入与示例），导演备注间隔计数用 */
-    val chatUserMessageCount: Int? = null,
-    /** 送入上下文的消息条数（截断后），导演备注 In-chat 深度计算用 */
-    val chatMessageCount: Int? = null,
-    val memories: List<MemoryFile> = emptyList(),
 )
 
 interface MessageTransformer {
@@ -77,30 +64,16 @@ suspend fun List<UIMessage>.transforms(
     model: Model,
     assistant: Assistant,
     settings: Settings,
-    conversationId: Uuid? = null,
-    conversationModeInjectionIds: Set<Uuid> = emptySet(),
-    conversationLorebookIds: Set<Uuid> = emptySet(),
     processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     workspaceCwd: String? = null,
-    generationType: GenerationType = GenerationType.NORMAL,
-    chatUserMessageCount: Int? = null,
-    chatMessageCount: Int? = null,
-    memories: List<MemoryFile> = emptyList(),
 ): List<UIMessage> {
     val ctx = TransformerContext(
         context = context,
         model = model,
         assistant = assistant,
         settings = settings,
-        conversationId = conversationId,
-        conversationModeInjectionIds = conversationModeInjectionIds,
-        conversationLorebookIds = conversationLorebookIds,
         processingStatus = processingStatus,
         workspaceCwd = workspaceCwd,
-        generationType = generationType,
-        chatUserMessageCount = chatUserMessageCount,
-        chatMessageCount = chatMessageCount,
-        memories = memories,
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)
@@ -113,17 +86,8 @@ suspend fun List<UIMessage>.visualTransforms(
     model: Model,
     assistant: Assistant,
     settings: Settings,
-    conversationId: Uuid? = null,
-    workspaceCwd: String? = null,
 ): List<UIMessage> {
-    val ctx = TransformerContext(
-        context = context,
-        model = model,
-        assistant = assistant,
-        settings = settings,
-        conversationId = conversationId,
-        workspaceCwd = workspaceCwd,
-    )
+    val ctx = TransformerContext(context, model, assistant, settings)
     return transformers.fold(this) { acc, transformer ->
         if (transformer is OutputMessageTransformer) {
             transformer.visualTransform(ctx, acc)
@@ -139,17 +103,8 @@ suspend fun List<UIMessage>.onGenerationFinish(
     model: Model,
     assistant: Assistant,
     settings: Settings,
-    conversationId: Uuid? = null,
-    workspaceCwd: String? = null,
 ): List<UIMessage> {
-    val ctx = TransformerContext(
-        context = context,
-        model = model,
-        assistant = assistant,
-        settings = settings,
-        conversationId = conversationId,
-        workspaceCwd = workspaceCwd,
-    )
+    val ctx = TransformerContext(context, model, assistant, settings)
     return transformers.fold(this) { acc, transformer ->
         if (transformer is OutputMessageTransformer) {
             transformer.onGenerationFinish(ctx, acc)

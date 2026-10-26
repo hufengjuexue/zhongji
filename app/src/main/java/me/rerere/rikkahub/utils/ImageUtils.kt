@@ -8,7 +8,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
-import java.io.File
 import com.drew.imaging.ImageMetadataReader
 import com.drew.imaging.png.PngChunkType
 import com.drew.metadata.png.PngDirectory
@@ -16,9 +15,7 @@ import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
-import android.util.Base64
-import java.nio.charset.StandardCharsets
-import me.rerere.rikkahub.utils.l10n
+import java.io.File
 
 /**
  * 图片处理工具类
@@ -144,69 +141,6 @@ object ImageUtils {
     }
 
     /**
-     * 判断 uri 指向的图片是否为 HEIF/HEIC 格式
-     * 优先使用 ContentResolver 的 MIME 类型，回退到读取文件头魔数嗅探
-     */
-    fun isHeifImage(context: Context, uri: Uri): Boolean {
-        context.contentResolver.getType(uri)?.lowercase()?.let { mime ->
-            if (mime.contains("heic") || mime.contains("heif")) return true
-        }
-        return runCatching {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val header = ByteArray(12)
-                val read = input.read(header)
-                if (read < 12) return@use false
-                if (header.copyOfRange(4, 8).toString(Charsets.US_ASCII) != "ftyp") return@use false
-                header.copyOfRange(8, 12).toString(Charsets.US_ASCII) in HEIF_BRANDS
-            } ?: false
-        }.getOrDefault(false)
-    }
-
-    /**
-     * 将 HEIF/HEIC 图片解码后重编码为 JPEG 写入 [target]
-     * 用于规避部分组件（如 UCrop）对 HEIF（尤其 HDR HEIF）解码兼容性不佳的问题
-     *
-     * @return 转换成功返回 true，失败（如系统无法解码 HEIF）返回 false
-     */
-    fun convertHeifToJpeg(
-        context: Context,
-        uri: Uri,
-        target: File,
-        maxSize: Int = 4096,
-        quality: Int = 95,
-    ): Boolean = runCatching {
-        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input, null, boundsOptions)
-        }
-        val loadOptions = BitmapFactory.Options().apply {
-            inSampleSize = calculateInSampleSize(boundsOptions, maxSize, maxSize)
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        val decoded = context.contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input, null, loadOptions)
-        } ?: return@runCatching false
-        // 将 EXIF 旋转烘焙进像素，输出的 JPEG 不再带方向信息，避免下游二次旋转
-        val oriented = correctImageOrientation(context, uri, decoded)
-        try {
-            target.outputStream().use { output ->
-                oriented.compress(Bitmap.CompressFormat.JPEG, quality, output)
-            }
-            true
-        } finally {
-            recycleBitmapSafely(oriented)
-        }
-    }.onFailure {
-        it.printStackTrace()
-    }.getOrDefault(false)
-
-    private val HEIF_BRANDS = setOf(
-        "heic", "heix", "heim", "heis",
-        "hevc", "hevx", "hevm", "hevs",
-        "mif1", "msf1", "heif",
-    )
-
-    /**
      * 从图片中解析二维码
      *
      * @param bitmap 要解析的图片
@@ -288,90 +222,40 @@ object ImageUtils {
                     height = options.outHeight,
                     mimeType = options.outMimeType
                 )
-            } else null
+            } else {
+                null
+            }
         }.onFailure {
             it.printStackTrace()
         }.getOrNull()
     }
 
     /**
-     * 从 PNG 字节流中手动查找 "chara" / "Chara" tEXt chunk 并提取 base64 数据
+     * 获取酒馆角色卡中的角色元数据（如果存在）
      *
-     * PNG chunk 结构: [length:4BE][type:4][data:length][CRC:4]
-     * tEXt chunk data: [keyword:Latin1\0][text:Latin1]
-     * SillyTavern 使用 keyword="chara", text=base64(JSON)
-     *
-     * 参考 SillyTavern: public/scripts/characters.js → getPngCharacterCard()
+     * @param context Android上下文
+     * @param uri 图片URI
+     * @return Result<String> 包含角色元数据的Result对象
      */
     fun getTavernCharacterMeta(context: Context, uri: Uri): Result<String> = runCatching {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: error(l10n("无法读取图片文件", "Unable to read image file"))
-        getTavernCharacterMetaFromBytes(bytes).getOrThrow()
-    }
-
-    /**
-     * 与 [getTavernCharacterMeta] 相同的解析逻辑，但直接作用于 PNG 字节数组
-     * 用于从网络下载的 PNG 数据（无 Uri 可读）
-     */
-    fun getTavernCharacterMetaFromBytes(bytes: ByteArray): Result<String> = runCatching {
-        // PNG 签名(8 bytes)后开始 chunk
-        var offset = 8
-        var charaResult: String? = null
-        while (offset + 8 <= bytes.size) {
-            val length = readInt32BE(bytes, offset)
-            val type = String(bytes, offset + 4, 4, StandardCharsets.US_ASCII)
-            val dataStart = offset + 8
-            val dataEnd = dataStart + length
-            if (dataEnd > bytes.size) break
-
-            if (type == "tEXt" || type == "zTXt") {
-                // tEXt chunk data: keyword\0text
-                // 找 null 分隔符
-                val nullPos = bytes.copyOfRange(dataStart, dataEnd).indexOf(0.toByte())
-                if (nullPos >= 0) {
-                    val absNull = dataStart + nullPos
-                    val keyword = String(bytes, dataStart, nullPos, StandardCharsets.ISO_8859_1)
-                    if (keyword.equals("chara", ignoreCase = true) || keyword.equals("ccv3", ignoreCase = true)) {
-                        val rawText = String(bytes, absNull + 1, dataEnd - absNull - 1, StandardCharsets.ISO_8859_1)
-
-                        // 去掉 base64 前面的任何垃圾字节（SilveryTavern 也这样做）
-                        val cleanB64 = rawText.trim()
-                        val jsonBytes = Base64.decode(cleanB64, Base64.DEFAULT)
-                        val jsonStr = String(jsonBytes, StandardCharsets.UTF_8)
-
-                        // 找到第一个 { 跳过前导垃圾（兼容性保护）
-                        val braceStart = jsonStr.indexOf('{')
-                        if (braceStart >= 0 && jsonStr.contains("\"spec\"")) {
-                            // ccv3 优先，但如果已经找到 chara 且现在又找到 ccv3，覆盖
-                            // ccv3 在 chunk 顺序中通常在 chara 之后
-                            if (keyword.equals("ccv3", ignoreCase = true)) {
-                                return Result.success(cleanB64)
-                            }
-                            // chara 暂存，继续找 ccv3
-                            charaResult = cleanB64
-                        }
-                    }
-                }
-            }
-
-            // zTXt chunk data 是压缩的，跳过（后续可加 inflate 支持）
-            offset += 12 + length
+        val metadata = context.contentResolver.openInputStream(uri)?.use { ImageMetadataReader.readMetadata(it) }
+        if (metadata == null) error("Metadata is null, please check if the image is a character card")
+        if (!metadata.containsDirectoryOfType(
+                PngDirectory::class.java
+            )) {
+            error("No PNG directory found, please check if the image is a character card")
         }
 
-        // 没找到 ccv3，用 chara
-        if (charaResult != null) {
-            return Result.success(charaResult)
-        }
+        val pngDirectory = metadata.getDirectoriesOfType(PngDirectory::class.java)
+            .firstOrNull { directory ->
+                directory.pngChunkType == PngChunkType.tEXt &&
+                    directory.getString(PngDirectory.TAG_TEXTUAL_DATA).startsWith("[chara:")
+            } ?: error("No tEXt chunk found, please check if the image is a character card")
 
-        error(l10n("未找到有效的角色卡数据，请确认图片是酒馆角色卡PNG", "No valid character card data found. Make sure the image is a SillyTavern character card PNG."))
-    }
+        val value = pngDirectory.getString(PngDirectory.TAG_TEXTUAL_DATA)
 
-    /** 读取4字节大端整数（PNG chunk length） */
-    private fun readInt32BE(bytes: ByteArray, offset: Int): Int {
-        return ((bytes[offset].toInt() and 0xFF) shl 24) or
-               ((bytes[offset + 1].toInt() and 0xFF) shl 16) or
-               ((bytes[offset + 2].toInt() and 0xFF) shl 8) or
-               (bytes[offset + 3].toInt() and 0xFF)
+        val regex = Regex("""\[chara:\s*(.+?)]""")
+        return Result.success(regex.find(value)?.groupValues?.get(1) ?: error("No character data found"))
     }
 
     data class ImageInfo(

@@ -41,7 +41,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", SEARCH_QUERY_DESCRIPTION)
                 })
             },
             required = listOf("query")
@@ -75,7 +75,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseBody = response.body!!.string()
+                val responseBody = response.body.string()
                 val searchResponse = json.decodeFromString<TinyfishSearchResponse>(responseBody)
 
                 val items = searchResponse.results.map { result ->
@@ -120,7 +120,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val responseBody = response.body!!.string()
+                val responseBody = response.body.string()
                 val fetchResponse = json.decodeFromString<TinyfishFetchResponse>(responseBody)
 
                 return@withContext Result.success(

@@ -64,14 +64,12 @@ fun Route.folderRoutes(
             val uuid = call.parameters["id"].toUuid("folder id")
             folderRepo.getFolderById(uuid) ?: throw NotFoundException("Folder not found")
 
-            // 对齐上游：文件夹内有会话正在生成时拒绝删除
+            // Refuse to delete while a conversation inside is still generating
             if (chatService.hasGeneratingConversationInFolder(uuid)) {
                 throw ConflictException("Folder has a generating conversation")
             }
 
-            // 对齐上游：先清活跃 session 内存态，再删库
-            chatService.clearFolderFromSessions(uuid)
-            folderRepo.deleteFolder(uuid)
+            chatService.deleteFolder(uuid)
             call.respond(HttpStatusCode.NoContent)
         }
     }
