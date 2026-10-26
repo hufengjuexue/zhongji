@@ -43,27 +43,21 @@ jobs:
       - name: Build
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease -x :web:buildWebUi --no-build-cache --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleGithubRelease -x :web:buildWebUi --no-build-cache --stacktrace 2>&1 | tee build.log
           exit ${PIPESTATUS[0]}
-      # AGP 9 已移除 applicationVariants，无法在 Gradle 里改产物名，改在这里重命名。
-      # 默认名 app-release.apk 不带版本号，分批下载时容易和旧版本混淆。
-      # 命名保持英文，避免升级工具处理中文路径出错。
-      - name: Rename APK
+      - name: Collect and Rename APK
         id: rename
         run: |
           set -e
           V=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           echo "versionName=$V"
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          for f in app/build/outputs/apk/release/*.apk; do
-            [ -e "$f" ] || { echo "没有找到 APK，保持原样"; exit 0; }
-            case "$f" in
-              *"$V"*) echo "已是带版本号的名称：$f" ;;
-              *) mv "$f" "app/build/outputs/apk/release/zhongji-rp-${V}-arm64-v8a.apk"
-                 echo "重命名为 zhongji-rp-${V}-arm64-v8a.apk" ;;
-            esac
+          mkdir -p release-output
+          find app/build/outputs/apk -type f -name "*.apk" | while read -r f; do
+            echo "Found APK: $f"
+            cp "$f" "release-output/zhongji-rp-${V}-arm64-v8a.apk"
           done
-          ls -la app/build/outputs/apk/release/
+          ls -la release-output/
       - name: Upload build log
         uses: actions/upload-artifact@v4
         if: failure()
@@ -75,7 +69,7 @@ jobs:
         if: success()
         with:
           name: zhongji-rp-release
-          path: app/build/outputs/apk/release/*.apk
+          path: release-output/*.apk
       - name: Automatically Publish Release
         if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         uses: softprops/action-gh-release@v2
@@ -84,4 +78,4 @@ jobs:
           name: 终极 RP · ZhongJi RP ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.rename.outputs.version) }}
           draft: false
           prerelease: false
-          files: app/build/outputs/apk/release/*.apk
+          files: release-output/*.apk
