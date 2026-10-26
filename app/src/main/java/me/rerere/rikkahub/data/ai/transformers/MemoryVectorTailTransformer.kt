@@ -65,7 +65,9 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
         if (!ctx.settings.vectorStorageEnabled) return messages
 
         val allFiles = ctx.memories.ifEmpty {
-            runCatching { memoryRepository.getFiles(ctx.assistant.memoryId) }.getOrDefault(emptyList())
+            withContext(Dispatchers.IO) {
+                runCatching { memoryRepository.getFiles(ctx.assistant.memoryId) }.getOrDefault(emptyList())
+            }
         }
         val candidateFiles = allFiles.filter {
             it.path != MemoryFile.PROFILE_PATH && it.path != MemoryFile.PREFERENCES_PATH
