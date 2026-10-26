@@ -1,99 +1,89 @@
 <div align="center">
-  <img src="docs/icon.png" alt="App Icon" width="100" />
-  <h1>RikkaHub</h1>
 
-A native Android LLM chat client that supports switching between different providers for
-conversations 🤖💬
+<img src="docs/app-icon.png" width="96" alt="ZhongJi RP Icon"/>
 
-Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqxe5c4)
+# 终极 RP · ZhongJi RP
 
-[简体中文](README_ZH_CN.md) | [繁體中文](README_ZH_TW.md) | English
+### Android-Native Immersive AI Roleplay Client Rebuilt for Frontier LLMs
+
+**Instant Immersive Flow · Lossless SillyTavern Compatibility · On-Device Vector Tail Injection · Deep Prompt Caching Protection**
+
+[**简体中文**](README_CN.md) | [**English**](README.md)
+
+[![Release](https://img.shields.io/github/v/release/hufengjuexue/zhongji?label=Release&color=brightgreen)](https://github.com/hufengjuexue/zhongji/releases)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/zhongji/releases)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
+
 </div>
 
-<div align="center">
-  <img src="docs/img/poster.png" alt="RikkaHub" width="800" />
-</div>
+---
 
-## 🚀 Download
+## 🌟 Why ZhongJi RP?
 
-🔗 [Download from Website](https://rikka-ai.com/download) (Recommended)
+**The traditional AI RP ecosystem has long been trapped in an era of "desperate compromise engineering":**
+* **Legacy SillyTavern** was originally designed for ancient 7B / 13B local models. To force coherence out of weak models, it accumulated hundreds of sampler sliders, ten-thousand-word jailbreak templates, and anti-proxy impersonation incantations, while forcing mobile users to wrestle with Termux, Node.js, or keep home PCs running local reverse tunnels. **These were historical compromises, not modern innovation.**
+* **Conventional Chat Apps**, while lightweight, completely lack character depth. They suffer from rapid context amnesia, cannot parse character cards or lorebooks, and fail to sustain deep, nuanced roleplay.
 
-🔗 [Download from Google Play](https://play.google.com/store/apps/details?id=me.rerere.rikkahub)
+**Modern Frontier LLMs already possess high-dimensional semantic understanding and emotional resonance. They no longer need archaic walls of prompt text to "teach the AI how to act."**
 
-> [!WARNING]
-> There are many forked versions of RikkaHub. Issues with forks are unrelated to RikkaHub, so please use forks with caution to avoid privacy leaks or excessive permission requests.
+> 💡 **The Core Philosophy of ZhongJi RP: Subtraction and Perfection.**  
+> Purge obsolete compromise engineering and cumbersome barriers so that even a complete beginner can jump straight into the story; distill and re-engineer truly essential, high-performance architecture to unleash the full improvisational power and dramatic tension of modern frontier models.
 
-## 💖 Sponsors
+---
 
-| Sponsor | Description |
-|:---:|:---|
-| <img src="docs/sponsors/aihubmix.png" alt="Aihubmix" width="50" /><br /><b>Aihubmix</b> | Thanks to <a href="https://aihubmix.com?aff=pG7r">aihubmix.com</a> for their financial support. We recommend using aihubmix as a one-stop shop for mainstream models worldwide. (OpenAI, Claude, Google Gemini, DeepSeek, Qwen, and hundreds more). |
-| <img src="docs/sponsors/api-mart.png" alt="APIMart" width="50" /><br /><b><a href="https://go.apimart.ai/gh-rikkahub">APIMart</a></b> | Thanks to APIMart for sponsoring this project! APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — <a href="https://go.apimart.ai/gh-rikkahub">sign up here</a> to get started. |
-| <img src="docs/sponsors/suixiang.jpg" alt="随想AI中转" width="50" /><br /><b><a href="https://sui-xiang.com">随想AI中转</a></b> | 感谢<a href="https://sui-xiang.com">随想AI中转</a>对本项目的赞助！随想AI中转 是一家可靠高效的 API 中继服务提供商，提供 Claude、Codex、Gemini 等的中继服务。注重隐私的中转站·无数据倒卖·无模型掺水，隐私，透明，极速售后。新账户注册每日签到就送 0.5 元测试额度，充值额度 1:1，无需订阅，按量付费。多线路冗余、跨区域容灾、自动故障切换，长链路 SSE 不中断。99.9% 可用性，关键调用从不掉队。 |
-| <img src="docs/sponsors/ztest.png" alt="真测 ztest.ai" width="50" /><br /><b><a href="https://ztest.ai">真测 ztest.ai</a></b> | 感谢<a href="https://ztest.ai">真测 ztest.ai</a>对本项目的赞助！真测 ztest.ai 是一个 AI 中转站模型检测平台，检测结果数据全公开，23 项探针覆盖协议、身份、能力、内容完整性、安全性、性能六大维度，交叉印证识别伪造与降级。作为独立第三方验证平台，实时监测 AI 中转站的模型真实性、响应质量与服务可用性。 |
-| <img src="docs/sponsors/maru.png" alt="MaruCode" width="50" /><br /><b><a href="https://api.muteki.site/register?aff=Rikkahub&promo=Rikkahub">MaruCode</a></b> | <b><a href="https://api.muteki.site/register?aff=Rikkahub&promo=Rikkahub">MaruCode</a></b> 是一家偶尔做做慈善的小破站 API，自营号池，主要提供 Codex、Claude Code、GPT Image 等主流模型，支持 Websocket 协议，明码标价(Codex 0.25x, CC 1.5x)，透明汇率(1:1)，<a href="https://api.muteki.site/register?aff=Rikkahub&promo=Rikkahub">新用户注册送 2 刀</a>。<a href="https://images-2.muteki.site">生图工作台🖼️</a> |
-| <img src="docs/sponsors/naapi.png" alt="NaAPI 钠API" width="50" /><br /><b><a href="https://naapi.cc/register?aff=rikkahub">NaAPI 钠API</a></b> | Thanks to <a href="https://naapi.cc/register?aff=rikkahub">NaAPI</a> (naapi.cc) for sponsoring this project! NaAPI is an OpenAI-compatible LLM gateway that reliably serves 300+ models from OpenAI, Anthropic, Google and others at discounted pricing. One base URL and one key is all you need: multi-line redundancy with automatic failover keeps long SSE streams alive, and pricing is strictly pay-as-you-go with a 1:1 top-up ratio — no subscription, no hidden markup. |
+## ⚡ Core Capabilities
 
-## ✨ Features
+### 1. 🎭 Full SillyTavern Ecosystem Compatibility (Zero-Friction Asset Portability)
+* **One-Click Lossless Character Card Import**: Native support for **V2 and V3 character cards** (both PNG format with embedded metadata and JSON). Restores avatars, full-body artwork, emotion sprite packs, greetings, and alternate example dialogues seamlessly.
+* **Embedded Lorebook Parsing**: Character-embedded worldbooks, keywords, triggers, and persistent entries are automatically decoded and scheduled on demand.
+* **Native 60+ Macro Engine**: Full native interpretation of official variables including `{{user}}`, `{{char}}`, `{{lastMessage}}`, and more. Run popular community cards straight out of the box with zero manual editing.
+* **Author's Note**: Inject subtext, steering cues, or atmospheric anchors at any point in the conversation, with customizable insertion depth (At Depth) and system/user role targeting.
+* **Multi-Character Group Chat**: Host multiple character cards in the same scene with flexible speaker turn scheduling (round-robin, targeted, or spontaneous).
+* **Regex Scripting**: Bidirectional input/output regex pipelines to automatically strip reasoning chains, clean residual formatting, and refine dialogue layout.
 
-- 🎨 Material 3 Expressive design and 🌙 Dark mode
-- 📦 Workspace: a proot-based Linux agent environment
-- 🎬 Media generation (image and video)
-- 🔄 Multiple AI Provider Support: custom API / URL / models (all OpenAI, Google, Anthropic compatible api)
-- 🖼️ Multimodal input support (Image, Text Documentation, PDF, Docx)
-- 🖥️ Web access for multi-platform use
-- 🛠️ MCP and Skills support
-- 📝 Markdown Rendering (with code highlighting, Latex formulas, tables, Mermaid)
-- 🔍 Search capabilities (Exa, Tavily, Zhipu, LinkUp, Brave, Perplexity, etc.)
-- 🧩 Prompt variables (model name, time, etc.)
-- 🤳 QR code export and import for providers
-- 🤖 Agent customization
-- 🧠 File-based memory
-- 📝 AI Translation
-- 🌐 Custom HTTP request headers and request bodies
-- 💌 Silly Tavern character card import
+---
 
-## ✨ Development
+### 2. 🧠 Modern LLM Architecture (Beyond Primitive Context Stuffing)
+* **Frontier Ecosystem Direct Connection**: Tailored for modern frontier intelligence, offering native out-of-the-box support for major commercial APIs (Anthropic, Google, OpenAI, DeepSeek, Grok, and other leading frontier models), as well as third-party OpenAI-compatible proxies and local models.
+* **Deep Prompt Caching Protection**: Strictly preserves static prefix context and eliminates per-turn dynamic branch drift, **slashing long-form RP token costs by 75% to 90%**.
+* **On-Device Pure-Kotlin Vector Retrieval (RAG Engine)**: High-precision cosine similarity math (`cosineSimilarity`) and SQLite vector persistence running entirely on-device in Kotlin. Chunks are embedded once and cached locally forever, incurring zero repeated network calls during multi-turn exchanges.
+* **Proprietary Tail Near-Context Injection (`MemoryVectorTailTransformer`)**: Large world lore and character backgrounds are no longer crammed into the System Prompt. Top-matching memory chunks are retrieved in milliseconds and dynamically injected right before the final user message, **safeguarding 100% of the Prompt Cache prefix while preventing model attention dispersion**.
+* **Decoupled Dual-Engine Architecture (Front-Stage Roleplay, Background Memory Consolidation)**: The primary frontier model dedicates 100% of its compute to improvisational drama, while an independent lightweight model (the dedicated memory consolidation model) quietly consolidates long-term memories in the background without stealing turns or polluting flow.
 
-> [!IMPORTANT]
-> This project does not accept pull requests (PRs).
+---
 
-This project is developed using [Android Studio](https://developer.android.com/studio).
+### 3. 📱 Pure Android-Native Immersive Experience (No Webview Bloat)
+* **Jetpack Compose Native Fluidity**: Instant startup, minimal battery drain, low heat, and buttery-smooth streaming typewriter rendering.
+* **Full-Chain Audio & Voice (TTS / Voice Calls)**: Native speech synthesis and bidirectional voice conversation. Features **AST-Level Pure-Text Sanitization** (automatically bypassing code blocks, LaTeX formulas, and HTML tags during reading, ensuring speech never garbles punctuation or drops spoken dialogue).
+* **Robust LaTeX & Rich Text Formatting**: Flawless rendering for LaTeX mathematical notation, Markdown code highlights, tables, and collapsible detail blocks, resolving historical formula truncation bugs when expressions contain `<` symbols.
+* **Fluid Queue Management**: Instant generation interrupt; seamless follow-up message dispatch without queue freezing; backstack empty-crash immunity; and layout-safe favorite model drag sorting.
 
-Technology stack documentation:
+---
 
-- [Kotlin](https://kotlinlang.org/) (Development language)
-- [Koin](https://insert-koin.io/) (Dependency Injection)
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) (UI framework)
-- [DataStore](https://developer.android.com/topic/libraries/architecture/datastore) (Preference data
-  storage)
-- [Room](https://developer.android.com/training/data-storage/room) (Database)
-- [Coil](https://coil-kt.github.io/coil/) (Image loading)
-- [Material 3 Expressive](https://m3.material.io/) (UI design)
-- [Navigation 3](https://developer.android.com/guide/navigation/navigation-3) (Navigation)
-- [Okhttp](https://square.github.io/okhttp/) (HTTP client)
-- [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) (JSON serialization)
+### 4. 🛡️ Zero Configuration, Zero Compromise
+* **No Termux, No Tunnels**: Say goodbye to Termux environments, Node.js daemons, and keeping your desktop PC on. Install the APK and dive straight in.
+* **No Sampler Slider Metaphysics**: Eradicates confusing legacy sampler sliders designed for primitive models. Pre-tuned with optimal baseline inference defaults for modern frontier reasoning.
+* **No Wordy Jailbreak Bloat**: Eliminates contradictory ten-thousand-word templates, restoring raw, authentic, uncastrated character interactions.
 
-> [!TIP]
-> You need a `google-services.json` file at `app` folder to build the app.
+---
 
-## 💰 Donate
+## 🚀 Quick Start
 
-* [Ko-fi](https://ko-fi.com/reovodev)
-* [爱发电](https://afdian.com/a/reovo)
+1. **Install**: Grab the latest `zhongji-rp-*.apk` from [GitHub Releases](https://github.com/hufengjuexue/zhongji/releases), or update via **Komi Store**.
+2. **Configure Models**: Open **Settings** → **Model Settings**, enter your API key, and select your primary chat and memory consolidation models.
+3. **Import & Play**: Drop your favorite character card (PNG or JSON) into the main screen, tap, and begin your story!
 
-## ⭐ Star History
+---
 
-If you like this project, please give it a star ⭐
+## 🧬 Credits & Open-Source Heritage
 
-<a href="https://www.star-history.com/?type=date&repos=re-ovo%2Frikkahub">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=re-ovo/rikkahub&type=date&theme=dark&legend=top-left&sealed_token=qSytWeq7LkzQQViTjK0MYlvvA_qkfuwjOxOqgbRpLUZZwok5rO6LXhpVL7Mq-q3o89BfKpzE7g66BCy18H6eiqTsD8czD0J-HejLqmHy-npcvCTHu11wZw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=re-ovo/rikkahub&type=date&legend=top-left&sealed_token=qSytWeq7LkzQQViTjK0MYlvvA_qkfuwjOxOqgbRpLUZZwok5rO6LXhpVL7Mq-q3o89BfKpzE7g66BCy18H6eiqTsD8czD0J-HejLqmHy-npcvCTHu11wZw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=re-ovo/rikkahub&type=date&legend=top-left&sealed_token=qSytWeq7LkzQQViTjK0MYlvvA_qkfuwjOxOqgbRpLUZZwok5rO6LXhpVL7Mq-q3o89BfKpzE7g66BCy18H6eiqTsD8czD0J-HejLqmHy-npcvCTHu11wZw" />
- </picture>
-</a>
+ZhongJi RP evolves upon the shoulders of giants. We pay our highest respects to the open-source pioneers:
+* **[RikkaHub](https://github.com/rikkahub/rikkahub)**: For establishing the modern, elegant Android Jetpack Compose architecture and high-concurrency streaming pipeline;
+* **[Huadeng](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android)**: For laying the critical foundation of lossless mobile SillyTavern protocol and macro parsing;
+* **[LastChat](https://github.com/Cocolalilal/LastChat)**: For pioneering explorations in on-device RAG vector memory retrieval.
+
+---
 
 ## 📄 License
 
-This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+This project is licensed under the [AGPL-3.0 License](LICENSE).
