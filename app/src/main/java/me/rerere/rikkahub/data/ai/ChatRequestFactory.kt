@@ -237,6 +237,8 @@ class ChatRequestFactory(
             settings = turn.settings,
             processingStatus = processingStatus,
             workspaceCwd = turn.workspaceCwd,
+            memories = turn.memories,
+            conversationId = turn.conversationId,
         )
         val params = TextGenerationParams(
             model = turn.model,
