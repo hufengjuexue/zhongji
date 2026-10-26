@@ -33,6 +33,9 @@ jobs:
             echo "$SIGNING_CONFIG" > local.properties
           else
             # 密钥未配置时回退 debug 签名
+            if [ ! -f app/app.key ]; then
+              keytool -genkeypair -v -keystore app/app.key -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+            fi
             cat > local.properties << 'EOF'
           storeFile=app.key
           storePassword=android
