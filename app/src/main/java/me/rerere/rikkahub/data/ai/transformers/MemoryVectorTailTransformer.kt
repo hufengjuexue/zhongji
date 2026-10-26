@@ -62,7 +62,6 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
         messages: List<UIMessage>,
     ): List<UIMessage> {
         if (!ctx.assistant.enableMemory) return messages
-        if (ctx.settings.huadengSettings.enableTavernMode) return messages
         if (!ctx.settings.vectorStorageEnabled) return messages
 
         val allFiles = ctx.memories.ifEmpty {
