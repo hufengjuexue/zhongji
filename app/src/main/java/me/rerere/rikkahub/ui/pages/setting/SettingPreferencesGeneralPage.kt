@@ -265,6 +265,33 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                     )
                 }
             }
+
+            item {
+                CardGroup(
+                    title = { Text("向量检索 (Vector Storage)") },
+                ) {
+                    switchItem(
+                        checked = settings.vectorStorageEnabled,
+                        onCheckedChange = { v -> vm.updateSettings { it.copy(vectorStorageEnabled = v) } },
+                        headlineContent = { Text("启用记忆向量检索") },
+                        supportingContent = { Text("对 topics 目录下的长篇记忆自动进行语义分块与尾部近因召回，死保云端前缀缓存") },
+                    )
+                    if (settings.vectorStorageEnabled) {
+                        formItem(
+                            headlineContent = { Text("相似度阈值") },
+                            trailingContent = { CardGroupValue("${(settings.vectorStorageThreshold * 100).toInt()}%") },
+                        ) {
+                            Slider(
+                                value = settings.vectorStorageThreshold,
+                                onValueChange = { v -> vm.updateSettings { s -> s.copy(vectorStorageThreshold = v) } },
+                                valueRange = 0.1f..0.8f,
+                                steps = 14,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

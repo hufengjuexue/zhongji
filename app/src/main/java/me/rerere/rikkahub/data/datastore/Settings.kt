@@ -83,6 +83,11 @@ data class Settings(
     val webServerLocalhostOnly: Boolean = false,
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val sponsorAlertDismissedAt: Int = 0,
+    // 向量检索（Vector Storage）
+    val vectorStorageEnabled: Boolean = false,
+    val vectorStorageModelId: Uuid? = null,
+    val vectorStorageThreshold: Float = 0.25f,
+    val vectorStorageScanDepth: Int = 2,
 ) {
     companion object {
         // 构造一个用于初始化的settings, 但它不能用于保存，防止使用初始值存储

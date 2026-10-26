@@ -23,11 +23,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub"
+        applicationId = "me.rerere.zhongji"
         minSdk = 26
         targetSdk = 37
-        versionCode = 194
-        versionName = "3.1.1"
+        versionCode = 3
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
