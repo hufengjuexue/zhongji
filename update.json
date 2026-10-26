@@ -1,0 +1,13 @@
+{
+  "version": "1.2.0",
+  "versionCode": 4,
+  "publishedAt": "2026-10-26T20:25:00Z",
+  "changelog": "终极 RP (ZhongJi RP) · v1.2.0 纯净底座重生正式版：\n\n1. 【底座重生】彻底废弃华灯臃肿底座，全面重构对齐官方 RikkaHub 3.1.1 纯净正式版满分底座\n2. 【手势动效质变】100% 恢复原生 1:1 像素级跟手拖拽与高级 Push 联动推拉视差动效，彻底告别侧滑卡死与返回键冲突\n3. 【轻量纯净】安装包回归极致轻量（~15MB），彻底剔除 88MB 历史死重与无用私货\n4. 【向量缓存】端侧向量近因尾部注入机制 (MemoryVectorTailTransformer) 完美适配纯净架构，死保云端前缀缓存 (Prompt Caching)\n5. 【视觉与身份】全套岩仓玲音 (Lain) 高清自适应图标与 me.rerere.zhongji 独立双开生态",
+  "downloads": [
+    {
+      "name": "zhongji-rp-1.2.0-arm64-v8a.apk",
+      "url": "https://github.com/hufengjuexue/zhongji/releases/download/v1.2.0/zhongji-rp-1.2.0-arm64-v8a.apk",
+      "size": "约 15 MB"
+    }
+  ]
+}
