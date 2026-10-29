@@ -1,7 +1,7 @@
 {
   "version": "1.2.1",
   "versionCode": 5,
-  "publishedAt": "2026-10-29T15:43:28Z",
+  "publishedAt": "2026-10-29T22:11:05Z",
   "changelog": "终极 RP (ZhongJi RP) · v1.2.1 签名修复正式版：\n\n1. 【签名归位】恢复项目原始稳定签名密钥 (app.key)，确保与历史版本 100% 签名一致，覆盖升级零冲突\n2. 【彻底脱钩】重构 UpdateChecker，拔除原版 rikka-ai.com 更新地址，全面接入自研 GitHub Releases 与国内高速镜像，杜绝误报更新原版\n3. 【底座重生】彻底废弃华灯臃肿底座，全面对齐官方 RikkaHub 3.1.1 纯净正式版满分底座\n4. 【手势动效质变】100% 恢复原生 1:1 像素级跟手拖拽与高级 Push 联动推拉视差动效，彻底告别侧滑卡死与返回键冲突\n5. 【轻量纯净】安装包回归极致轻量（~15MB），彻底剔除 88MB 历史死重与无用私货\n6. 【向量缓存】端侧向量近因尾部注入机制 (MemoryVectorTailTransformer) 完美适配纯净架构，死保云端前缀缓存 (Prompt Caching)\n7. 【视觉与身份】全套岩仓玲音 (Lain) 高清自适应图标与 me.rerere.zhongji 独立双开生态",
   "downloads": [
     {
