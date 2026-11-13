@@ -39,6 +39,13 @@ interface Provider<T : ProviderSetting> {
         error("Embedding generation is not supported")
     }
 
+    suspend fun evaluateDecisions(
+        providerSetting: T,
+        params: DecisionGenerationParams,
+    ): DecisionGenerationResult {
+        error("Decisions API is not supported")
+    }
+
     suspend fun generateImage(
         providerSetting: ProviderSetting,
         params: ImageGenerationParams,
@@ -128,4 +135,40 @@ data class CustomHeader(
 data class CustomBody(
     val key: String,
     val value: JsonElement
+)
+
+@Serializable
+data class DecisionGenerationParams(
+    val model: Model,
+    val input: String,
+    val questions: Map<String, DecisionQuestion>,
+    val customHeaders: List<CustomHeader> = emptyList(),
+    val customBody: List<CustomBody> = emptyList(),
+)
+
+@Serializable
+sealed class DecisionQuestion {
+    @Serializable
+    data class Score(
+        val instructions: String,
+        val criteria: List<String>,
+    ) : DecisionQuestion()
+
+    @Serializable
+    data class Noul(
+        val instructions: String,
+        val trueDescription: String? = null,
+        val falseDescription: String? = null,
+    ) : DecisionQuestion()
+}
+
+data class DecisionGenerationResult(
+    val answers: Map<String, DecisionAnswer>,
+    val usage: TokenUsage? = null,
+)
+
+data class DecisionAnswer(
+    val score: Double? = null,
+    val noulScore: Double? = null,
+    val confidence: Double? = null,
 )

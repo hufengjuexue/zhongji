@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.core.merge
+import me.rerere.ai.provider.DecisionGenerationParams
+import me.rerere.ai.provider.DecisionGenerationResult
+import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
@@ -50,14 +53,14 @@ class UsageRecorder(
     fun <T : ProviderSetting> wrap(provider: Provider<T>, tag: UsageTag): Provider<T> =
         UsageRecordingProvider(provider, tag)
 
-    private fun record(tag: UsageTag, providerSetting: ProviderSetting, params: TextGenerationParams, usage: TokenUsage) {
+    private fun record(tag: UsageTag, providerSetting: ProviderSetting, model: Model, usage: TokenUsage) {
         if (usage.promptTokens <= 0 && usage.completionTokens <= 0) return
         val record = UsageRecordEntity(
             createdAt = System.currentTimeMillis(),
             source = tag.source.name,
             providerId = providerSetting.id.toString(),
-            modelId = params.model.id.toString(),
-            modelName = params.model.modelId,
+            modelId = model.id.toString(),
+            modelName = model.modelId,
             assistantId = tag.assistantId?.toString(),
             conversationId = tag.conversationId?.toString(),
             promptTokens = usage.promptTokens,
@@ -80,7 +83,14 @@ class UsageRecorder(
             messages: List<UIMessage>,
             params: TextGenerationParams,
         ): TextGenerationResult = delegate.generateText(providerSetting, messages, params).also { result ->
-            result.usage?.let { record(tag, providerSetting, params, it) }
+            result.usage?.let { record(tag, providerSetting, params.model, it) }
+        }
+
+        override suspend fun evaluateDecisions(
+            providerSetting: T,
+            params: DecisionGenerationParams,
+        ): DecisionGenerationResult = delegate.evaluateDecisions(providerSetting, params).also { result ->
+            result.usage?.let { record(tag, providerSetting, params.model, it) }
         }
 
         override suspend fun streamText(
@@ -98,7 +108,7 @@ class UsageRecorder(
                         emit(chunk)
                     }
                 } finally {
-                    usage?.let { record(tag, providerSetting, params, it) }
+                    usage?.let { record(tag, providerSetting, params.model, it) }
                 }
             }
         }

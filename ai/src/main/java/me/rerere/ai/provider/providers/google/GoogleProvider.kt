@@ -20,6 +20,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -31,6 +32,10 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.DecisionAnswer
+import me.rerere.ai.provider.DecisionGenerationParams
+import me.rerere.ai.provider.DecisionGenerationResult
+import me.rerere.ai.provider.DecisionQuestion
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -157,18 +162,31 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 models.mapNotNull {
                     val modelObject = it.jsonObject
 
-                    // 忽略非chat/embedding模型
+                    // 忽略非 chat / embedding / decision 模型
+                    val modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/")
                     val supportedGenerationMethods =
-                        modelObject["supportedGenerationMethods"]!!.jsonArray
-                            .map { method -> method.jsonPrimitive.content }
-                    if ("generateContent" !in supportedGenerationMethods && "embedContent" !in supportedGenerationMethods) {
+                        modelObject["supportedGenerationMethods"]?.jsonArray
+                            ?.map { method -> method.jsonPrimitive.content }
+                            .orEmpty()
+                    val isDecisionModel = modelId.contains("decision", ignoreCase = true) ||
+                        supportedGenerationMethods.any {
+                            it.contains("decision", ignoreCase = true) || it.equals("decide", ignoreCase = true)
+                        }
+                    if ("generateContent" !in supportedGenerationMethods &&
+                        "embedContent" !in supportedGenerationMethods &&
+                        !isDecisionModel
+                    ) {
                         return@mapNotNull null
                     }
 
                     Model(
-                        modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/"),
-                        displayName = modelObject["displayName"]!!.jsonPrimitive.content,
-                        type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
+                        modelId = modelId,
+                        displayName = modelObject["displayName"]?.jsonPrimitive?.contentOrNull ?: modelId,
+                        type = when {
+                            isDecisionModel -> ModelType.DECISION
+                            "generateContent" in supportedGenerationMethods -> ModelType.CHAT
+                            else -> ModelType.EMBEDDING
+                        },
                     )
                 }
             } else {
@@ -691,6 +709,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
+    @JvmOverloads
     private fun buildContents(
         messages: List<UIMessage>,
         systemPromptInChat: Boolean = false,
@@ -1000,5 +1019,93 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             totalTokens = totalTokens,
             cachedTokens = cachedTokens
         )
+    }
+
+    override suspend fun evaluateDecisions(
+        providerSetting: ProviderSetting.Google,
+        params: DecisionGenerationParams,
+    ): DecisionGenerationResult = withContext(Dispatchers.IO) {
+        val requestBody = buildDecisionsRequestBody(params)
+        val url = buildUrl(providerSetting = providerSetting, path = "decisions")
+        val request = transformRequest(
+            providerSetting = providerSetting,
+            request = Request.Builder()
+                .url(url)
+                .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
+                .post(
+                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
+                )
+                .configureReferHeaders(providerSetting.baseUrl)
+                .build(),
+        )
+        logRequestBody(TAG, "evaluateDecisions") { json.encodeToString(requestBody) }
+
+        val response = client.newCall(request).await()
+        if (!response.isSuccessful) {
+            throw Exception("Failed to evaluate decisions: ${response.code} ${response.body?.string()}")
+        }
+        val bodyStr = response.body?.string() ?: ""
+        val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+        parseDecisionsResponse(bodyJson)
+    }
+
+    internal fun buildDecisionsRequestBody(params: DecisionGenerationParams): JsonObject = buildJsonObject {
+        put("model", params.model.modelId)
+        put("input", params.input)
+        put("questions", buildJsonObject {
+            params.questions.forEach { (key, question) ->
+                put(key, buildJsonObject {
+                    when (question) {
+                        is DecisionQuestion.Score -> {
+                            put("type", "score")
+                            put("instructions", question.instructions)
+                            putJsonArray("criteria") {
+                                question.criteria.forEach { add(JsonPrimitive(it)) }
+                            }
+                        }
+
+                        is DecisionQuestion.Noul -> {
+                            put("type", "noul")
+                            put("instructions", question.instructions)
+                            if (question.trueDescription != null || question.falseDescription != null) {
+                                put("criteria", buildJsonObject {
+                                    question.trueDescription?.let { put("true_description", it) }
+                                    question.falseDescription?.let { put("false_description", it) }
+                                })
+                            }
+                        }
+                    }
+                })
+            }
+        })
+    }.mergeCustomBody(params.customBody)
+
+    internal fun parseDecisionsResponse(bodyJson: JsonObject): DecisionGenerationResult {
+        val answers = bodyJson["answers"]?.jsonObject?.entries?.associate { (key, value) ->
+            val obj = value.jsonObject
+            key to DecisionAnswer(
+                score = obj["score"]?.jsonPrimitiveOrNull?.doubleOrNull,
+                noulScore = obj["noul_score"]?.jsonPrimitiveOrNull?.doubleOrNull,
+                confidence = obj["confidence"]?.jsonPrimitiveOrNull?.doubleOrNull,
+            )
+        }.orEmpty()
+        val usage = parseUsageMeta(bodyJson["usageMetadata"] as? JsonObject)
+            ?: (bodyJson["usage"] as? JsonObject)?.let { usageObj ->
+                val prompt = usageObj["total_input_tokens"]?.jsonPrimitiveOrNull?.intOrNull
+                    ?: usageObj["prompt_tokens"]?.jsonPrimitiveOrNull?.intOrNull
+                    ?: usageObj["input_tokens"]?.jsonPrimitiveOrNull?.intOrNull
+                    ?: 0
+                val completion = usageObj["total_output_tokens"]?.jsonPrimitiveOrNull?.intOrNull
+                    ?: usageObj["completion_tokens"]?.jsonPrimitiveOrNull?.intOrNull
+                    ?: usageObj["output_tokens"]?.jsonPrimitiveOrNull?.intOrNull
+                    ?: 0
+                val total = usageObj["total_tokens"]?.jsonPrimitiveOrNull?.intOrNull ?: (prompt + completion)
+                if (prompt > 0 || completion > 0 || total > 0) {
+                    TokenUsage(promptTokens = prompt, completionTokens = completion, totalTokens = total)
+                } else {
+                    null
+                }
+            }
+        return DecisionGenerationResult(answers = answers, usage = usage)
     }
 }

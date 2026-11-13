@@ -103,6 +103,7 @@ class ModelListState internal constructor(
     modelId: Uuid?,
     providers: List<ProviderSetting>,
     type: ModelType,
+    allowedTypes: Set<ModelType> = setOf(type),
 ) {
     var modelId by mutableStateOf(modelId)
         private set
@@ -113,6 +114,9 @@ class ModelListState internal constructor(
     var type by mutableStateOf(type)
         private set
 
+    var allowedTypes by mutableStateOf(allowedTypes)
+        private set
+
     var visible by mutableStateOf(false)
         private set
 
@@ -121,7 +125,7 @@ class ModelListState internal constructor(
 
     val filteredProviders: List<ProviderSetting>
         get() = providers.fastFilter { provider ->
-            provider.enabled && provider.models.fastAny { model -> model.type == type }
+            provider.enabled && provider.models.fastAny { model -> model.type in allowedTypes }
         }
 
     fun open() {
@@ -136,10 +140,12 @@ class ModelListState internal constructor(
         modelId: Uuid?,
         providers: List<ProviderSetting>,
         type: ModelType,
+        allowedTypes: Set<ModelType> = setOf(type),
     ) {
         this.modelId = modelId
         this.providers = providers
         this.type = type
+        this.allowedTypes = allowedTypes
     }
 }
 
@@ -148,18 +154,21 @@ fun rememberModelListState(
     modelId: Uuid?,
     providers: List<ProviderSetting>,
     type: ModelType,
+    allowedTypes: Set<ModelType> = setOf(type),
 ): ModelListState {
     return remember {
         ModelListState(
             modelId = modelId,
             providers = providers,
             type = type,
+            allowedTypes = allowedTypes,
         )
     }.also {
         it.update(
             modelId = modelId,
             providers = providers,
             type = type,
+            allowedTypes = allowedTypes,
         )
     }
 }
@@ -352,7 +361,7 @@ fun ModelListSheet(
             ModelList(
                 currentModel = state.modelId,
                 providers = state.filteredProviders,
-                modelType = state.type,
+                allowedTypes = state.allowedTypes,
                 onSelect = {
                     onSelect(it)
                     dismiss()
@@ -369,7 +378,7 @@ fun ModelListSheet(
 private fun ColumnScope.ModelList(
     currentModel: Uuid? = null,
     providers: List<ProviderSetting>,
-    modelType: ModelType,
+    allowedTypes: Set<ModelType>,
     onSelect: (Model) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -383,7 +392,7 @@ private fun ColumnScope.ModelList(
     var draggingFavoriteOrder by remember { mutableStateOf<List<Uuid>?>(null) }
     val favoriteModels = (draggingFavoriteOrder ?: settings.value.favoriteModels).mapNotNull { modelId ->
         val model = settings.value.providers.findModelById(modelId) ?: return@mapNotNull null
-        if (model.type != modelType) return@mapNotNull null
+        if (model.type !in allowedTypes) return@mapNotNull null
         val provider = model.findProvider(providers = settings.value.providers, checkOverwrite = false) ?: return@mapNotNull null
         model to provider
     }
@@ -404,9 +413,9 @@ private fun ColumnScope.ModelList(
             .joinToString(",")
     }
 
-    val typeFilteredModelsByProvider = remember(providers, modelType) {
+    val typeFilteredModelsByProvider = remember(providers, allowedTypes) {
         providers.associate { provider ->
-            provider.id to provider.models.fastFilter { it.type == modelType }
+            provider.id to provider.models.fastFilter { it.type in allowedTypes }
         }
     }
 
@@ -863,6 +872,7 @@ fun ModelTypeTag(model: Model) {
                     ModelType.CHAT -> R.string.setting_provider_page_chat_model
                     ModelType.EMBEDDING -> R.string.setting_provider_page_embedding_model
                     ModelType.IMAGE -> R.string.setting_provider_page_image_model
+                    ModelType.DECISION -> R.string.setting_provider_page_decision_model
                 }
             )
         )

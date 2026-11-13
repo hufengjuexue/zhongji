@@ -945,6 +945,7 @@
   <string name="setting_provider_page_deselect_models">Deselect All</string>
   <string name="setting_provider_page_disabled">Disabled</string>
   <string name="setting_provider_page_edit_model">Edit Model</string>
+  <string name="setting_provider_page_decision_model">Decision</string>
   <string name="setting_provider_page_embedding_model">Embedding</string>
   <string name="setting_provider_page_enable">Enable</string>
   <string name="setting_provider_page_enabled">Enabled</string>

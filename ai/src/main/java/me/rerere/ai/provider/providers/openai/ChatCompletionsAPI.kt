@@ -504,6 +504,7 @@ class ChatCompletionsAPI(
             !isMoonshotRestricted
     }
 
+    @JvmOverloads
     private fun buildMessages(
         messages: List<UIMessage>,
         includeHistoryReasoning: Boolean = true,
