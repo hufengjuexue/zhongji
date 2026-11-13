@@ -59,7 +59,13 @@ jobs:
           mkdir -p release-output
           find app/build/outputs/apk -type f -name "*.apk" | while read -r f; do
             echo "Found APK: $f"
-            cp "$f" "release-output/zhongji-rp-${V}-arm64-v8a.apk"
+            base=$(basename "$f")
+            case "$base" in
+              *arm64-v8a*) cp "$f" "release-output/kairos-${V}-arm64-v8a.apk" ;;
+              *universal*) cp "$f" "release-output/kairos-${V}-universal.apk" ;;
+              *x86_64*) echo "Skip x86_64 APK: $base" ;;
+              *) cp "$f" "release-output/kairos-${V}-${base}" ;;
+            esac
           done
           ls -la release-output/
       - name: Upload build log
@@ -72,14 +78,14 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: zhongji-rp-release
+          name: kairos-release
           path: release-output/*.apk
       - name: Automatically Publish Release
         if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.rename.outputs.version) }}
-          name: 终极 RP · ZhongJi RP ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.rename.outputs.version) }}
+          name: Kairos ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.rename.outputs.version) }}
           draft: false
           prerelease: false
           files: release-output/*.apk

@@ -13,10 +13,12 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.data.repository.MemoryGraphRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.data.repository.memoryId
 import me.rerere.rikkahub.data.skills.SkillManager
+import me.rerere.rikkahub.service.BackgroundShellManager
 import me.rerere.workspace.WorkspaceShellStatus
 import java.io.File
 import kotlin.uuid.Uuid
@@ -39,22 +41,33 @@ class InvalidMcpServerNamesException(val names: List<String>) :
 class ChatToolFactory(
     private val context: Context,
     private val memoryRepository: MemoryRepository,
+    private val memoryGraphRepository: MemoryGraphRepository,
     private val conversationRepository: ConversationRepository,
     private val localTools: LocalTools,
     private val mcpManager: McpManager,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
+    private val backgroundShellManager: BackgroundShellManager,
 ) {
     suspend fun createTools(
         settings: Settings,
         assistant: Assistant,
         model: Model,
+        conversationId: Uuid,
         workspaceCwd: String? = null,
     ): List<Tool> {
-        val workspaceTools = createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd)
+        val workspaceTools =
+            createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd, conversationId)
         val tools = buildList {
             if (assistant.enableMemory) {
                 addAll(buildMemoryTools(memoryRepository, assistant.memoryId))
+                addAll(
+                    buildMemoryGraphTools(
+                        repository = memoryGraphRepository,
+                        assistantId = assistant.memoryId,
+                        sourceConversationId = conversationId.toString(),
+                    )
+                )
             }
             if (shouldUseExternalWebSearch(assistant, model)) {
                 addAll(createSearchTools(settings))
@@ -131,7 +144,11 @@ class ChatToolFactory(
         ) + output.filter { it !is UIMessagePart.Text }
     }
 
-    private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String?): List<Tool> {
+    private suspend fun createWorkspaceToolsIfReady(
+        workspaceId: String?,
+        cwd: String?,
+        conversationId: Uuid,
+    ): List<Tool> {
         if (workspaceId.isNullOrBlank()) return emptyList()
         val workspace = workspaceRepository.getById(workspaceId) ?: return emptyList()
         if (workspace.shellStatus != WorkspaceShellStatus.READY.name) {
@@ -141,6 +158,6 @@ class ChatToolFactory(
             )
             return emptyList()
         }
-        return createWorkspaceTools(workspaceId, workspaceRepository, cwd)
+        return createWorkspaceTools(workspaceId, workspaceRepository, cwd, conversationId, backgroundShellManager)
     }
 }

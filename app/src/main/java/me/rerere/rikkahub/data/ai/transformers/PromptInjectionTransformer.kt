@@ -5,27 +5,84 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.InjectionPosition
-import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.extractContextForMatching
 import me.rerere.rikkahub.data.model.isTriggered
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.uuid.Uuid
 
 /**
  * 提示词注入转换器
  *
- * 根据 Assistant 关联的 ModeInjection 和 Lorebook 进行提示词注入
+ * 根据 Assistant 关联的 ModeInjection 和 Lorebook 进行提示词注入，
+ * 并按用户轮冻结激活集合与尾部注入锚点，保证 agentic 工具循环期间前缀缓存稳定。
  */
 object PromptInjectionTransformer : InputMessageTransformer {
+    private val stickyTracker = ConcurrentHashMap<String, MutableMap<Uuid, Int>>()
+    private val cooldownTracker = ConcurrentHashMap<String, MutableMap<Uuid, Int>>()
+    private val lastTickedUserTurn = ConcurrentHashMap<String, String>()
+    private val frozenTurnInjections = ConcurrentHashMap<String, Triple<String, Int, FrozenTurnState>>()
+    private const val MAX_FROZEN_TURNS = 64
+
+    private class FrozenTurnState(
+        val injections: List<PromptInjection>,
+        val anchors: ConcurrentHashMap<String, String>,
+    )
+
+    private fun injectionFingerprint(ctx: TransformerContext): Int {
+        var h = ctx.assistant.modeInjectionIds.hashCode()
+        h = 31 * h + ctx.assistant.lorebookIds.hashCode()
+        for (id in ctx.assistant.modeInjectionIds) {
+            ctx.settings.modeInjections.firstOrNull { it.id == id }?.let { h = 31 * h + it.hashCode() }
+        }
+        for (id in ctx.assistant.lorebookIds) {
+            ctx.settings.lorebooks.firstOrNull { it.id == id }?.let { h = 31 * h + it.hashCode() }
+        }
+        return h
+    }
+
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        return transformMessages(
+        val convKey = "${ctx.assistant.id}:${ctx.conversationId ?: "no-conversation"}"
+        val lastUserMsgId = messages.lastOrNull { it.role == MessageRole.USER }?.id?.toString()
+        val fingerprint = injectionFingerprint(ctx)
+        val cached = lastUserMsgId?.let { id ->
+            frozenTurnInjections[convKey]?.takeIf { it.first == id && it.second == fingerprint }?.third
+        }
+        val alreadyTicked = lastUserMsgId != null && lastTickedUserTurn[convKey] == lastUserMsgId
+        if (lastUserMsgId != null && !alreadyTicked) {
+            lastTickedUserTurn[convKey] = lastUserMsgId
+        }
+        val stickyMap = stickyTracker.getOrPut(convKey) { ConcurrentHashMap() }
+        val cooldownMap = cooldownTracker.getOrPut(convKey) { ConcurrentHashMap() }
+        val anchors = cached?.anchors ?: ConcurrentHashMap()
+        var resolvedForTurn: List<PromptInjection>? = null
+
+        val result = transformMessages(
             messages = messages,
             assistant = ctx.assistant,
             modeInjections = ctx.settings.modeInjections,
             lorebooks = ctx.settings.lorebooks,
+            activeStickyEntries = stickyMap,
+            cooldownEntries = cooldownMap,
+            tickState = !alreadyTicked,
+            frozenInjections = cached?.injections,
+            anchors = anchors,
+            onResolved = { resolvedForTurn = it },
         )
+
+        if (cached == null && lastUserMsgId != null) {
+            if (frozenTurnInjections.size >= MAX_FROZEN_TURNS) frozenTurnInjections.clear()
+            frozenTurnInjections[convKey] = Triple(
+                lastUserMsgId,
+                fingerprint,
+                FrozenTurnState(resolvedForTurn ?: emptyList(), anchors),
+            )
+        }
+        return result
     }
 }
 
@@ -37,26 +94,74 @@ internal fun transformMessages(
     assistant: Assistant,
     modeInjections: List<PromptInjection.ModeInjection>,
     lorebooks: List<Lorebook>,
+    activeStickyEntries: MutableMap<Uuid, Int> = mutableMapOf(),
+    cooldownEntries: MutableMap<Uuid, Int> = mutableMapOf(),
+    tickState: Boolean = true,
+    frozenInjections: List<PromptInjection>? = null,
+    anchors: ConcurrentHashMap<String, String>? = null,
+    onResolved: ((List<PromptInjection>) -> Unit)? = null,
 ): List<UIMessage> {
-    // 收集所有需要注入的内容
-    val injections = collectInjections(
+    val injections = frozenInjections ?: collectInjections(
         messages = messages,
         assistant = assistant,
         modeInjections = modeInjections,
         lorebooks = lorebooks,
+        activeStickyEntries = activeStickyEntries,
+        cooldownEntries = cooldownEntries,
     )
 
     if (injections.isEmpty()) {
+        if (tickState) {
+            tickStickyAndCooldown(activeStickyEntries, cooldownEntries, emptyList())
+        }
+        onResolved?.invoke(emptyList())
         return messages
     }
 
-    // 按位置和优先级分组
+    onResolved?.invoke(injections)
+
+    // 按位置和优先级分组（priority 升序：小优先级先写入，大优先级靠后靠近最新上下文）
     val byPosition = injections
-        .sortedByDescending { it.priority }
+        .sortedBy { it.priority }
         .groupBy { it.position }
 
-    // 应用注入
-    return applyInjections(messages, byPosition)
+    val result = applyInjections(messages, byPosition, anchors)
+
+    if (tickState) {
+        tickStickyAndCooldown(
+            activeStickyEntries,
+            cooldownEntries,
+            injections.filterIsInstance<PromptInjection.RegexInjection>(),
+        )
+    }
+
+    return result
+}
+
+private fun tickStickyAndCooldown(
+    stickyMap: MutableMap<Uuid, Int>,
+    cooldownMap: MutableMap<Uuid, Int>,
+    activated: List<PromptInjection.RegexInjection>,
+) {
+    // 先递减已有冷却与粘性
+    val cdIter = cooldownMap.entries.iterator()
+    while (cdIter.hasNext()) {
+        val e = cdIter.next()
+        if (e.value <= 1) cdIter.remove() else e.setValue(e.value - 1)
+    }
+    val stIter = stickyMap.entries.iterator()
+    while (stIter.hasNext()) {
+        val e = stIter.next()
+        if (e.value <= 1) stIter.remove() else e.setValue(e.value - 1)
+    }
+    for (entry in activated) {
+        if (entry.sticky > 0 && !stickyMap.containsKey(entry.id)) {
+            stickyMap[entry.id] = entry.sticky
+        }
+        if (entry.cooldown > 0 && !stickyMap.containsKey(entry.id)) {
+            cooldownMap[entry.id] = entry.cooldown
+        }
+    }
 }
 
 /**
@@ -67,6 +172,8 @@ internal fun collectInjections(
     assistant: Assistant,
     modeInjections: List<PromptInjection.ModeInjection>,
     lorebooks: List<Lorebook>,
+    activeStickyEntries: Map<Uuid, Int> = emptyMap(),
+    cooldownEntries: Map<Uuid, Int> = emptyMap(),
 ): List<PromptInjection> {
     val injections = mutableListOf<PromptInjection>()
 
@@ -80,13 +187,20 @@ internal fun collectInjections(
         it.enabled && assistant.lorebookIds.contains(it.id)
     }
     if (enabledLorebooks.isNotEmpty()) {
-        // 提取上下文用于匹配（只取非 SYSTEM 消息）
         val nonSystemMessages = messages.filter { it.role != MessageRole.SYSTEM }
 
         enabledLorebooks.forEach { lorebook ->
             lorebook.entries
                 .filter { entry ->
-                    val context = extractContextForMatching(nonSystemMessages, entry.scanDepth)
+                    if (!entry.enabled) return@filter false
+                    if (entry.delay > 0 && nonSystemMessages.size < entry.delay) return@filter false
+                    if (cooldownEntries.containsKey(entry.id) && !activeStickyEntries.containsKey(entry.id)) {
+                        return@filter false
+                    }
+                    if (entry.constantActive || activeStickyEntries.containsKey(entry.id)) {
+                        return@filter true
+                    }
+                    val context = extractContextForMatching(nonSystemMessages, entry.scanDepth.coerceAtLeast(1))
                     entry.isTriggered(context)
                 }
                 .forEach { injections.add(it) }
@@ -101,9 +215,25 @@ internal fun collectInjections(
  */
 internal fun applyInjections(
     messages: List<UIMessage>,
-    byPosition: Map<InjectionPosition, List<PromptInjection>>
+    byPosition: Map<InjectionPosition, List<PromptInjection>>,
+    anchors: ConcurrentHashMap<String, String>? = null,
 ): List<UIMessage> {
     val result = messages.toMutableList()
+
+    fun resolveTailIndex(computedIndex: Int, anchorKey: String): Int {
+        if (anchors == null) return computedIndex
+        val existingAnchorId = anchors[anchorKey]
+        if (existingAnchorId != null) {
+            val anchoredIdx = result.indexOfFirst { it.id.toString() == existingAnchorId }
+            if (anchoredIdx >= 0) return anchoredIdx
+            return result.size
+        }
+        val anchorId = result.getOrNull(computedIndex)?.id?.toString()
+        if (anchorId != null) {
+            anchors[anchorKey] = anchorId
+        }
+        return computedIndex
+    }
 
     // 找到系统消息的索引（通常是第一条）
     val systemIndex = result.indexOfFirst { it.role == MessageRole.SYSTEM }
@@ -176,7 +306,7 @@ internal fun applyInjections(
     // 处理 BOTTOM_OF_CHAT：在最后一条消息之前插入
     val bottomInjections = byPosition[InjectionPosition.BOTTOM_OF_CHAT]
     if (!bottomInjections.isNullOrEmpty()) {
-        var insertIndex = (result.size - 1).coerceAtLeast(0)
+        var insertIndex = resolveTailIndex((result.size - 1).coerceAtLeast(0), "bottom_of_chat")
         insertIndex = findSafeInsertIndex(result, insertIndex)
         createMergedInjectionMessages(bottomInjections).forEach { message ->
             result.add(insertIndex, message)
@@ -191,9 +321,11 @@ internal fun applyInjections(
         val byDepth = atDepthInjections.groupBy { it.injectDepth }
         byDepth.keys.sortedDescending().forEach { depth ->
             val injections = byDepth[depth] ?: return@forEach
-            // 计算插入位置：result.size - depth，但要确保在有效范围内
-            // depth=1 表示在最后一条消息之前，depth=2 表示在倒数第二条之前...
-            var insertIndex = (result.size - depth.coerceAtLeast(1)).coerceIn(0, result.size)
+            val safeDepth = depth.coerceAtLeast(1)
+            var insertIndex = resolveTailIndex(
+                (result.size - safeDepth).coerceIn(0, result.size),
+                "at_depth_$safeDepth",
+            )
             insertIndex = findSafeInsertIndex(result, insertIndex)
             createMergedInjectionMessages(injections).forEach { message ->
                 result.add(insertIndex, message)
@@ -216,6 +348,7 @@ private fun createMergedInjectionMessages(injections: List<PromptInjection>): Li
             val mergedContent = grouped.joinToString("\n") { it.content }
             when (role) {
                 MessageRole.ASSISTANT -> UIMessage.assistant(mergedContent)
+                MessageRole.SYSTEM -> UIMessage.system(mergedContent)
                 else -> UIMessage.user(mergedContent)
             }.copy(
                 isSynthetic = true,

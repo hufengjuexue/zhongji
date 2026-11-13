@@ -21,17 +21,19 @@ import kotlin.uuid.Uuid
 private const val TAG = "MemoryVectorTail"
 
 /**
- * 记忆库自动 Embedding 尾部注入转换器：
- * - profile.md 与 preferences.md 已在头部常驻，本转换器专门对其余记忆文件（如 topics 目录下的 md）按语义段落切块并向量化；
- * - 每轮自动用最新用户输入做 Embedding 相似度检索，将命中的 Top-K 记忆片段以独立 synthetic system 消息注入到最后一条 User 消息之前；
- * - 同一用户轮（agentic 工具多步循环）内冻结首次召回结果，保护前缀缓存不分叉，且与世界书、MCP 工具完全正交共存。
+ * 记忆库 + 溢出历史对话自动尾部近因注入转换器：
+ * - profile.md 与 preferences.md 已在头部常驻；
+ * - 本转换器对 topics/<name>.md 记忆切片与超出上下文窗口（limitContext）的早先原始对话按语义切块；
+ * - 优先走云端 Embedding 余弦相似度检索并持久化到本地 VectorStoreCache；无可用 Embedding 模型或接口异常时自动退回本地词法相关性兜底；
+ * - 将命中的 Top-K 片段以独立 synthetic system 消息注入最后一条 User 消息前，同轮工具多步循环冻结召回结果，100% 保护前缀缓存。
  */
 object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
 
     private val providerManager: ProviderManager by inject()
     private val memoryRepository: MemoryRepository by inject()
 
-    private data class MemoryChunk(
+    internal data class RecallChunk(
+        val namespace: String,
         val path: String,
         val title: String,
         val order: Int,
@@ -42,7 +44,7 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
 
     private data class FrozenMemoryRecall(
         val lastUserMsgId: String,
-        val memoryVersionHash: Int,
+        val stateHash: Int,
         val prompt: String,
     )
 
@@ -51,8 +53,11 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
     private const val EMBED_BATCH_SIZE = 64
     private const val EMBED_FAILURE_TTL_MS = 60_000L
     private const val MAX_RECALLED_CHUNKS = 6
+    private const val MAX_LEXICAL_CHUNKS = 4
     private const val MAX_SECTION_CHARS = 600
     private const val MIN_CHUNK_CHARS = 80
+    private const val DIALOGUE_PATH = "/history/dialogue"
+    private const val DIALOGUE_TITLE = "早期对话回顾"
 
     @Volatile
     private var embedFailureUntil = 0L
@@ -61,37 +66,56 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        if (!ctx.assistant.enableMemory) return messages
         if (!ctx.settings.vectorStorageEnabled) return messages
 
-        val allFiles = ctx.memories.ifEmpty {
-            withContext(Dispatchers.IO) {
-                runCatching { memoryRepository.getFiles(ctx.assistant.memoryId) }.getOrDefault(emptyList())
+        val candidateFiles = if (ctx.assistant.enableMemory) {
+            val allFiles = ctx.memories.ifEmpty {
+                withContext(Dispatchers.IO) {
+                    runCatching { memoryRepository.getFiles(ctx.assistant.memoryId) }.getOrDefault(emptyList())
+                }
             }
+            allFiles.filter {
+                it.path != MemoryFile.PROFILE_PATH && it.path != MemoryFile.PREFERENCES_PATH
+            }
+        } else {
+            emptyList()
         }
-        val candidateFiles = allFiles.filter {
-            it.path != MemoryFile.PROFILE_PATH && it.path != MemoryFile.PREFERENCES_PATH
-        }
-        if (candidateFiles.isEmpty()) return messages
+
+        val overflowMessages = ctx.overflowMessages
+        if (candidateFiles.isEmpty() && overflowMessages.isEmpty()) return messages
 
         val turnKey = "${ctx.assistant.id}:${ctx.conversationId ?: "no-conversation"}"
         val lastUserMsgId = messages.lastOrNull { it.role == MessageRole.USER && !it.isSynthetic }?.id?.toString()
-        val versionHash = candidateFiles.fold(1) { acc, f -> 31 * acc + f.version.hashCode() }
+        val memoryHash = candidateFiles.fold(1) { acc, f -> 31 * acc + f.version.hashCode() }
+        val overflowHash = overflowMessages.size * 31 + (overflowMessages.lastOrNull()?.id?.hashCode() ?: 0)
+        val stateHash = memoryHash * 31 + overflowHash
 
         val recalledPrompt = if (lastUserMsgId != null) {
             val frozen = frozenTurnRecall[turnKey]?.takeIf {
-                it.lastUserMsgId == lastUserMsgId && it.memoryVersionHash == versionHash
+                it.lastUserMsgId == lastUserMsgId && it.stateHash == stateHash
             }
             if (frozen != null) {
                 frozen.prompt
             } else {
-                val resolved = resolveRecalledPrompt(ctx.context, ctx, messages, candidateFiles)
+                val resolved = resolveRecalledPrompt(
+                    context = ctx.context,
+                    ctx = ctx,
+                    messages = messages,
+                    files = candidateFiles,
+                    overflowMessages = overflowMessages,
+                )
                 if (frozenTurnRecall.size >= MAX_FROZEN_TURNS) frozenTurnRecall.clear()
-                frozenTurnRecall[turnKey] = FrozenMemoryRecall(lastUserMsgId, versionHash, resolved)
+                frozenTurnRecall[turnKey] = FrozenMemoryRecall(lastUserMsgId, stateHash, resolved)
                 resolved
             }
         } else {
-            resolveRecalledPrompt(ctx.context, ctx, messages, candidateFiles)
+            resolveRecalledPrompt(
+                context = ctx.context,
+                ctx = ctx,
+                messages = messages,
+                files = candidateFiles,
+                overflowMessages = overflowMessages,
+            )
         }
 
         if (recalledPrompt.isBlank()) return messages
@@ -112,11 +136,14 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
         ctx: TransformerContext,
         messages: List<UIMessage>,
         files: List<MemoryFile>,
+        overflowMessages: List<UIMessage>,
     ): String = withContext(Dispatchers.IO) {
         runCatching {
             val settings = ctx.settings
-            val (providerSetting, model) = settings.resolveEmbeddingModel() ?: return@runCatching ""
-            val chunks = chunkMemoryFiles(files)
+            val chunks = buildList {
+                addAll(chunkMemoryFiles(files))
+                addAll(chunkOverflowDialogue(overflowMessages, ctx.assistant.name.ifBlank { "角色" }))
+            }
             if (chunks.isEmpty()) return@runCatching ""
 
             val query = messages
@@ -126,67 +153,28 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
                 .trim()
             if (query.isBlank()) return@runCatching ""
 
-            val providerHandler = providerManager.getProviderByType(providerSetting)
-            val vectorsByKey = chunks.associate { chunk ->
-                val key = cacheKey(model.id, chunk.embedText)
-                key to VectorStoreCache.get(context, key)
-            }.toMutableMap()
-
-            val uncached = chunks.filter { vectorsByKey[cacheKey(model.id, it.embedText)] == null }
-
-            val queryVector = runCatching {
-                providerHandler.generateEmbedding(
-                    providerSetting = providerSetting,
-                    params = EmbeddingGenerationParams(model = model, input = listOf(query)),
-                ).embeddings.firstOrNull()?.toFloatArray()
-            }.getOrElse {
-                embedFailureUntil = System.currentTimeMillis() + EMBED_FAILURE_TTL_MS
-                null
-            } ?: return@runCatching ""
-
-            if (uncached.isNotEmpty() && System.currentTimeMillis() >= embedFailureUntil) {
-                uncached.chunked(EMBED_BATCH_SIZE).forEach { batch ->
-                    runCatching {
-                        providerHandler.generateEmbedding(
-                            providerSetting = providerSetting,
-                            params = EmbeddingGenerationParams(
-                                model = model,
-                                input = batch.map { it.embedText },
-                            ),
-                        )
-                    }.onSuccess { result ->
-                        batch.forEachIndexed { index, chunk ->
-                            result.embeddings.getOrNull(index)?.let { vec ->
-                                val floatArr = vec.toFloatArray()
-                                val key = cacheKey(model.id, chunk.embedText)
-                                VectorStoreCache.put(context, key, floatArr)
-                                vectorsByKey[key] = floatArr
-                            }
-                        }
-                    }.onFailure {
-                        embedFailureUntil = System.currentTimeMillis() + EMBED_FAILURE_TTL_MS
-                    }
-                }
+            val embeddingModel = settings.resolveEmbeddingModel()
+            val hits = if (embeddingModel != null && System.currentTimeMillis() >= embedFailureUntil) {
+                recallByEmbedding(
+                    context = context,
+                    providerSetting = embeddingModel.first,
+                    model = embeddingModel.second,
+                    query = query,
+                    chunks = chunks,
+                    threshold = settings.vectorStorageThreshold,
+                ) ?: recallByLexical(query, chunks)
+            } else {
+                recallByLexical(query, chunks)
             }
-
-            val hits = chunks.mapNotNull { chunk ->
-                val vec = vectorsByKey[cacheKey(model.id, chunk.embedText)] ?: return@mapNotNull null
-                val sim = VectorStoreCache.cosineSimilarity(queryVector, vec)
-                if (sim >= settings.vectorStorageThreshold) (chunk to sim) else null
-            }
-                .sortedByDescending { it.second }
-                .take(MAX_RECALLED_CHUNKS)
-                .map { it.first }
-                .sortedWith(compareBy({ it.path }, { it.order }))
 
             if (hits.isEmpty()) return@runCatching ""
-            Log.d(TAG, "recalled ${hits.size} memory chunks from ${hits.map { it.path }.distinct()}")
+            Log.d(TAG, "recalled ${hits.size} chunks from ${hits.map { it.path }.distinct()}")
 
             buildString {
                 appendLine("<recalled_memory>")
-                hits.groupBy { it.path to it.title }.forEach { (meta, fileChunks) ->
+                hits.groupBy { it.path to it.title }.forEach { (meta, groupedChunks) ->
                     appendLine("[${meta.first} | ${meta.second}]")
-                    fileChunks.forEach { chunk ->
+                    groupedChunks.forEach { chunk ->
                         appendLine(chunk.text.trim())
                     }
                     appendLine()
@@ -196,8 +184,181 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
         }.getOrDefault("")
     }
 
-    private fun chunkMemoryFiles(files: List<MemoryFile>): List<MemoryChunk> {
-        val result = mutableListOf<MemoryChunk>()
+    private suspend fun recallByEmbedding(
+        context: Context,
+        providerSetting: me.rerere.ai.provider.ProviderSetting,
+        model: me.rerere.ai.provider.Model,
+        query: String,
+        chunks: List<RecallChunk>,
+        threshold: Float,
+    ): List<RecallChunk>? {
+        val providerHandler = providerManager.getProviderByType(providerSetting)
+        val vectorsByKey = chunks.associate { chunk ->
+            val key = cacheKey(model.id, chunk.namespace, chunk.embedText)
+            key to VectorStoreCache.get(context, key)
+        }.toMutableMap()
+
+        val uncached = chunks.filter { vectorsByKey[cacheKey(model.id, it.namespace, it.embedText)] == null }
+
+        val queryVector = runCatching {
+            providerHandler.generateEmbedding(
+                providerSetting = providerSetting,
+                params = EmbeddingGenerationParams(model = model, input = listOf(query)),
+            ).embeddings.firstOrNull()?.toFloatArray()
+        }.getOrElse {
+            embedFailureUntil = System.currentTimeMillis() + EMBED_FAILURE_TTL_MS
+            null
+        } ?: return null
+
+        if (uncached.isNotEmpty() && System.currentTimeMillis() >= embedFailureUntil) {
+            uncached.chunked(EMBED_BATCH_SIZE).forEach { batch ->
+                runCatching {
+                    providerHandler.generateEmbedding(
+                        providerSetting = providerSetting,
+                        params = EmbeddingGenerationParams(
+                            model = model,
+                            input = batch.map { it.embedText },
+                        ),
+                    )
+                }.onSuccess { result ->
+                    batch.forEachIndexed { index, chunk ->
+                        result.embeddings.getOrNull(index)?.let { vec ->
+                            val floatArr = vec.toFloatArray()
+                            val key = cacheKey(model.id, chunk.namespace, chunk.embedText)
+                            VectorStoreCache.put(context, key, floatArr)
+                            vectorsByKey[key] = floatArr
+                        }
+                    }
+                }.onFailure {
+                    embedFailureUntil = System.currentTimeMillis() + EMBED_FAILURE_TTL_MS
+                }
+            }
+        }
+
+        return chunks.mapNotNull { chunk ->
+            val vec = vectorsByKey[cacheKey(model.id, chunk.namespace, chunk.embedText)] ?: return@mapNotNull null
+            val sim = VectorStoreCache.cosineSimilarity(queryVector, vec)
+            if (sim >= threshold) (chunk to sim) else null
+        }
+            .sortedByDescending { it.second }
+            .take(MAX_RECALLED_CHUNKS)
+            .map { it.first }
+            .sortedWith(compareBy({ it.path }, { it.order }))
+    }
+
+    internal fun recallByLexical(query: String, chunks: List<RecallChunk>): List<RecallChunk> {
+        val queryTokens = tokenizeForLexical(query)
+        if (queryTokens.isEmpty()) return emptyList()
+        return chunks.mapNotNull { chunk ->
+            val docTokens = tokenizeForLexical(chunk.embedText)
+            if (docTokens.isEmpty()) return@mapNotNull null
+            val overlap = queryTokens.count { it in docTokens }
+            if (overlap == 0) return@mapNotNull null
+            val coverage = overlap.toFloat() / queryTokens.size.toFloat()
+            val jaccard = overlap.toFloat() / (queryTokens.size + docTokens.size - overlap).toFloat()
+            val score = coverage * 0.7f + jaccard * 0.3f
+            if (score >= 0.08f) (chunk to score) else null
+        }
+            .sortedByDescending { it.second }
+            .take(MAX_LEXICAL_CHUNKS)
+            .map { it.first }
+            .sortedWith(compareBy({ it.path }, { it.order }))
+    }
+
+    private fun tokenizeForLexical(text: String): Set<String> {
+        val tokens = HashSet<String>()
+        val lower = text.lowercase()
+        val latinBuffer = StringBuilder()
+        val cjkBuffer = StringBuilder()
+
+        fun flushLatin() {
+            if (latinBuffer.length >= 2) {
+                tokens.add(latinBuffer.toString())
+            }
+            latinBuffer.setLength(0)
+        }
+
+        fun flushCjk() {
+            if (cjkBuffer.length == 1) {
+                tokens.add(cjkBuffer.toString())
+            } else if (cjkBuffer.length >= 2) {
+                for (i in 0 until cjkBuffer.length - 1) {
+                    tokens.add(cjkBuffer.substring(i, i + 2))
+                }
+            }
+            cjkBuffer.setLength(0)
+        }
+
+        for (ch in lower) {
+            when {
+                ch.isLetterOrDigit() && ch.code < 128 -> {
+                    flushCjk()
+                    latinBuffer.append(ch)
+                }
+                Character.UnicodeScript.of(ch.code) == Character.UnicodeScript.HAN -> {
+                    flushLatin()
+                    cjkBuffer.append(ch)
+                }
+                else -> {
+                    flushLatin()
+                    flushCjk()
+                }
+            }
+        }
+        flushLatin()
+        flushCjk()
+        return tokens
+    }
+
+    private fun chunkOverflowDialogue(
+        overflowMessages: List<UIMessage>,
+        assistantName: String,
+    ): List<RecallChunk> {
+        val entries = overflowMessages.mapNotNull { msg ->
+            if (msg.role != MessageRole.USER && msg.role != MessageRole.ASSISTANT) return@mapNotNull null
+            val text = msg.toText().trim()
+            if (text.isEmpty()) return@mapNotNull null
+            val speaker = if (msg.role == MessageRole.USER) "用户" else assistantName
+            val clipped = if (text.length > 420) text.take(420) + "…" else text
+            "$speaker: $clipped"
+        }
+        if (entries.isEmpty()) return emptyList()
+
+        val result = mutableListOf<RecallChunk>()
+        val buffer = StringBuilder()
+        var order = 0
+        for (entry in entries) {
+            if (buffer.isNotEmpty() && buffer.length + entry.length + 1 > MAX_SECTION_CHARS) {
+                result.add(
+                    RecallChunk(
+                        namespace = "dialog_chunk",
+                        path = DIALOGUE_PATH,
+                        title = DIALOGUE_TITLE,
+                        order = order++,
+                        text = buffer.toString().trim(),
+                    )
+                )
+                buffer.setLength(0)
+            }
+            if (buffer.isNotEmpty()) buffer.append('\n')
+            buffer.append(entry)
+        }
+        if (buffer.isNotEmpty()) {
+            result.add(
+                RecallChunk(
+                    namespace = "dialog_chunk",
+                    path = DIALOGUE_PATH,
+                    title = DIALOGUE_TITLE,
+                    order = order,
+                    text = buffer.toString().trim(),
+                )
+            )
+        }
+        return result
+    }
+
+    private fun chunkMemoryFiles(files: List<MemoryFile>): List<RecallChunk> {
+        val result = mutableListOf<RecallChunk>()
         var globalOrder = 0
         for (file in files) {
             val body = file.editableBody.trim()
@@ -241,11 +402,20 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
                 }
             }
             for (text in merged) {
-                result.add(MemoryChunk(path = file.path, title = file.title, order = globalOrder++, text = text))
+                result.add(
+                    RecallChunk(
+                        namespace = "mem_chunk",
+                        path = file.path,
+                        title = file.title,
+                        order = globalOrder++,
+                        text = text,
+                    )
+                )
             }
         }
         return result
     }
 
-    private fun cacheKey(modelId: Uuid, text: String): String = "$modelId\nmem_chunk\n${text.trim()}"
+    private fun cacheKey(modelId: Uuid, namespace: String, text: String): String =
+        "$modelId\n$namespace\n${text.trim()}"
 }

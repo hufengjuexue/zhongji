@@ -47,7 +47,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.common.http.jsonObjectOrNull
-import me.rerere.highlight.CodeHighlightText
+import me.rerere.rikkahub.ui.components.richtext.CodeHighlightText
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Book02
@@ -69,6 +69,7 @@ import me.rerere.hugeicons.stroke.Time02
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
+import me.rerere.rikkahub.data.ai.tools.MemoryGraphToolNames
 import me.rerere.rikkahub.data.ai.tools.MemoryToolNames
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
@@ -177,6 +178,103 @@ class MemoryFileToolUI(override val toolName: String) : ToolUIRenderer {
     }
 }
 
+/**
+ * 时序关系图谱工具: 标题区分查关系/写关系, 摘要展示查询实体或新写入边摘要, 点按直达关系图谱页签
+ */
+class MemoryGraphToolUI(override val toolName: String) : ToolUIRenderer {
+    override fun icon(context: ToolUIContext): ImageVector = when (toolName) {
+        MemoryGraphToolNames.RECALL_RELATIONS -> HugeIcons.ChartScatter
+        else -> HugeIcons.QuillWrite01
+    }
+
+    @Composable
+    override fun title(context: ToolUIContext): String =
+        memoryToolTitle(toolName, context.arguments)
+            ?: stringResource(R.string.chat_message_tool_call_generic, toolName)
+
+    private fun labels(context: ToolUIContext): List<String> {
+        val args = context.arguments.jsonObjectOrNull ?: return emptyList()
+        if (toolName == MemoryGraphToolNames.RECALL_RELATIONS) {
+            val entity = args["entity"]?.jsonPrimitiveOrNull?.contentOrNull?.trim().orEmpty()
+            val mode = args["mode"]?.jsonPrimitiveOrNull?.contentOrNull?.trim().orEmpty()
+            return if (entity.isNotEmpty()) {
+                listOf(if (mode.isNotEmpty()) "$entity ($mode)" else entity)
+            } else emptyList()
+        }
+        val edges = (args["edges"] as? JsonArray).orEmpty().mapNotNull { el ->
+            val obj = el.jsonObjectOrNull ?: return@mapNotNull null
+            val from = obj["from"]?.jsonPrimitiveOrNull?.contentOrNull?.trim().orEmpty()
+            val relation = obj["relation"]?.jsonPrimitiveOrNull?.contentOrNull?.trim().orEmpty()
+            val to = obj["to"]?.jsonPrimitiveOrNull?.contentOrNull?.trim().orEmpty()
+            if (from.isNotEmpty() && relation.isNotEmpty() && to.isNotEmpty()) {
+                "$from -> $relation -> $to"
+            } else null
+        }
+        if (edges.isNotEmpty()) return edges
+        return (args["entities"] as? JsonArray).orEmpty().mapNotNull { el ->
+            el.jsonObjectOrNull?.get("name")?.jsonPrimitiveOrNull?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    override fun hasSummary(context: ToolUIContext): Boolean = labels(context).isNotEmpty()
+
+    @Composable
+    override fun Summary(context: ToolUIContext) {
+        val navController = LocalNavController.current
+        val assistantId = context.assistant?.id?.toString()?.takeIf { !context.loading }
+        val items = labels(context)
+        Column {
+            items.take(MAX_SUMMARY_ITEMS).fastForEach { item ->
+                Row(
+                    modifier = Modifier
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable(enabled = assistantId != null) {
+                            assistantId?.let { navController.navigate(Screen.AssistantMemory(it, initialTab = 1)) }
+                        }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = item,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .shimmer(isLoading = context.loading),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (assistantId != null) {
+                        Icon(
+                            imageVector = HugeIcons.ArrowRight01,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
+                }
+            }
+            if (items.size > MAX_SUMMARY_ITEMS) {
+                Text(
+                    text = "+${items.size - MAX_SUMMARY_ITEMS}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                )
+            }
+        }
+    }
+
+    companion object {
+        private const val MAX_SUMMARY_ITEMS = 4
+
+        val all = listOf(
+            MemoryGraphToolNames.RECALL_RELATIONS,
+            MemoryGraphToolNames.UPSERT_RELATIONS,
+        ).map(::MemoryGraphToolUI)
+    }
+}
+
 /** 记忆库工具的标题, 聊天消息与导出图片共用; 不是记忆库工具时返回 null */
 @Composable
 internal fun memoryToolTitle(toolName: String, arguments: JsonElement?): String? = when (toolName) {
@@ -190,6 +288,8 @@ internal fun memoryToolTitle(toolName: String, arguments: JsonElement?): String?
 
     MemoryToolNames.STR_REPLACE, MemoryToolNames.APPEND -> stringResource(R.string.chat_message_tool_edit_memory)
     MemoryToolNames.DELETE -> stringResource(R.string.chat_message_tool_delete_memory)
+    MemoryGraphToolNames.RECALL_RELATIONS -> stringResource(R.string.chat_message_tool_recall_relations)
+    MemoryGraphToolNames.UPSERT_RELATIONS -> stringResource(R.string.chat_message_tool_upsert_relations)
     else -> null
 }
 

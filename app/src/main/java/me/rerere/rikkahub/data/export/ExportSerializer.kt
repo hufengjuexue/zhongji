@@ -8,9 +8,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import me.rerere.ai.core.MessageRole
 import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.model.PromptInjection
+import me.rerere.rikkahub.data.model.SelectiveLogic
 import me.rerere.rikkahub.utils.toLocalString
 import java.time.LocalDateTime
 import kotlin.uuid.Uuid
@@ -161,12 +163,31 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
                         priority = entry.order,
                         position = mapSillyTavernPosition(entry.position),
                         injectDepth = entry.depth,
+                        role = when (entry.role) {
+                            1 -> MessageRole.USER
+                            2 -> MessageRole.ASSISTANT
+                            else -> MessageRole.SYSTEM
+                        },
                         content = entry.content,
                         keywords = entry.key,
-                        useRegex = false, // SillyTavern 格式不支持 useRegex
+                        secondaryKeys = entry.keysecondary,
+                        selective = entry.selective ?: entry.keysecondary.isNotEmpty(),
+                        selectiveLogic = when (entry.selectiveLogic) {
+                            1 -> SelectiveLogic.NOT_ALL
+                            2 -> SelectiveLogic.NOT_ANY
+                            3 -> SelectiveLogic.AND_ALL
+                            else -> SelectiveLogic.AND_ANY
+                        },
+                        useRegex = entry.useRegex ?: false,
                         caseSensitive = entry.caseSensitive ?: false,
+                        matchWholeWords = entry.matchWholeWords ?: false,
                         scanDepth = entry.scanDepth ?: 4,
                         constantActive = entry.constant,
+                        probability = entry.probability ?: 100,
+                        useProbability = entry.useProbability ?: ((entry.probability ?: 100) < 100),
+                        sticky = entry.sticky ?: 0,
+                        cooldown = entry.cooldown ?: 0,
+                        delay = entry.delay ?: 0,
                     )
                 }
             )
@@ -193,13 +214,24 @@ private data class SillyTavernLorebook(
 @Serializable
 private data class SillyTavernEntry(
     val key: List<String> = emptyList(),
+    val keysecondary: List<String> = emptyList(),
     val content: String = "",
     val comment: String? = null,
     val constant: Boolean = false,
+    val selective: Boolean? = null,
+    val selectiveLogic: Int = 0,
     val position: Int = 0,
     val order: Int = 100,
     val disable: Boolean = false,
     val depth: Int = 4,
     val scanDepth: Int? = null,
     val caseSensitive: Boolean? = null,
+    val useRegex: Boolean? = null,
+    val matchWholeWords: Boolean? = null,
+    val role: Int = 0,
+    val probability: Int? = null,
+    val useProbability: Boolean? = null,
+    val sticky: Int? = null,
+    val cooldown: Int? = null,
+    val delay: Int? = null,
 )

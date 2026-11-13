@@ -65,6 +65,7 @@ import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
+import me.rerere.ai.util.logRequestBody
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.mergeCustomHeaders
 import me.rerere.ai.util.parseErrorDetail
@@ -299,13 +300,13 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .url("${providerSetting.baseUrl}/messages")
             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
+            .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), params.sessionId))
             .addHeader("anthropic-version", ANTHROPIC_VERSION)
             .configureReferHeaders(providerSetting.baseUrl)
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "generateText") { json.encodeToString(requestBody) }
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
@@ -349,17 +350,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .url("${providerSetting.baseUrl}/messages")
             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
+            .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), params.sessionId))
             .addHeader("anthropic-version", ANTHROPIC_VERSION)
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "streamText") { json.encodeToString(requestBody) }
 
-        requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
+        // 整个请求体那一行会被 logcat 截断，再逐条打印一遍消息
+        requestBody["messages"]!!.jsonArray.forEach { message ->
+            logRequestBody(TAG, "streamText") { message.toString() }
         }
 
         val decoder = ClaudeStreamDecoder()
@@ -451,6 +453,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 )
             }
             if (params.topP != null) put("top_p", params.topP)
+            if (params.topK != null) put("top_k", params.topK)
 
             put("stream", stream)
 
@@ -475,7 +478,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             // Anthropic 新 API: adaptive 模式 + output_config.effort 控制强度
             // 旧的 type=enabled + budget_tokens 在 Opus 4.7+ 上已不支持
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                when (params.reasoningLevel) {
+                val level = if (params.disableReasoning) ReasoningLevel.OFF else params.reasoningLevel
+                when (level) {
                     ReasoningLevel.OFF -> {
                         put("thinking", buildJsonObject { put("type", "disabled") })
                     }
@@ -552,18 +556,58 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         promptCaching: Boolean,
         promptCacheTtl: ClaudePromptCacheTtl
     ) = buildJsonArray {
+        val firstSystemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
         messages
-            .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
+            .filter { it.isValidToUpload() }
             .forEach { message ->
+                if (message.role == MessageRole.SYSTEM) {
+                    // 首条 SYSTEM 走顶层 system 参数；中部 SYSTEM（记忆向量注入/世界书/深度提示等）
+                    // 在 Anthropic messages 中转为 user 轮原位保留，避免被静默丢弃
+                    if (message === firstSystemMessage) {
+                        return@forEach
+                    }
+                    addUserMessage(message.copy(role = MessageRole.USER))
+                    return@forEach
+                }
                 if (message.role == MessageRole.ASSISTANT) {
                     addAssistantMessage(message)
                 } else {
                     addUserMessage(message)
                 }
             }
-    }.let { messagesArray ->
-        if (!promptCaching) return@let messagesArray
-        insertMessagesCacheControl(messagesArray, promptCacheTtl)
+    }
+        .let(::mergeConsecutiveUserTurns)
+        .let { messagesArray ->
+            if (!promptCaching) return@let messagesArray
+            insertMessagesCacheControl(messagesArray, promptCacheTtl)
+        }
+
+    /**
+     * Anthropic messages 要求 user/assistant 交替；中部 SYSTEM 转 user 轮后可能与相邻 user 轮
+     * 相接（如尾部注入在末条 user 之后），合并相邻 user 轮的 content blocks 以保证请求合法。
+     */
+    private fun mergeConsecutiveUserTurns(messages: JsonArray): JsonArray {
+        val items = messages.map { it.jsonObject }.toMutableList()
+        var index = 1
+        while (index < items.size) {
+            val current = items[index]
+            val previous = items[index - 1]
+            val isMergeablePair = previous["role"]?.jsonPrimitive?.contentOrNull == "user" &&
+                current["role"]?.jsonPrimitive?.contentOrNull == "user"
+            if (!isMergeablePair) {
+                index++
+                continue
+            }
+            items[index - 1] = buildJsonObject {
+                put("role", "user")
+                putJsonArray("content") {
+                    previous["content"]?.jsonArray?.forEach { add(it) }
+                    current["content"]?.jsonArray?.forEach { add(it) }
+                }
+            }
+            items.removeAt(index)
+        }
+        return JsonArray(items)
     }
 
     /**
@@ -755,9 +799,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Reasoning -> buildJsonObject {
-            put("type", "thinking")
-            put("thinking", reasoning)
-            metadataAs<ClaudeReasoningMetadata>()?.signature?.let { put("signature", it) }
+            val claudeMetadata = metadataAs<ClaudeReasoningMetadata>()
+            val redactedData = claudeMetadata?.redactedData
+            if (redactedData != null) {
+                put("type", "redacted_thinking")
+                put("data", redactedData)
+            } else {
+                put("type", "thinking")
+                put("thinking", reasoning)
+                claudeMetadata?.signature?.let { put("signature", it) }
+            }
         }
 
         else -> null
@@ -811,8 +862,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
 
                 "redacted_thinking" -> {
-                    val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
-                    println(data)
+                    block["data"]?.jsonPrimitiveOrNull?.contentOrNull?.let { data ->
+                        parts.add(
+                            UIMessagePart.Reasoning(
+                                reasoning = "",
+                                createdAt = Clock.System.now(),
+                                finishedAt = null,
+                                metadata = ClaudeReasoningMetadata(redactedData = data).toMetadata(),
+                            )
+                        )
+                    }
                 }
 
                 "tool_use" -> {

@@ -1,89 +1,63 @@
 <div align="center">
 
-<img src="docs/app-icon.png" width="96" alt="终极 RP 图标"/>
+<img src="docs/app-icon.png" width="96" alt="Kairos 图标"/>
 
-# 终极 RP · ZhongJi RP
+# Kairos
 
-### 为现代前沿大模型重铸的安卓原生沉浸式 RP 客户端
+### 极简纯净的安卓原生 AI 角色扮演客户端
 
-**开箱即入戏 · 酒馆全生态无损兼容 · 独创端侧向量尾部近因注入 · 提示词前缀缓存深度保护**
+**纯原生 Compose 手感 · 前缀缓存深度保护 · 尾部近因召回 · 时序记忆关系图谱**
 
 [**简体中文**](README_CN.md) | [**English**](README.md)
 
-[![Release](https://img.shields.io/github/v/release/hufengjuexue/zhongji?label=Release&color=brightgreen)](https://github.com/hufengjuexue/zhongji/releases)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/zhongji/releases)
+[![Release](https://img.shields.io/github/v/release/hufengjuexue/kairos?label=Release&color=brightgreen)](https://github.com/hufengjuexue/kairos/releases)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/kairos/releases)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 
 </div>
 
 ---
 
-## 🌟 为什么需要「终极 RP」？
+## 核心设计
 
-**过去的 AI RP（角色扮演）生态，长期被旧时代的“自虐式妥协工程”所困扰：**
-* **旧时代酒馆（SillyTavern）** 诞生于 7B / 13B 弱智本地小模型时代。为了强行逼出逻辑，堆砌了上百个滑动条、采样器玄学、万字破限八股文，甚至逼着移动端用户去折腾 Termux、配置 Node.js 或开着电脑搞内网穿透——**这些都是旧时代的妥协产物，而不是真正的先进体验。**
-* **普通聊天 App** 虽轻便，却毫无角色沉浸感。长文本失忆、无法读取角色卡与世界书、上下文动辄分叉爆窗，完全无法支撑深度 RP 体验。
-
-**现代大模型已经拥有极高维的语义感知与情感张力，它们不再需要万字咒语去“教大模型做人”。**
-
-> 💡 **「终极 RP」的初心：去芜存菁，终结繁琐。**  
-> 删掉旧时代所有的残疾补丁与反人类门槛，哪怕第一天接触 AI 的小白也能一键开聊；保留并深度重构真正强大好用的核心架构，将现代大模型最纯粹的即兴推演力与情感心流彻底释放。
+**Kairos** 坚持「前端克制留白、大脑完全自主」的设计原则：
+* **原汁原味 Compose 交互**：保留 RikkaHub 干净流畅的原生界面与排版手感，剔除一切网页套壳、花哨悬浮挂件与远古采样器滑块玄学。
+* **前缀缓存死保（Prompt Caching First）**：头部系统提示词、常驻核心档案（`/profile.md`、`/preferences.md`）与记忆目录保持字节级稳定，消除跨天或更新文档导致的缓存击穿。
+* **尾部近因召回（`MemoryVectorTailTransformer`）**：长篇 `topics/*.md` 档案与被上下文窗口截断的早期历史对话，按语义在请求发出前就近召回，仅在最后一条 `USER` 消息前作为合成记忆上下文动态注入。
 
 ---
 
-## ⚡ 核心功能矩阵 (Core Capabilities)
+## 核心能力
 
-### 一、 🎭 酒馆全生态无损兼容（零门槛继承最强 RP 资产）
-* **全规格角色卡一键直导**：原生支持主流 **V2 / V3 规格角色卡**（PNG 图片格式与 JSON 格式）。角色头像、全身立绘、差分表情包（Emotion Sprites）、开场白及多轮示例对话完整还原。
-* **内嵌世界书 (Lorebook) 智能解包**：角色卡内嵌的数十乃至上百条世界观条目、触发关键词与常驻设定自动解包，按现代逻辑按需召回。
-* **官方 60+ 宏引擎原生支持**：完整支持 `{{user}}`、`{{char}}`、`{{lastMessage}}` 等全部官方宏变量，社区热门角色卡拿来直接开跑，零手动魔改。
-* **作者附注 (Author's Note)**：对话中随时随地插入剧情暗线或情绪定调，支持自定义插入深度（At Depth）与系统角色定位，毫厘之间掌控剧情脉络。
-* **多角色同场群聊 (Group Chat)**：支持多张角色卡同场互动，自由设定发言轮询、点名或抢答机制。
-* **输入 / 输出正则脚本 (Regex)**：内置输入输出双向正则过滤器，自动剥离思维链杂质，定制角色台词与心理描写的排版风格。
+### 一、 记忆与上下文管线
+* **解除“办公助手”反 RP 约束**：移除上游提示词中禁止扮演固定伴侣/禁止记录情感体验的条款，仅保留真实证件与密码隐私红线。
+* **双源召回 + 词法兜底**：同时检索 Markdown 长期记忆库与超出窗口的早期对话原文；支持配置专属 Embedding 模型与扫描深度，在未配置或接口冷却期自动切换本地词法匹配兜底。
+* **紧凑二进制向量缓存（`VEC1`）**：采用 Float32 二进制落盘存储，兼容旧版 `.vec` 文本缓存并内置容量上限惰性清理；同轮多步工具调用冻结当轮召回结果。
+* **时序记忆关系图谱（Temporal Relation Graph）**：内置轻量级实体关系图数据库与 `recall_relations` / `graph_upsert_relations` 工具，以 `valid_from` / `valid_to` / `is_current` 记录角色羁绊、阵营、物品归属与誓约演变，旧关系自动留档进入历史时间线而非直接覆盖抹除。
+* **压缩前打捞与可视化图谱页签**：上下文压缩检查点生成前自动提取即将折叠的轮次落库防丢失，并可在「助手记忆 → 关系图谱」页签通过交互式网络画布（拖拽缩放、类型筛选）与「当前 vs 历史时间线」面板直观审阅或手动增改关系。
 
----
+### 二、 酒馆角色卡生态兼容
+* **V2 / V3 PNG 与 JSON 一键直导**：完整导入角色头像、系统设定、开场白、`mes_example` 示例对话与 `post_history_instructions`。
+* **内嵌世界书与正则自动解包**：自动提取角色卡内的 `character_book` 转为独立世界书并关联当前助手，同时自动解析 `extensions.regex_scripts`（兼容 `/pattern/flags` 语法）为消息正则规则。
 
-### 二、 🧠 现代大模型新型架构（颠覆旧时代的无脑堆砌）
-* **全生态主流大模型直通**：专为现代前沿大模型设计，原生支持各大主流商业 API（涵盖 Anthropic, Google, OpenAI, DeepSeek, Grok 等全系前沿智能体），以及任意第三方兼容中转站与本地私有化模型。
-* **提示词前缀缓存 (Prompt Caching) 深度锁定**：严格固化前缀上下文，彻底消除每轮对话中的动态分叉点，**长篇 RP 费用直接节省 75% ~ 90%**，越聊越省钱。
-* **端侧纯本地向量语义检索 (RAG Engine)**：基于纯 Kotlin 打造的高精度端侧余弦相似度（`cosineSimilarity`）数学算法与本地 SQLite 向量持久化库，设定切片一次编码后终身驻留本地，单轮多步对话零重复网络开销。
-* **独创端侧尾部近因注入 (`MemoryVectorTailTransformer`)**：大型背景小传不往头部 System 堆砌。根据最新发言端侧毫秒级匹配记忆切片，在最后一条 User 消息前夕动态近因注入。**100% 保护 Prompt Cache 前缀，大模型注意力永不涣散**。
-* **前后双模解耦架构（前台演戏，后台静默萃取）**：前台主力大模型纵情演戏推演；后台可指定独立的轻量模型（记忆整理专属模型）静默提炼长时记忆与滚动压缩，长对话不失忆、不爆窗、不抢跑。
+### 三、 原生体验与独立身份
+* **主流模型直连**：原生支持 Anthropic、Google、OpenAI、DeepSeek、Grok 及各类 OpenAI 兼容端点，并支持单独配置 Embedding 向量模型。
+* **完全独立包名**：采用独立身份 `me.kairos.app` 与自适应图标体系（支持 Android Material You 单色主题取色）。
 
 ---
 
-### 三、 📱 纯原生移动端沉浸体验（告别网页套壳的发热与卡顿）
-* **Jetpack Compose 纯原生流式响应**：秒开秒回，低功耗、低发热，带来如丝顺滑的打字机流式输出手感。
-* **全链路真实语音 (TTS / 语音通话)**：原生集成语音合成与双向语音对聊；独创 **语法级 AST 纯文本清洗**（朗读时自动跳过代码、公式与 HTML 标签，绝不误念乱码，绝不吃掉尖括号与正文）。
-* **LaTeX 与富文本稳健排版**：全面支持 LaTeX 数学公式渲染、Markdown 语法、代码高亮与折叠块，彻底修复公式包含 `<` 符号被截断损坏的历史痛点。
-* **现代消息队列与交互防崩**：打断即停、停止生成后立即追加发消息不卡死队列；连按返回键空栈防闪退；收藏模型本地拖拽防抽搐；滑动删除平滑结算。
+## 快速上手
+
+1. **安装应用**：前往 [Releases](https://github.com/hufengjuexue/kairos/releases) 下载最新的 `kairos-*.apk`。
+2. **配置接口**：进入「设置 → 模型设置」填入主力对话模型 API；如需向量精排召回，可在「通用设置 → 向量存储」中指定 Embedding 模型并调整扫描深度。
+3. **导入角色**：直接导入 V2/V3 规格 PNG 或 JSON 角色卡即可开始对话。
 
 ---
 
-### 四、 🛡️ 终结自虐工程，小白零门槛
-* **免配置、免部署**：告别 Termux、告别 Node.js、告别电脑开机挂穿透，安装 APK 打开即入戏。
-* **告别滑块玄学**：彻底剔除旧时代针对远古弱智模型的几十个混乱采样器滑块，出厂预置针对现代智能体的最佳推理基线。
-* **告别破限咒文**：无需满世界寻找相互打架的万字破限八股与防代皮念经，释放大模型最本真、有张力的剧情碰撞。
+## 致谢与协议
 
----
-
-## 🚀 极速上手 (Quick Start)
-
-1. **安装应用**：前往 [Releases](https://github.com/hufengjuexue/zhongji/releases) 下载最新的 `zhongji-rp-*.apk`，或通过手机端 **Komi Store** 一键安装。
-2. **配置模型**：进入「设置」→「模型设置」，填入你的 API Key 并选择心仪的主力模型与记忆模型。
-3. **导入角色**：在主界面直接选入你珍藏的酒馆角色卡（PNG 或 JSON），点击即可立刻开聊！
-
----
-
-## 🧬 开源血脉与先驱致敬 (Credits & Heritage)
-
-「终极 RP」站在开源巨人的肩膀上进化而来，向以下开源先驱致以崇高敬意：
-* **[RikkaHub](https://github.com/rikkahub/rikkahub)**：提供了极为优雅现代的原生 Android Jetpack Compose 架构与高并发通信基座；
-* **[华灯 (Huadeng)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android)**：奠定了移动端对酒馆协议无损解析与宏引擎兼容的坚实基石；
-* **[LastChat](https://github.com/Cocolalilal/LastChat)**：启发了移动端 RAG 向量记忆检索的先锋思考。
-
----
-
-## 📄 开源许可 (License)
+向以下开源基石致敬：
+* **[RikkaHub](https://github.com/rikkahub/rikkahub)**：提供现代优雅的 Android Jetpack Compose 原生前端与底层通信框架；
+* **[华灯 (Huadeng)](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android)** 与 **[LastChat](https://github.com/Cocolalilal/LastChat)**：在移动端酒馆协议解析与端侧记忆召回上的先行探索。
 
 本项目遵循 [AGPL-3.0 License](LICENSE) 开源协议。

@@ -19,6 +19,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -217,6 +218,39 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                         supportingContent = { Text(stringResource(R.string.setting_display_page_enable_quote_highlight_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_display_page_enable_quote_highlight_title)) },
                     )
+                    if (displaySetting.enableQuoteHighlight) {
+                        formItem(
+                            headlineContent = { Text(stringResource(R.string.setting_display_page_quote_color)) },
+                            supportingContent = { Text(stringResource(R.string.setting_display_page_rp_colors_desc)) },
+                        ) {
+                            OutlinedTextField(
+                                value = displaySetting.quoteColorHex,
+                                onValueChange = { updateDisplaySetting(displaySetting.copy(quoteColorHex = it.take(9))) },
+                                label = { Text(stringResource(R.string.setting_display_page_quote_color)) },
+                                placeholder = { Text("#E18A24") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    switchItem(
+                        checked = displaySetting.enableBracketButton,
+                        onCheckedChange = { updateDisplaySetting(displaySetting.copy(enableBracketButton = it)) },
+                        supportingContent = { Text(stringResource(R.string.setting_display_page_bracket_button_desc)) },
+                        headlineContent = { Text(stringResource(R.string.setting_display_page_bracket_button_title)) },
+                    )
+                    if (displaySetting.enableBracketButton) {
+                        formItem(
+                            headlineContent = { Text(stringResource(R.string.setting_display_page_bracket_symbol_title)) },
+                        ) {
+                            OutlinedTextField(
+                                value = displaySetting.bracketButtonSymbol,
+                                onValueChange = { updateDisplaySetting(displaySetting.copy(bracketButtonSymbol = it.take(8))) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                 }
             }
 

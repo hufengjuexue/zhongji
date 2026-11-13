@@ -1,89 +1,64 @@
 <div align="center">
 
-<img src="docs/app-icon.png" width="96" alt="ZhongJi RP Icon"/>
+<img src="docs/app-icon.png" width="96" alt="Kairos Icon"/>
 
-# 终极 RP · ZhongJi RP
+# Kairos
 
-### Android-Native Immersive AI Roleplay Client Rebuilt for Frontier LLMs
+### Android-Native Immersive AI Roleplay Client
 
-**Instant Immersive Flow · Lossless SillyTavern Compatibility · On-Device Vector Tail Injection · Deep Prompt Caching Protection**
+**Pure Native Compose UI · Prompt Cache Protection · Tail Vector Recall · Temporal Relation Graph**
 
 [**简体中文**](README_CN.md) | [**English**](README.md)
 
-[![Release](https://img.shields.io/github/v/release/hufengjuexue/zhongji?label=Release&color=brightgreen)](https://github.com/hufengjuexue/zhongji/releases)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/zhongji/releases)
+[![Release](https://img.shields.io/github/v/release/hufengjuexue/kairos?label=Release&color=brightgreen)](https://github.com/hufengjuexue/kairos/releases)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/hufengjuexue/kairos/releases)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 
 </div>
 
 ---
 
-## 🌟 Why ZhongJi RP?
+## Philosophy
 
-**The traditional AI RP ecosystem has long been trapped in an era of "desperate compromise engineering":**
-* **Legacy SillyTavern** was originally designed for ancient 7B / 13B local models. To force coherence out of weak models, it accumulated hundreds of sampler sliders, ten-thousand-word jailbreak templates, and anti-proxy impersonation incantations, while forcing mobile users to wrestle with Termux, Node.js, or keep home PCs running local reverse tunnels. **These were historical compromises, not modern innovation.**
-* **Conventional Chat Apps**, while lightweight, completely lack character depth. They suffer from rapid context amnesia, cannot parse character cards or lorebooks, and fail to sustain deep, nuanced roleplay.
-
-**Modern Frontier LLMs already possess high-dimensional semantic understanding and emotional resonance. They no longer need archaic walls of prompt text to "teach the AI how to act."**
-
-> 💡 **The Core Philosophy of ZhongJi RP: Subtraction and Perfection.**  
-> Purge obsolete compromise engineering and cumbersome barriers so that even a complete beginner can jump straight into the story; distill and re-engineer truly essential, high-performance architecture to unleash the full improvisational power and dramatic tension of modern frontier models.
+**Kairos** separates the UI surface from the roleplay brain:
+* **Pure Native Compose Frontend**: Preserves the clean, tactile Android-native interaction and typography lineage of RikkaHub — no heavy WebView wrapper, no bloated overlays, no sampler slider sprawl.
+* **Prompt Cache First**: Everything at the prefix (system prompt, permanent profile/preferences, non-volatile memory listing) stays byte-stable across turns to maximize Anthropic/provider Prompt Cache hits.
+* **Tail Recency Recall (`MemoryVectorTailTransformer`)**: Long-term memory files (`topics/*.md`) and overflowed early conversation chunks are recalled on demand via cloud Embedding similarity (with automatic local lexical fallback) and injected strictly before the final `USER` turn.
 
 ---
 
-## ⚡ Core Capabilities
+## Core Capabilities
 
-### 1. 🎭 Full SillyTavern Ecosystem Compatibility (Zero-Friction Asset Portability)
-* **One-Click Lossless Character Card Import**: Native support for **V2 and V3 character cards** (both PNG format with embedded metadata and JSON). Restores avatars, full-body artwork, emotion sprite packs, greetings, and alternate example dialogues seamlessly.
-* **Embedded Lorebook Parsing**: Character-embedded worldbooks, keywords, triggers, and persistent entries are automatically decoded and scheduled on demand.
-* **Native 60+ Macro Engine**: Full native interpretation of official variables including `{{user}}`, `{{char}}`, `{{lastMessage}}`, and more. Run popular community cards straight out of the box with zero manual editing.
-* **Author's Note**: Inject subtext, steering cues, or atmospheric anchors at any point in the conversation, with customizable insertion depth (At Depth) and system/user role targeting.
-* **Multi-Character Group Chat**: Host multiple character cards in the same scene with flexible speaker turn scheduling (round-robin, targeted, or spontaneous).
-* **Regex Scripting**: Bidirectional input/output regex pipelines to automatically strip reasoning chains, clean residual formatting, and refine dialogue layout.
+### 1. Memory & Context Pipeline
+* **Unshackled Memory Prompts**: Removes productivity-assistant prohibitions against emotional continuity, romance, and persona immersion while retaining basic real-world privacy boundaries.
+* **Prefix-Safe Memory Listing**: Keeps the system memory directory stable without mutable daily date stamps that break Prompt Caching.
+* **Hybrid Tail Injection**: Recalls relevant chunks from both `topics/*.md` and conversation turns truncated by context limits or compaction, freezing recalled context across multi-step tool calls within the same turn.
+* **Compact Binary Vector Cache (`VEC1`)**: Stores normalized Float32 embeddings cleanly on disk with backward compatibility for legacy `.vec` files and lazy LRU-style pruning.
+* **Temporal Relation Graph**: Built-in SQLite entity-relation graph (`recall_relations` / `graph_upsert_relations`) tracks characters, factions, locations, items, and vows with `valid_from` / `valid_to` / `is_current` lifecycle fields — preserving past states chronologically rather than overwriting history.
+* **Pre-Compression Extraction & Visual Graph Tab**: Automatically salvages unrecorded facts and relation shifts right before context compression collapses older turns, with an interactive Compose network canvas and current-vs-past timeline inspector inside Assistant Memory.
 
----
+### 2. SillyTavern Card Compatibility
+* **V2 / V3 PNG & JSON Import**: Automatically restores character avatars, system prompts, first greetings, alternate greetings, `mes_example`, and `post_history_instructions`.
+* **Embedded Lorebook & Regex Unpacking**: Automatically unpacks `character_book` (array or object entries) into Lorebooks and converts `extensions.regex_scripts` (normalizing `/pattern/flags`) into message regex rules.
 
-### 2. 🧠 Modern LLM Architecture (Beyond Primitive Context Stuffing)
-* **Frontier Ecosystem Direct Connection**: Tailored for modern frontier intelligence, offering native out-of-the-box support for major commercial APIs (Anthropic, Google, OpenAI, DeepSeek, Grok, and other leading frontier models), as well as third-party OpenAI-compatible proxies and local models.
-* **Deep Prompt Caching Protection**: Strictly preserves static prefix context and eliminates per-turn dynamic branch drift, **slashing long-form RP token costs by 75% to 90%**.
-* **On-Device Pure-Kotlin Vector Retrieval (RAG Engine)**: High-precision cosine similarity math (`cosineSimilarity`) and SQLite vector persistence running entirely on-device in Kotlin. Chunks are embedded once and cached locally forever, incurring zero repeated network calls during multi-turn exchanges.
-* **Proprietary Tail Near-Context Injection (`MemoryVectorTailTransformer`)**: Large world lore and character backgrounds are no longer crammed into the System Prompt. Top-matching memory chunks are retrieved in milliseconds and dynamically injected right before the final user message, **safeguarding 100% of the Prompt Cache prefix while preventing model attention dispersion**.
-* **Decoupled Dual-Engine Architecture (Front-Stage Roleplay, Background Memory Consolidation)**: The primary frontier model dedicates 100% of its compute to improvisational drama, while an independent lightweight model (the dedicated memory consolidation model) quietly consolidates long-term memories in the background without stealing turns or polluting flow.
-
----
-
-### 3. 📱 Pure Android-Native Immersive Experience (No Webview Bloat)
-* **Jetpack Compose Native Fluidity**: Instant startup, minimal battery drain, low heat, and buttery-smooth streaming typewriter rendering.
-* **Full-Chain Audio & Voice (TTS / Voice Calls)**: Native speech synthesis and bidirectional voice conversation. Features **AST-Level Pure-Text Sanitization** (automatically bypassing code blocks, LaTeX formulas, and HTML tags during reading, ensuring speech never garbles punctuation or drops spoken dialogue).
-* **Robust LaTeX & Rich Text Formatting**: Flawless rendering for LaTeX mathematical notation, Markdown code highlights, tables, and collapsible detail blocks, resolving historical formula truncation bugs when expressions contain `<` symbols.
-* **Fluid Queue Management**: Instant generation interrupt; seamless follow-up message dispatch without queue freezing; backstack empty-crash immunity; and layout-safe favorite model drag sorting.
+### 3. Native Android Architecture
+* Direct connection to modern frontier providers (Anthropic, Google, OpenAI, DeepSeek, Grok, and OpenAI-compatible endpoints) plus configurable Embedding models.
+* Independent package identity (`me.kairos.app`) with Adaptive Icon + Monochrome support (`mipmap-anydpi-v26`).
 
 ---
 
-### 4. 🛡️ Zero Configuration, Zero Compromise
-* **No Termux, No Tunnels**: Say goodbye to Termux environments, Node.js daemons, and keeping your desktop PC on. Install the APK and dive straight in.
-* **No Sampler Slider Metaphysics**: Eradicates confusing legacy sampler sliders designed for primitive models. Pre-tuned with optimal baseline inference defaults for modern frontier reasoning.
-* **No Wordy Jailbreak Bloat**: Eliminates contradictory ten-thousand-word templates, restoring raw, authentic, uncastrated character interactions.
+## Quick Start
+
+1. **Install**: Download the latest `kairos-*.apk` from [Releases](https://github.com/hufengjuexue/kairos/releases).
+2. **Configure Models**: Open **Settings → Models**, configure your primary chat model and (optionally) an Embedding model under **General → Vector Storage**.
+3. **Import Character**: Import any V2/V3 PNG or JSON character card and start talking.
 
 ---
 
-## 🚀 Quick Start
+## Heritage & License
 
-1. **Install**: Grab the latest `zhongji-rp-*.apk` from [GitHub Releases](https://github.com/hufengjuexue/zhongji/releases), or update via **Komi Store**.
-2. **Configure Models**: Open **Settings** → **Model Settings**, enter your API key, and select your primary chat and memory consolidation models.
-3. **Import & Play**: Drop your favorite character card (PNG or JSON) into the main screen, tap, and begin your story!
+Built with respect on top of open-source foundations:
+* **[RikkaHub](https://github.com/rikkahub/rikkahub)** for the Android Jetpack Compose UI and AI provider infrastructure.
+* **[Huadeng](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android)** & **[LastChat](https://github.com/Cocolalilal/LastChat)** for pioneering mobile SillyTavern protocol compatibility and tail memory ideas.
 
----
-
-## 🧬 Credits & Open-Source Heritage
-
-ZhongJi RP evolves upon the shoulders of giants. We pay our highest respects to the open-source pioneers:
-* **[RikkaHub](https://github.com/rikkahub/rikkahub)**: For establishing the modern, elegant Android Jetpack Compose architecture and high-concurrency streaming pipeline;
-* **[Huadeng](https://github.com/MiaoWuNYA/rikkahub-sillytavern-android)**: For laying the critical foundation of lossless mobile SillyTavern protocol and macro parsing;
-* **[LastChat](https://github.com/Cocolalilal/LastChat)**: For pioneering explorations in on-device RAG vector memory retrieval.
-
----
-
-## 📄 License
-
-This project is licensed under the [AGPL-3.0 License](LICENSE).
+Licensed under the [AGPL-3.0 License](LICENSE).

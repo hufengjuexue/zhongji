@@ -50,6 +50,7 @@ import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
+import me.rerere.ai.util.logRequestBody
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.mergeCustomHeaders
 import me.rerere.ai.util.parseErrorDetail
@@ -107,7 +108,7 @@ internal class InteractionsAPI(
         val requestBody = buildRequestBody(messages, params, stream = true)
         val request = buildRequest(providerSetting, params, requestBody)
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "streamText") { json.encodeToString(requestBody) }
 
         val decoder = InteractionsStreamDecoder(fallbackModel = params.model.modelId)
 
@@ -179,7 +180,7 @@ internal class InteractionsAPI(
             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .configureSessionHeaders(url, params.sessionId)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-goog-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
+            .addHeader("x-goog-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), params.sessionId))
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
     }
@@ -268,15 +269,20 @@ internal class InteractionsAPI(
     }
 
     internal fun buildInput(messages: List<UIMessage>): JsonArray = buildJsonArray {
-        messages
-            .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
-            .forEach { message ->
-                if (message.role == MessageRole.ASSISTANT) {
-                    addModelSteps(message)
-                } else {
-                    addUserStep(message)
-                }
+        val firstSystemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
+        messages.forEach { message ->
+            if (message.role == MessageRole.SYSTEM) {
+                if (message === firstSystemMessage) return@forEach
+                addUserStep(message)
+                return@forEach
             }
+            if (!message.isValidToUpload()) return@forEach
+            if (message.role == MessageRole.ASSISTANT) {
+                addModelSteps(message)
+            } else {
+                addUserStep(message)
+            }
+        }
     }
 
     private fun JsonArrayBuilder.addUserStep(message: UIMessage) {

@@ -22,9 +22,13 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.skills.SkillManager
 import me.rerere.rikkahub.data.skills.SkillMetadata
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.GraphNodeType
 import me.rerere.rikkahub.data.model.MemoryFile
+import me.rerere.rikkahub.data.model.MemoryGraphSnapshot
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Tag
+import me.rerere.rikkahub.data.repository.GraphEdgeInput
+import me.rerere.rikkahub.data.repository.MemoryGraphRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import kotlin.uuid.Uuid
@@ -35,6 +39,7 @@ class AssistantDetailVM(
     private val id: String,
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
+    private val memoryGraphRepository: MemoryGraphRepository,
     private val memoryConsolidationScheduler: MemoryConsolidationScheduler,
     private val filesManager: FilesManager,
     private val skillManager: SkillManager,
@@ -75,6 +80,14 @@ class AssistantDetailVM(
         }
         .stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
+        )
+
+    val memoryGraph: StateFlow<MemoryGraphSnapshot> = assistant
+        .flatMapLatest { currentAssistant ->
+            memoryGraphRepository.observeSnapshot(memoryIdOf(currentAssistant))
+        }
+        .stateIn(
+            scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = MemoryGraphSnapshot()
         )
 
     val memoryConsolidation: StateFlow<MemoryConsolidationStatus> = assistant
@@ -202,6 +215,64 @@ class AssistantDetailVM(
     fun deleteMemory(memory: MemoryFile) {
         viewModelScope.launch {
             memoryRepository.deleteFile(memoryIdOf(assistant.value), memory.path)
+        }
+    }
+
+    fun upsertGraphRelation(
+        fromName: String,
+        toName: String,
+        relation: String,
+        fromType: GraphNodeType = GraphNodeType.CHARACTER,
+        toType: GraphNodeType = GraphNodeType.CHARACTER,
+        excerpt: String = "",
+        replaceRelations: List<String> = emptyList(),
+    ) {
+        viewModelScope.launch {
+            memoryGraphRepository.upsertGraph(
+                assistantId = memoryIdOf(assistant.value),
+                entities = emptyList(),
+                edges = listOf(
+                    GraphEdgeInput(
+                        fromName = fromName,
+                        toName = toName,
+                        relation = relation,
+                        fromType = fromType,
+                        toType = toType,
+                        excerpt = excerpt,
+                        replaceRelationTypes = replaceRelations,
+                    )
+                ),
+            )
+        }
+    }
+
+    fun supersedeGraphEdge(edgeId: String) {
+        viewModelScope.launch {
+            memoryGraphRepository.supersedeEdge(edgeId)
+        }
+    }
+
+    fun restoreGraphEdge(edgeId: String) {
+        viewModelScope.launch {
+            memoryGraphRepository.restoreEdge(edgeId)
+        }
+    }
+
+    fun deleteGraphEdge(edgeId: String) {
+        viewModelScope.launch {
+            memoryGraphRepository.deleteEdge(edgeId)
+        }
+    }
+
+    fun deleteGraphNode(nodeId: String) {
+        viewModelScope.launch {
+            memoryGraphRepository.deleteNode(nodeId)
+        }
+    }
+
+    fun updateGraphNodeSummary(nodeId: String, summary: String) {
+        viewModelScope.launch {
+            memoryGraphRepository.updateNodeSummary(nodeId, summary)
         }
     }
 

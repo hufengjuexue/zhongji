@@ -1,16 +1,15 @@
 package me.rerere.rikkahub.data.ai.prompts
 
 internal val DEFAULT_SUGGESTION_PROMPT = """
-    I will provide you with some chat content in the `<content>` block, including conversations between the User and the AI assistant.
-    You need to act as the **User** to reply to the assistant, generating 3~5 appropriate and contextually relevant responses to help the assistant improve its answers.
+    I will provide recent conversation turns inside the `<content>` block.
+    Act as the **User** continuing this conversation or scene naturally, generating 3~5 short, distinct, in-character or contextually fitting reply options.
 
     Rules:
-    1. Reply directly with suggestions, do not add any formatting, and separate suggestions with newlines, no need to add markdown list formats.
-    2. Use {locale} language.
-    3. Ensure each suggestion is valid.
-    4. Each suggestion should not exceed 10 characters.
-    5. Imitate the user's previous conversational style.
-    6. Act as a User, not an Assistant!
+    1. Reply directly with the suggestions, separated by newlines, without numbering, bullets, or extra commentary.
+    2. Use {locale} language (or match the active scene language if clearer).
+    3. Keep each suggestion concise (ideally under 15 words / 25 characters) and playable immediately.
+    4. Match the user's tone, persona, pacing, and narrative style.
+    5. Speak only as the User, never break character or speak as the Assistant.
 
     <content>
     {content}

@@ -1,13 +1,11 @@
 package me.rerere.rikkahub.data.ai.prompts
 
 internal val DEFAULT_TITLE_PROMPT = """
-    I will give you some dialogue content in the `<content>` block.
-    You need to summarize the conversation between user and assistant into a short title.
-    1. The title language should be consistent with the user's primary language
-    2. Do not use punctuation or other special symbols
-    3. Reply directly with the title
-    4. Summarize using {locale} language
-    5. The title should not exceed 10 characters
+    I will give you some dialogue or story excerpt in the `<content>` block.
+    Summarize the conversation or scene into a short, evocative title.
+    1. Keep the title language consistent with the primary language of the content ({locale} if ambiguous).
+    2. Reply directly with only the title (no quotes or prefixes).
+    3. Keep it concise (typically under 20 characters in CJK or 6 words in English).
 
     <content>
     {content}

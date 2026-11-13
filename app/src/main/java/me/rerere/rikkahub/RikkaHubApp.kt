@@ -31,6 +31,7 @@ import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.remote.ModelsDevUpdater
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.data.service.ProactiveMessageWorker
 import me.rerere.rikkahub.data.skills.SkillManager
 import me.rerere.rikkahub.data.sync.BackupManager
 import me.rerere.rikkahub.data.sync.RestoreFailedException
@@ -115,6 +116,7 @@ class RikkaHubApp : Application() {
         // Resume media generations interrupted by the last process death
         resumeMediaCreations()
         resumeMemoryConsolidation()
+        resumeProactiveMessaging()
 
         // Increment launch count
         incrementLaunchCount()
@@ -144,6 +146,19 @@ class RikkaHubApp : Application() {
                 get<MemoryConsolidationScheduler>().resumePending()
             }.onFailure {
                 Log.e(TAG, "resumeMemoryConsolidation failed", it)
+            }
+        }
+    }
+
+    private fun resumeProactiveMessaging() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                val setting = get<SettingsStore>().awaitLoaded().proactiveMessageSetting.normalized()
+                if (setting.enabled) {
+                    ProactiveMessageWorker.scheduleNext(this@RikkaHubApp, setting)
+                }
+            }.onFailure {
+                Log.e(TAG, "resumeProactiveMessaging failed", it)
             }
         }
     }

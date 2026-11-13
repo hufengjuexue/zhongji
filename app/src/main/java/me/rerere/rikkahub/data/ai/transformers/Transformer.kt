@@ -17,6 +17,7 @@ class TransformerContext(
     val workspaceCwd: String? = null,
     val memories: List<MemoryFile> = emptyList(),
     val conversationId: Any? = null,
+    val overflowMessages: List<UIMessage> = emptyList(),
 )
 
 interface MessageTransformer {
@@ -71,6 +72,7 @@ suspend fun List<UIMessage>.transforms(
     workspaceCwd: String? = null,
     memories: List<MemoryFile> = emptyList(),
     conversationId: Any? = null,
+    overflowMessages: List<UIMessage> = emptyList(),
 ): List<UIMessage> {
     val ctx = TransformerContext(
         context = context,
@@ -81,6 +83,7 @@ suspend fun List<UIMessage>.transforms(
         workspaceCwd = workspaceCwd,
         memories = memories,
         conversationId = conversationId,
+        overflowMessages = overflowMessages,
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)

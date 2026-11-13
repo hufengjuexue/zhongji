@@ -112,12 +112,14 @@ import me.rerere.rikkahub.ui.pages.mediacreation.MediaCreationPage
 import me.rerere.rikkahub.ui.pages.mediacreation.MediaCreationSessionsPage
 import me.rerere.rikkahub.ui.pages.search.SearchPage
 import me.rerere.rikkahub.ui.pages.setting.SettingAboutPage
+import me.rerere.rikkahub.ui.pages.setting.PersonaPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesThemePage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNotificationPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesGeneralPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNetworkPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesUIPage
+import me.rerere.rikkahub.ui.pages.setting.SettingProactiveMessagePage
 import me.rerere.rikkahub.ui.pages.setting.SettingThemePage
 import me.rerere.rikkahub.ui.pages.setting.SettingDonatePage
 import me.rerere.rikkahub.ui.pages.setting.SettingFilesPage
@@ -395,7 +397,7 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.AssistantMemory> { key ->
-                                AssistantMemoryPage(key.id)
+                                AssistantMemoryPage(key.id, key.initialTab)
                             }
 
                             entry<Screen.MemoryFile> { key ->
@@ -473,6 +475,12 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SettingPreferencesUI> {
                                 SettingPreferencesUIPage()
+                            }
+                            entry<Screen.Persona> {
+                                PersonaPage()
+                            }
+                            entry<Screen.SettingProactiveMessage> {
+                                SettingProactiveMessagePage()
                             }
 
                             entry<Screen.SettingPreferencesNetwork> {
@@ -681,7 +689,7 @@ sealed interface Screen : NavKey {
     data class AssistantPrompt(val id: String) : Screen
 
     @Serializable
-    data class AssistantMemory(val id: String) : Screen
+    data class AssistantMemory(val id: String, val initialTab: Int = 0) : Screen
 
     /** 记忆库 [memoryId] 里的一个文件，[path] 为 null 时新建 */
     @Serializable
@@ -737,6 +745,12 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingPreferencesUI : Screen
+
+    @Serializable
+    data object Persona : Screen
+
+    @Serializable
+    data object SettingProactiveMessage : Screen
 
     @Serializable
     data object SettingPreferencesNetwork : Screen

@@ -15,6 +15,7 @@ import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TRANSLATION_PROMPT
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.Persona
 import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.QuickMessage
 import me.rerere.rikkahub.data.model.Tag
@@ -51,8 +52,11 @@ data class Settings(
     val translateThinkingBudget: Int = 0,
     // 翻译页的目标语言，存 BCP 47 语言标签
     val translateTargetLanguage: String = "zh-CN",
-    val enableSuggestion: Boolean = true,
+    val enableSuggestion: Boolean = false,
     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
+    // 回复结束后上下文占用达到聊天模型上下文窗口的 autoCompressThreshold 时自动压缩历史
+    val enableAutoCompress: Boolean = true,
+    val autoCompressThreshold: Float = 0.8f,
     val ocrModelId: Uuid = Uuid.random(),
     val ocrPrompt: String = DEFAULT_OCR_PROMPT,
     val assistantId: Uuid = DEFAULT_ASSISTANT_ID,
@@ -88,7 +92,20 @@ data class Settings(
     val vectorStorageModelId: Uuid? = null,
     val vectorStorageThreshold: Float = 0.25f,
     val vectorStorageScanDepth: Int = 2,
+    // 玩家人设 (User Personas) 与主动消息
+    val personas: List<Persona> = emptyList(),
+    val activePersonaId: Uuid? = null,
+    val proactiveMessageSetting: ProactiveMessageSetting = ProactiveMessageSetting(),
 ) {
+    fun resolveActivePersona(assistantId: Uuid? = null): Persona? {
+        val persona = personas.firstOrNull { it.id == activePersonaId } ?: return null
+        if (!persona.enabled) return null
+        if (assistantId != null && persona.lockedCharacterIds.isNotEmpty() && assistantId !in persona.lockedCharacterIds) {
+            return null
+        }
+        return persona
+    }
+
     companion object {
         // 构造一个用于初始化的settings, 但它不能用于保存，防止使用初始值存储
         fun dummy() = Settings(init = true)
@@ -170,8 +187,11 @@ data class DisplaySetting(
     val pasteLongTextThreshold: Int = 1000,
     val sendOnEnter: Boolean = false,
     val enableAutoScroll: Boolean = true,
-    val enableLatexRendering: Boolean = true,
-    val enableQuoteHighlight: Boolean = false,
+    val enableLatexRendering: Boolean = false,
+    val enableQuoteHighlight: Boolean = true,
+    val quoteColorHex: String = "",
+    val enableBracketButton: Boolean = false,
+    val bracketButtonSymbol: String = "（）",
     val enableBlurEffect: Boolean = false,
     val backgroundEffectType: BackgroundEffectType = BackgroundEffectType.BLUR,
     val chatFontFamily: ChatFontFamily = ChatFontFamily.DEFAULT,

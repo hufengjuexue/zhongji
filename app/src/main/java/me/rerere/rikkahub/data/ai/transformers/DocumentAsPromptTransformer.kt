@@ -25,7 +25,11 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
                         if (documents.isNotEmpty()) {
                             documents.forEach { document ->
                                 val content = readDocumentContent(document)
-                                val path = resolveWorkspacePath(document)
+                                val path = if (ctx.assistant.workspaceId != null) {
+                                    resolveWorkspacePath(document)
+                                } else {
+                                    null
+                                }
                                 val pathAttr = path?.let { " path=\"$it\"" } ?: ""
                                 val prompt = """
                                   <UploadFile name="${document.fileName}"$pathAttr>

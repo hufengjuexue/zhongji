@@ -94,6 +94,10 @@ val dataSourceModule = module {
     }
 
     single {
+        get<AppDatabase>().memoryGraphDao()
+    }
+
+    single {
         get<AppDatabase>().genMediaDao()
     }
 
@@ -144,6 +148,7 @@ val dataSourceModule = module {
             providerManager = get(),
             usageRecorder = get(),
             memoryRepository = get(),
+            memoryGraphRepository = get(),
             conversationRepo = get(),
             consolidationDao = get(),
             settingsStore = get(),

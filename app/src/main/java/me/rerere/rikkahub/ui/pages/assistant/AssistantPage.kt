@@ -243,7 +243,12 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         }
     }
 
-    AssistantCreationSheet(createState)
+    AssistantCreationSheet(
+        state = createState,
+        onImportLorebook = { book ->
+            vm.updateSettings { it.copy(lorebooks = it.lorebooks + book) }
+        },
+    )
 
     RikkaConfirmDialog(
         show = deleteTarget != null,
@@ -352,6 +357,7 @@ private fun AssistantTagsFilterRow(
 @Composable
 private fun AssistantCreationSheet(
     state: EditState<Assistant>,
+    onImportLorebook: (me.rerere.rikkahub.data.model.Lorebook) -> Unit,
 ) {
     state.EditStateContent { assistant, update ->
         ModalBottomSheet(
@@ -387,6 +393,7 @@ private fun AssistantCreationSheet(
                         update(it)
                         state.confirm()
                     },
+                    onImportLorebook = onImportLorebook,
                     modifier = Modifier.fillMaxWidth(),
                 )
 

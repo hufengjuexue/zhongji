@@ -446,6 +446,66 @@ private fun AssistantPromptContent(
         }
 
         SectionHeader(
+            title = stringResource(R.string.assistant_page_alternate_greetings),
+            description = stringResource(R.string.assistant_page_alternate_greetings_desc),
+            action = {
+                SectionAddButton(
+                    onClick = {
+                        onUpdate(
+                            assistant.copy(
+                                alternateGreetings = assistant.alternateGreetings + ""
+                            )
+                        )
+                    }
+                )
+            },
+        )
+        if (assistant.alternateGreetings.isNotEmpty()) {
+            CardGroup {
+                assistant.alternateGreetings.fastForEachIndexed { index, greeting ->
+                    formItem {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.assistant_page_alternate_greeting_item, index + 1),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            IconButton(
+                                onClick = {
+                                    onUpdate(
+                                        assistant.copy(
+                                            alternateGreetings = assistant.alternateGreetings.filterIndexed { i, _ -> i != index }
+                                        )
+                                    )
+                                }
+                            ) {
+                                Icon(HugeIcons.Cancel01, stringResource(R.string.delete))
+                            }
+                        }
+                        OutlinedTextField(
+                            value = greeting,
+                            onValueChange = { text ->
+                                onUpdate(
+                                    assistant.copy(
+                                        alternateGreetings = assistant.alternateGreetings.mapIndexed { i, g ->
+                                            if (i == index) text else g
+                                        }
+                                    )
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 6,
+                        )
+                    }
+                }
+            }
+        }
+
+        SectionHeader(
             title = stringResource(R.string.assistant_page_regex_title),
             description = stringResource(R.string.assistant_page_regex_desc),
             action = {

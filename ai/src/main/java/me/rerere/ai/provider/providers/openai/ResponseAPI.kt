@@ -55,6 +55,7 @@ import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
+import me.rerere.ai.util.logRequestBody
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.mergeCustomHeaders
 import me.rerere.ai.util.parseErrorDetail
@@ -108,7 +109,7 @@ class ResponseAPI(
         capabilities = resolveResponseProviderCapabilities(baseUrl.toHttpUrl().host),
         configureRequest = {
             headers(mergeCustomHeaders(params.customHeaders))
-            addHeader("Authorization", "Bearer ${keyRoulette.next(apiKey, id.toString())}")
+            addHeader("Authorization", "Bearer ${keyRoulette.next(apiKey, id.toString(), params.sessionId)}")
             configureReferHeaders(baseUrl)
             configureSessionHeaders(baseUrl, params.sessionId)
         },
@@ -132,7 +133,7 @@ class ResponseAPI(
             .addHeader("Content-Type", "application/json")
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "generateText") { json.encodeToString(requestBody) }
 
         // await() waits for the response headers; reading the body can still block.
         client.newCall(request).await().use { response ->
@@ -164,7 +165,7 @@ class ResponseAPI(
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "streamText") { json.encodeToString(requestBody) }
 
         val decoder = ResponseApiStreamDecoder()
 
@@ -336,14 +337,16 @@ class ResponseAPI(
     }
 
     internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
+        val firstSystemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
         messages
             .filter { message ->
-                message.role != MessageRole.SYSTEM && (
-                    message.isValidToUpload() || message.parts.any { part ->
-                        part is UIMessagePart.Reasoning &&
-                            part.metadataAs<OpenAIReasoningMetadata>()?.encryptedContent != null
-                    }
-                    )
+                if (message.role == MessageRole.SYSTEM) {
+                    return@filter message !== firstSystemMessage && message.isValidToUpload()
+                }
+                message.isValidToUpload() || message.parts.any { part ->
+                    part is UIMessagePart.Reasoning &&
+                        part.metadataAs<OpenAIReasoningMetadata>()?.encryptedContent != null
+                }
             }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {

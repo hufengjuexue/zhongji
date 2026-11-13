@@ -166,7 +166,7 @@ fun SettingAboutPage() {
                         )
 
                         Text(
-                            text = "RikkaHub",
+                            text = "Kairos",
                             style = MaterialTheme.typography.headlineLargeEmphasized.copy(
                                 fontWeight = FontWeight.Black,
                             ),

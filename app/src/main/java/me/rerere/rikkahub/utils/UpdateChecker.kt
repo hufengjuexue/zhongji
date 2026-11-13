@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 import me.rerere.rikkahub.utils.l10n
 
 /** 本定制版的仓库。GitHub Release 是权威来源，仓库根目录的 update.json 是兜底快照。 */
-private const val REPO = "hufengjuexue/zhongji"
+private const val REPO = "hufengjuexue/kairos"
 private const val BRANCH = "main"
 
 private const val TAG = "UpdateChecker"
@@ -282,7 +282,7 @@ class UpdateChecker(
     }
 
     private fun userAgent(): String =
-        "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}"
+        "Kairos ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}"
 
     /** 给 GitHub 资源地址套一个代理前缀；不是 GitHub 地址就原样返回 null。 */
     private fun withAssetMirror(url: String): String? {
