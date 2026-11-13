@@ -23,7 +23,7 @@ private const val TAG = "MemoryVectorTail"
 /**
  * 记忆库 + 溢出历史对话自动尾部近因注入转换器：
  * - profile.md 与 preferences.md 已在头部常驻；
- * - 本转换器对 topics/*.md 记忆切片与超出上下文窗口（limitContext）的早先原始对话按语义切块；
+ * - 本转换器对 topics/<name>.md 记忆切片与超出上下文窗口（limitContext）的早先原始对话按语义切块；
  * - 优先走云端 Embedding 余弦相似度检索并持久化到本地 VectorStoreCache；无可用 Embedding 模型或接口异常时自动退回本地词法相关性兜底；
  * - 将命中的 Top-K 片段以独立 synthetic system 消息注入最后一条 User 消息前，同轮工具多步循环冻结召回结果，100% 保护前缀缓存。
  */

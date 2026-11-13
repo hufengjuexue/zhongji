@@ -1637,7 +1637,7 @@ class ChatService(
         message: UIMessage,
     ) {
         mutate(conversationId) { conversation ->
-            conversation.appendMessage(message)
+            conversation.copy(messageNodes = conversation.messageNodes + MessageNode.of(message))
         }
     }
 

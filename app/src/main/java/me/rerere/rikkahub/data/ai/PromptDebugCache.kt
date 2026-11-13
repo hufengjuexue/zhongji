@@ -263,7 +263,7 @@ object PromptDebugCache {
                 """
                 <div class="msg" style="$borderStyle">
                   <div class="head" style="color: $roleColor">#${index + 1} · ${roleName.uppercase()}${
-                    message.name?.takeIf { it.isNotBlank() }?.let { " · ${escapeHtml(it)}" } ?: ""
+                    message.modelSnapshot?.displayName?.takeIf { it.isNotBlank() }?.let { " · ${escapeHtml(it)}" } ?: ""
                 }</div>
                   ${if (content.isNotBlank()) """<pre class="text">${escapeHtml(content)}</pre>""" else ""}
                   ${
