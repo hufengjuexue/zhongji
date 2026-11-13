@@ -268,6 +268,7 @@ private fun ModelSettingsPage(
         item(key = "core_chat") {
             val containerColor = MaterialTheme.colorScheme.primaryContainer
             val contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            val chatModelTitle = stringResource(R.string.setting_model_page_chat_model)
             CardGroup(
                 title = {
                     CoreSectionHeader(
@@ -280,7 +281,7 @@ private fun ModelSettingsPage(
             ) {
                 modelItem(
                     icon = HugeIcons.BubbleChat,
-                    title = stringResource(R.string.setting_model_page_chat_model),
+                    title = chatModelTitle,
                     description = "唯一主力大脑，负责沉浸角色扮演、文风输出与轻量 Agent 工具调度",
                     state = chatModel,
                     iconContainerColor = containerColor,
@@ -478,13 +479,18 @@ private fun ModelSettingsPage(
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     val fastBg = MaterialTheme.colorScheme.tertiaryContainer
                     val fastFg = MaterialTheme.colorScheme.onTertiaryContainer
+                    val fastModelTitle = stringResource(R.string.setting_model_page_fast_model)
+                    val fastModelDesc = stringResource(R.string.setting_model_page_fast_model_desc)
+                    val memoryModelTitle = stringResource(R.string.setting_model_page_memory_model)
+                    val memoryModelDesc = stringResource(R.string.setting_model_page_memory_model_desc)
+                    val memoryModelPlaceholder = stringResource(R.string.setting_model_page_memory_model_follow_fast)
                     CardGroup(
                         title = { Text("后台辅助与做梦整理") },
                     ) {
                         modelItem(
                             icon = HugeIcons.Zap,
-                            title = stringResource(R.string.setting_model_page_fast_model),
-                            description = stringResource(R.string.setting_model_page_fast_model_desc),
+                            title = fastModelTitle,
+                            description = fastModelDesc,
                             state = fastModel,
                             iconContainerColor = fastBg,
                             iconContentColor = fastFg,
@@ -516,12 +522,12 @@ private fun ModelSettingsPage(
                         )
                         modelItem(
                             icon = HugeIcons.Brain02,
-                            title = stringResource(R.string.setting_model_page_memory_model),
-                            description = stringResource(R.string.setting_model_page_memory_model_desc),
+                            title = memoryModelTitle,
+                            description = memoryModelDesc,
                             state = memoryModel,
                             iconContainerColor = fastBg,
                             iconContentColor = fastFg,
-                            placeholder = stringResource(R.string.setting_model_page_memory_model_follow_fast),
+                            placeholder = memoryModelPlaceholder,
                             onClear = { vm.updateSettings { latest -> latest.copy(memoryModelId = null) } },
                         )
                         if (memoryModel.currentModel != null) {
@@ -541,21 +547,25 @@ private fun ModelSettingsPage(
 
                     val toolBg = MaterialTheme.colorScheme.secondaryContainer
                     val toolFg = MaterialTheme.colorScheme.onSecondaryContainer
+                    val translateModelTitle = stringResource(R.string.setting_model_page_translate_model)
+                    val translateModelDesc = stringResource(R.string.setting_model_page_translate_model_desc)
+                    val ocrModelTitle = stringResource(R.string.setting_model_page_ocr_model)
+                    val ocrModelDesc = stringResource(R.string.setting_model_page_ocr_model_desc)
                     CardGroup(
                         title = { Text("翻译与识图专项") },
                     ) {
                         modelItem(
                             icon = HugeIcons.Translate,
-                            title = stringResource(R.string.setting_model_page_translate_model),
-                            description = stringResource(R.string.setting_model_page_translate_model_desc),
+                            title = translateModelTitle,
+                            description = translateModelDesc,
                             state = translateModel,
                             iconContainerColor = toolBg,
                             iconContentColor = toolFg,
                         )
                         modelItem(
                             icon = HugeIcons.ScanText,
-                            title = stringResource(R.string.setting_model_page_ocr_model),
-                            description = stringResource(R.string.setting_model_page_ocr_model_desc),
+                            title = ocrModelTitle,
+                            description = ocrModelDesc,
                             state = ocrModel,
                             iconContainerColor = toolBg,
                             iconContentColor = toolFg,
