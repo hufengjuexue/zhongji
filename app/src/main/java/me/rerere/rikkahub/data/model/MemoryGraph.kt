@@ -147,9 +147,15 @@ data class MemoryGraphSnapshot(
     }
 
     companion object {
-        private val WHITESPACE = Regex("\\s+")
-
-        fun normalizeGraphName(raw: String): String =
-            raw.trim().replace(WHITESPACE, " ").lowercase()
+        /**
+         * 折叠大小写、空白与标点/符号，只保留字母和数字，确保跨格式命名稳定对齐。
+         */
+        fun normalizeGraphName(raw: String): String = buildString(raw.length) {
+            for (ch in raw) {
+                if (ch.isLetterOrDigit()) {
+                    append(ch.lowercaseChar())
+                }
+            }
+        }
     }
 }

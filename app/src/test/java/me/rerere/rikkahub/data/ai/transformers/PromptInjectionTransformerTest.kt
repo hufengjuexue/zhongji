@@ -505,14 +505,14 @@ class PromptInjectionTransformerTest {
         val injectedText = getMessageText(result[1])
         assertTrue(injectedText.contains("Higher priority"))
         assertTrue(injectedText.contains("Lower priority"))
-        // Higher priority should come first
-        assertTrue(injectedText.indexOf("Higher priority") < injectedText.indexOf("Lower priority"))
+        // Higher priority should be appended later so it sits closer to latest context
+        assertTrue(injectedText.indexOf("Lower priority") < injectedText.indexOf("Higher priority"))
     }
     // endregion
 
     // region Priority tests
     @Test
-    fun `injections should be ordered by priority descending`() {
+    fun `injections should be ordered by priority ascending so higher priority sits closer to latest context`() {
         val id1 = Uuid.random()
         val id2 = Uuid.random()
         val id3 = Uuid.random()
@@ -536,10 +536,10 @@ class PromptInjectionTransformerTest {
         )
 
         val systemText = getMessageText(result[0])
-        // Higher priority should come first when joining
+        // Lower priority first, higher priority later when joining
         assertTrue(systemText.contains("Priority 3"))
-        assertTrue(systemText.indexOf("Priority 3") < systemText.indexOf("Priority 2"))
-        assertTrue(systemText.indexOf("Priority 2") < systemText.indexOf("Priority 1"))
+        assertTrue(systemText.indexOf("Priority 1") < systemText.indexOf("Priority 2"))
+        assertTrue(systemText.indexOf("Priority 2") < systemText.indexOf("Priority 3"))
     }
     // endregion
 
