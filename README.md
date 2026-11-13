@@ -6,7 +6,7 @@
 
 ### Android-Native Immersive AI Roleplay Client
 
-**Pure Native Compose UI · Prompt Cache Protection · Tail Vector Memory Recall · Sovereign RP Core**
+**Pure Native Compose UI · Prompt Cache Protection · Tail Vector Recall · Temporal Relation Graph**
 
 [**简体中文**](README_CN.md) | [**English**](README.md)
 
@@ -34,6 +34,8 @@
 * **Prefix-Safe Memory Listing**: Keeps the system memory directory stable without mutable daily date stamps that break Prompt Caching.
 * **Hybrid Tail Injection**: Recalls relevant chunks from both `topics/*.md` and conversation turns truncated by context limits or compaction, freezing recalled context across multi-step tool calls within the same turn.
 * **Compact Binary Vector Cache (`VEC1`)**: Stores normalized Float32 embeddings cleanly on disk with backward compatibility for legacy `.vec` files and lazy LRU-style pruning.
+* **Temporal Relation Graph**: Built-in SQLite entity-relation graph (`recall_relations` / `graph_upsert_relations`) tracks characters, factions, locations, items, and vows with `valid_from` / `valid_to` / `is_current` lifecycle fields — preserving past states chronologically rather than overwriting history.
+* **Pre-Compression Extraction & Visual Graph Tab**: Automatically salvages unrecorded facts and relation shifts right before context compression collapses older turns, with an interactive Compose network canvas and current-vs-past timeline inspector inside Assistant Memory.
 
 ### 2. SillyTavern Card Compatibility
 * **V2 / V3 PNG & JSON Import**: Automatically restores character avatars, system prompts, first greetings, alternate greetings, `mes_example`, and `post_history_instructions`.
