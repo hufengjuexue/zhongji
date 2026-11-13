@@ -133,6 +133,15 @@ class SettingsStore internal constructor(
         val VECTOR_STORAGE_THRESHOLD = floatPreferencesKey("vector_storage_threshold")
         val VECTOR_STORAGE_SCAN_DEPTH = intPreferencesKey("vector_storage_scan_depth")
 
+        // 玩家人设与主动消息
+        val PERSONAS = stringPreferencesKey("personas")
+        val ACTIVE_PERSONA_ID = stringPreferencesKey("active_persona_id")
+        val PROACTIVE_MESSAGE_SETTING = stringPreferencesKey("proactive_message_setting")
+
+        // 自动压缩
+        val ENABLE_AUTO_COMPRESS = booleanPreferencesKey("enable_auto_compress")
+        val AUTO_COMPRESS_THRESHOLD = floatPreferencesKey("auto_compress_threshold")
+
         // 提供商
         val PROVIDERS = stringPreferencesKey("providers")
 

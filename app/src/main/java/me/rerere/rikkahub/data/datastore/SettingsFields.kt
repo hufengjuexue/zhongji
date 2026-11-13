@@ -113,6 +113,10 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
         uuid(OCR_MODEL, Settings::ocrModelId) { copy(ocrModelId = it) },
         plain(OCR_PROMPT, Settings::ocrPrompt) { copy(ocrPrompt = it) },
 
+        // 自动压缩
+        plain(ENABLE_AUTO_COMPRESS, Settings::enableAutoCompress) { copy(enableAutoCompress = it) },
+        plain(AUTO_COMPRESS_THRESHOLD, Settings::autoCompressThreshold) { copy(autoCompressThreshold = it) },
+
         // 提供商
         json(PROVIDERS, Settings::providers) { copy(providers = it) },
 
@@ -184,6 +188,17 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
         ),
         plain(VECTOR_STORAGE_THRESHOLD, Settings::vectorStorageThreshold) { copy(vectorStorageThreshold = it) },
         plain(VECTOR_STORAGE_SCAN_DEPTH, Settings::vectorStorageScanDepth) { copy(vectorStorageScanDepth = it) },
+
+        // 玩家人设与主动消息
+        json(PERSONAS, Settings::personas) { copy(personas = it) },
+        SettingsField(
+            ACTIVE_PERSONA_ID,
+            Settings::activePersonaId,
+            { copy(activePersonaId = it) },
+            encode = { it?.toString() },
+            decode = { Uuid.parse(it) },
+        ),
+        json(PROACTIVE_MESSAGE_SETTING, Settings::proactiveMessageSetting) { copy(proactiveMessageSetting = it) },
     )
 }
 

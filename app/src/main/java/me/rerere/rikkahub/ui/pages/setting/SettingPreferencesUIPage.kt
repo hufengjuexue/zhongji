@@ -220,38 +220,17 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                     )
                     if (displaySetting.enableQuoteHighlight) {
                         formItem(
-                            headlineContent = { Text(stringResource(R.string.setting_display_page_rp_colors_title)) },
+                            headlineContent = { Text(stringResource(R.string.setting_display_page_quote_color)) },
                             supportingContent = { Text(stringResource(R.string.setting_display_page_rp_colors_desc)) },
                         ) {
-                            Row(
+                            OutlinedTextField(
+                                value = displaySetting.quoteColorHex,
+                                onValueChange = { updateDisplaySetting(displaySetting.copy(quoteColorHex = it.take(9))) },
+                                label = { Text(stringResource(R.string.setting_display_page_quote_color)) },
+                                placeholder = { Text("#E18A24") },
+                                singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                OutlinedTextField(
-                                    value = displaySetting.quoteColorHex,
-                                    onValueChange = { updateDisplaySetting(displaySetting.copy(quoteColorHex = it.take(9))) },
-                                    label = { Text(stringResource(R.string.setting_display_page_quote_color)) },
-                                    placeholder = { Text("#E18A24") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                OutlinedTextField(
-                                    value = displaySetting.bracketColorHex,
-                                    onValueChange = { updateDisplaySetting(displaySetting.copy(bracketColorHex = it.take(9))) },
-                                    label = { Text(stringResource(R.string.setting_display_page_bracket_color)) },
-                                    placeholder = { Text("#7EAFC4") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                OutlinedTextField(
-                                    value = displaySetting.italicsColorHex,
-                                    onValueChange = { updateDisplaySetting(displaySetting.copy(italicsColorHex = it.take(9))) },
-                                    label = { Text(stringResource(R.string.setting_display_page_italics_color)) },
-                                    placeholder = { Text("#919191") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
+                            )
                         }
                     }
                     switchItem(

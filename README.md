@@ -36,7 +36,7 @@
 * **Compact Binary Vector Cache (`VEC1`)**: Stores normalized Float32 embeddings cleanly on disk with backward compatibility for legacy `.vec` files and lazy LRU-style pruning.
 
 ### 2. SillyTavern Card Compatibility
-* **V2 / V3 PNG & JSON Import**: Automatically restores character avatars, system prompts, first greetings, `mes_example`, and `post_history_instructions`.
+* **V2 / V3 PNG & JSON Import**: Automatically restores character avatars, system prompts, first greetings, alternate greetings, `mes_example`, and `post_history_instructions`.
 * **Embedded Lorebook & Regex Unpacking**: Automatically unpacks `character_book` (array or object entries) into Lorebooks and converts `extensions.regex_scripts` (normalizing `/pattern/flags`) into message regex rules.
 
 ### 3. Native Android Architecture

@@ -65,6 +65,7 @@ import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
+import me.rerere.ai.util.logRequestBody
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.mergeCustomHeaders
 import me.rerere.ai.util.parseErrorDetail
@@ -305,7 +306,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "generateText") { json.encodeToString(requestBody) }
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
@@ -356,10 +357,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        logRequestBody(TAG, "streamText") { json.encodeToString(requestBody) }
 
-        requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
+        // 整个请求体那一行会被 logcat 截断，再逐条打印一遍消息
+        requestBody["messages"]!!.jsonArray.forEach { message ->
+            logRequestBody(TAG, "streamText") { message.toString() }
         }
 
         val decoder = ClaudeStreamDecoder()
@@ -796,19 +798,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
-        is UIMessagePart.Reasoning -> {
-            val redacted = metadataAs<ClaudeReasoningMetadata>()?.redacted
-            if (redacted != null) {
-                buildJsonObject {
-                    put("type", "redacted_thinking")
-                    put("data", redacted)
-                }
+        is UIMessagePart.Reasoning -> buildJsonObject {
+            val claudeMetadata = metadataAs<ClaudeReasoningMetadata>()
+            val redactedData = claudeMetadata?.redactedData
+            if (redactedData != null) {
+                put("type", "redacted_thinking")
+                put("data", redactedData)
             } else {
-                buildJsonObject {
-                    put("type", "thinking")
-                    put("thinking", reasoning)
-                    metadataAs<ClaudeReasoningMetadata>()?.signature?.let { put("signature", it) }
-                }
+                put("type", "thinking")
+                put("thinking", reasoning)
+                claudeMetadata?.signature?.let { put("signature", it) }
             }
         }
 
@@ -868,8 +867,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                             UIMessagePart.Reasoning(
                                 reasoning = "",
                                 createdAt = Clock.System.now(),
-                                finishedAt = Clock.System.now(),
-                                metadata = ClaudeReasoningMetadata(redacted = data).toMetadata(),
+                                finishedAt = null,
+                                metadata = ClaudeReasoningMetadata(redactedData = data).toMetadata(),
                             )
                         )
                     }
