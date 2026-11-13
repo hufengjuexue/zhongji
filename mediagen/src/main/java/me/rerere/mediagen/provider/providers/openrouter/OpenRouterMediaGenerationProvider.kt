@@ -53,8 +53,8 @@ class OpenRouterMediaGenerationProvider(
 // X-Title / HTTP-Referer 是 OpenRouter 用来标识来源应用的，和聊天请求保持一致
 internal fun MediaGenerationProviderSetting.OpenRouter.request(path: String): Request.Builder =
     bearerRequest("${baseUrl.trimEnd('/')}$path", apiKey)
-        .addHeader("X-Title", "RikkaHub")
-        .addHeader("HTTP-Referer", "https://rikka-ai.com")
+        .addHeader("X-Title", "Kairos")
+        .addHeader("HTTP-Referer", "https://github.com/hufengjuexue/kairos")
 
 // 像素尺寸（1280x720）走 size，档位（2K、1080p）走 resolution
 internal fun JsonObjectBuilder.putResolution(resolution: String?) {

@@ -1,8 +1,8 @@
 {
   "conversations": {
     "meta": {
-      "title": "RikkaHub Web",
-      "description": "RikkaHub web client"
+      "title": "Kairos Web",
+      "description": "Kairos web client"
     },
     "preview": {
       "empty_message": "Empty message",

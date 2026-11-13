@@ -4,6 +4,8 @@
 
 # Kairos
 
+> **Kairos (Ancient Greek: καιρός)** — Unlike *Chronos* (linear, mechanical clock time), *Kairos* stands for "the opportune, pivotal moment." The right memory surfaces at the exact turn it matters, rather than drowning the prompt in static bloat.
+
 ### Android-Native Immersive AI Roleplay Client
 
 **Pure Native Compose UI · Prompt Cache Protection · Tail Vector Recall · Temporal Relation Graph**
@@ -47,10 +49,29 @@
 
 ---
 
+## Modern RP Philosophy & Three-Model Collaboration
+
+> **Experience = Logic Baseline × Language Granularity** — Modern frontier models already know how to roleplay. Instead of ten-thousand-word jailbreak boilerplate and sampler-slider mysticism, give them a clean prefix cache and surgical long-term recall.
+
+### 1. Modern RP: Source Decoupling & Prefix Cache First
+* **Zero Bloat, Pure Signal**: Drops archaic sampler-slider clutter and heavy webview wrappers, decoupling lore and long-term state into local **Source (Markdown memory workspace)** files and a **Room temporal relation graph**.
+* **Byte-Stable Prefix**: System prompts, character cards, and core profile anchors stay pinned and byte-stable at the prefix, maximizing cloud Prompt Caching hit rates across long sessions.
+
+### 2. Three-Model Collaboration (`Chat × Embedding × Decision`)
+Kairos splits real-time storytelling and long-term memory across three focused model roles:
+1. **01 · Primary Chat Model**: Drives narrative continuity, persona logic, prose texture, and tool invocation.
+2. **02 · Embedding Model (Stage 1 Coarse Recall)**: Encodes `topics/*.md` and out-of-window historical turns into a compact local `VEC1` binary index (with automatic lexical fallback when unconfigured) for millisecond candidate retrieval.
+3. **03 · Decision / Rerank Model (Stage 2 Precision Filtering)**: Uses `gemini-decision-1` (`POST /v1beta/decisions` single-forward batch scoring) or a fast non-thinking reranker to distill candidates into Top-K relevance, injected by `MemoryVectorTailTransformer` **only right before the latest `USER` turn** so prefix Prompt Caching remains 100% intact.
+
+### 3. Focused on RP, Yet Ready as a Lightweight Agent
+While laser-focused on immersive roleplay, **Kairos** cleanly retains **RikkaHub**'s practical Agent foundation—**MCP tool integration**, **Agent Skills**, **PRoot Ubuntu / SSH workspace file & terminal access**, and **web search**—giving you capable lightweight Agent workflows without shipping bloated multi-hundred-MB local runtimes.
+
+---
+
 ## Quick Start
 
 1. **Install**: Download the latest `kairos-*.apk` from [Releases](https://github.com/hufengjuexue/kairos/releases).
-2. **Configure Models**: Open **Settings → Models**, configure your primary chat model and (optionally) an Embedding model under **General → Vector Storage**.
+2. **Configure the Trio**: Open **Settings → Model Settings** to set your **Chat Model**, and optionally pick your **Embedding Model** (Stage 1) and **Decision / Rerank Model** (Stage 2).
 3. **Import Character**: Import any V2/V3 PNG or JSON character card and start talking.
 
 ---

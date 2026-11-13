@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+
+    <!-- Deep obsidian medallion within Android 12+ 160dp splash safe zone -->
+    <path android:pathData="M144,64 A80,80 0 1,1 143.99,64 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="144"
+                android:centerY="144"
+                android:gradientRadius="84"
+                android:startColor="#FF1B1E2B"
+                android:centerColor="#FF10121A"
+                android:endColor="#FF090A0F" />
+        </aapt:attr>
+    </path>
+
+    <!-- Hairline metallic bezel -->
+    <path
+        android:pathData="M144,64 A80,80 0 1,1 143.99,64 Z"
+        android:strokeWidth="1.2"
+        android:strokeColor="#38D8C99B"
+        android:fillColor="#00000000" />
+
+    <!-- Soft ambient gold singularity aura -->
+    <path android:pathData="M144,104 A40,40 0 1,1 143.99,104 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="144"
+                android:centerY="144"
+                android:gradientRadius="40"
+                android:startColor="#66FFD88A"
+                android:centerColor="#26E8B355"
+                android:endColor="#00000000" />
+        </aapt:attr>
+    </path>
+
+    <!-- Diagonal temporal light beam -->
+    <path android:pathData="M106,204 L182,84 L184.4,85.2 L108.4,205.2 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="106"
+                android:startY="204"
+                android:endX="184"
+                android:endY="84"
+                android:startColor="#00F5D28A"
+                android:centerColor="#CCF8DFA6"
+                android:endColor="#00F5D28A" />
+        </aapt:attr>
+    </path>
+
+    <!-- Left brushed-platinum orbital horizon arc -->
+    <path android:pathData="M86,88 C126,112 134,132 134,144 C134,156 126,176 86,200 C114,174 121,158 121,144 C121,130 114,114 86,88 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="86"
+                android:startY="88"
+                android:endX="136"
+                android:endY="188"
+                android:startColor="#44A0A7BC"
+                android:centerColor="#FFF3EAD3"
+                android:endColor="#447D8499" />
+        </aapt:attr>
+    </path>
+
+    <!-- Left subtle rim reflection -->
+    <path
+        android:pathData="M88,90 C123,112 133,131 133,144 C133,157 123,176 88,198"
+        android:strokeWidth="1.1"
+        android:strokeColor="#AAFFF1CE"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Right brushed-platinum orbital horizon arc -->
+    <path android:pathData="M202,88 C162,112 154,132 154,144 C154,156 162,176 202,200 C174,174 167,158 167,144 C167,130 174,114 202,88 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="202"
+                android:startY="88"
+                android:endX="152"
+                android:endY="188"
+                android:startColor="#44A0A7BC"
+                android:centerColor="#FFF3EAD3"
+                android:endColor="#447D8499" />
+        </aapt:attr>
+    </path>
+
+    <!-- Right subtle rim reflection -->
+    <path
+        android:pathData="M200,90 C165,112 155,131 155,144 C155,157 165,176 200,198"
+        android:strokeWidth="1.1"
+        android:strokeColor="#AAFFF1CE"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Radiant golden singularity core -->
+    <path android:pathData="M144,138.5 A5.5,5.5 0 1,1 143.99,138.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="144"
+                android:centerY="144"
+                android:gradientRadius="6"
+                android:startColor="#FFFFFFFF"
+                android:centerColor="#FFFFE29A"
+                android:endColor="#FFE0A43E" />
+        </aapt:attr>
+    </path>
+</vector>

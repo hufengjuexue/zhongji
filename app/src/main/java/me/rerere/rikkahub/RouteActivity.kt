@@ -32,8 +32,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.res.stringResource
@@ -56,6 +60,7 @@ import coil3.network.cachecontrol.CacheControlCacheStrategy
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import coil3.svg.SvgDecoder
+import kotlinx.coroutines.delay
 import me.rerere.ui.toast.Toaster
 import me.rerere.ui.toast.rememberToasterState
 import kotlinx.coroutines.launch
@@ -68,6 +73,9 @@ import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.repository.MediaCreationRepository
 import me.rerere.rikkahub.service.MediaCreationForegroundService
 import me.rerere.rikkahub.ui.activity.SafeModeActivity
+import me.rerere.rikkahub.ui.components.onboarding.GithubStarDialog
+import me.rerere.rikkahub.ui.components.onboarding.KairosSplashOverlay
+import me.rerere.rikkahub.ui.components.onboarding.OnboardingGuideOverlay
 import me.rerere.rikkahub.ui.components.ui.TTSController
 import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalNavController
@@ -80,6 +88,7 @@ import me.rerere.rikkahub.ui.hooks.readBooleanPreference
 import me.rerere.rikkahub.ui.hooks.readStringPreference
 import me.rerere.rikkahub.ui.hooks.rememberCustomAsrState
 import me.rerere.rikkahub.ui.hooks.rememberCustomTtsState
+import me.rerere.rikkahub.ui.hooks.rememberSharedPreferenceBoolean
 import me.rerere.rikkahub.ui.pages.assistant.AssistantPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantBasicPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantDetailPage
@@ -121,7 +130,6 @@ import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNetworkPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesUIPage
 import me.rerere.rikkahub.ui.pages.setting.SettingProactiveMessagePage
 import me.rerere.rikkahub.ui.pages.setting.SettingThemePage
-import me.rerere.rikkahub.ui.pages.setting.SettingDonatePage
 import me.rerere.rikkahub.ui.pages.setting.SettingFilesPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMcpDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMcpPage
@@ -141,6 +149,7 @@ import me.rerere.rikkahub.ui.pages.translator.TranslatorPage
 import me.rerere.rikkahub.ui.pages.webview.WebViewPage
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
 import me.rerere.rikkahub.utils.CrashHandler
+import me.rerere.rikkahub.utils.openUrl
 import me.rerere.rikkahub.utils.openUsageAccessSettings
 import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
@@ -292,6 +301,16 @@ class RouteActivity : ComponentActivity() {
             }
         }
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
+        val launchCount by settingsStore.launchCountFlow.collectAsStateWithLifecycle(0)
+        var onboardingCompleted by rememberSharedPreferenceBoolean("onboarding_completed_v1", false)
+        var starPromptDismissed by rememberSharedPreferenceBoolean("github_star_prompt_v1", false)
+        var splashVisible by rememberSaveable { mutableStateOf(true) }
+        val context = LocalContext.current
+
+        LaunchedEffect(Unit) {
+            delay(720)
+            splashVisible = false
+        }
 
         val startScreen = Screen.Chat(
             id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
@@ -533,10 +552,6 @@ class RouteActivity : ComponentActivity() {
                                 SettingMcpDetailPage(id = Uuid.parse(key.serverId))
                             }
 
-                            entry<Screen.SettingDonate> {
-                                SettingDonatePage()
-                            }
-
                             entry<Screen.SettingFiles> {
                                 SettingFilesPage()
                             }
@@ -647,6 +662,43 @@ class RouteActivity : ComponentActivity() {
                                 }
                             }
                         }
+                    }
+                    AnimatedVisibility(
+                        visible = !onboardingCompleted && migrationState !is MigrationState.Migrating,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        val navigator = LocalNavController.current
+                        OnboardingGuideOverlay(
+                            onFinish = { onboardingCompleted = true },
+                            onGoToProviders = {
+                                onboardingCompleted = true
+                                navigator.navigate(Screen.SettingProvider)
+                            },
+                        )
+                    }
+                    KairosSplashOverlay(
+                        visible = splashVisible,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    if (
+                        !splashVisible &&
+                        onboardingCompleted &&
+                        launchCount >= 10 &&
+                        !starPromptDismissed &&
+                        migrationState !is MigrationState.Migrating
+                    ) {
+                        GithubStarDialog(
+                            launchCount = launchCount,
+                            onStar = {
+                                starPromptDismissed = true
+                                context.openUrl("https://github.com/hufengjuexue/kairos")
+                            },
+                            onDismiss = {
+                                starPromptDismissed = true
+                            },
+                        )
                     }
                     Toaster(
                         state = toastState,
@@ -787,9 +839,6 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data class SettingMcpDetail(val serverId: String) : Screen
-
-    @Serializable
-    data object SettingDonate : Screen
 
     @Serializable
     data object SettingFiles : Screen

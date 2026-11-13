@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.ai.transformers
 
+import android.content.Context
 import androidx.core.net.toFile
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
@@ -10,9 +11,12 @@ import me.rerere.document.DocxParser
 import me.rerere.document.EpubParser
 import me.rerere.document.PdfParser
 import me.rerere.document.PptxParser
+import me.rerere.rikkahub.data.files.FileUtils
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.get
 import java.io.File
 
-object DocumentAsPromptTransformer : InputMessageTransformer {
+object DocumentAsPromptTransformer : InputMessageTransformer, KoinComponent {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
@@ -66,13 +70,13 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
     // 上传文件保存在 filesDir/upload 下, 该目录通过 proot 挂载到 workspace 的 /upload
     // 返回文件在 workspace 内的绝对路径, 便于 AI 用 workspace 工具直接读取原始文件
     private fun resolveWorkspacePath(document: UIMessagePart.Document): String? {
-        val file = runCatching { document.url.toUri().toFile() }.getOrNull() ?: return null
+        val file = resolveDocumentFile(document) ?: return null
         if (file.parentFile?.name != "upload") return null
         return "/upload/${file.name}"
     }
 
     private fun readDocumentContent(document: UIMessagePart.Document): String {
-        val file = runCatching { document.url.toUri().toFile() }.getOrNull()
+        val file = resolveDocumentFile(document)
             ?: return "[ERROR, invalid file uri: ${document.fileName}]"
         if (!file.exists() || !file.isFile) {
             return "[ERROR, file not found: ${document.fileName}]"
@@ -88,5 +92,13 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
         }.getOrElse {
             "[ERROR, failed to read file: ${document.fileName}]"
         }
+    }
+
+    private fun resolveDocumentFile(document: UIMessagePart.Document): File? {
+        val context = runCatching { get<Context>() }.getOrNull()
+        if (context != null) {
+            FileUtils.resolveLocalFile(context, document.url)?.let { return it }
+        }
+        return runCatching { document.url.toUri().toFile() }.getOrNull()
     }
 }
