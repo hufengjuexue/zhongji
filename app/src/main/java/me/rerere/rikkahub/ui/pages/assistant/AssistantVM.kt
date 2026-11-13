@@ -12,6 +12,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
+import me.rerere.rikkahub.data.repository.MemoryGraphRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.memoryId
 import me.rerere.rikkahub.service.ChatService
@@ -19,6 +20,7 @@ import me.rerere.rikkahub.service.ChatService
 class AssistantVM(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
+    private val memoryGraphRepository: MemoryGraphRepository,
     private val chatService: ChatService,
     private val filesManager: FilesManager,
 ) : ViewModel() {
@@ -45,6 +47,7 @@ class AssistantVM(
                 settings.copy(assistants = settings.assistants.filter { it.id != assistant.id })
             }
             memoryRepository.deleteFilesOfAssistant(assistant.id.toString())
+            memoryGraphRepository.deleteGraphOfAssistant(assistant.id.toString())
             chatService.deleteConversationsOfAssistant(assistant.id)
         }
     }
@@ -70,6 +73,10 @@ class AssistantVM(
             settingsStore.update { it.copy(assistants = it.assistants.plus(copiedAssistant)) }
             if (copyMemories) {
                 memoryRepository.copyFiles(
+                    fromAssistantId = assistant.id.toString(),
+                    toAssistantId = copiedAssistant.id.toString(),
+                )
+                memoryGraphRepository.copyGraph(
                     fromAssistantId = assistant.id.toString(),
                     toAssistantId = copiedAssistant.id.toString(),
                 )

@@ -27,6 +27,7 @@ import java.io.File
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Book02
 import me.rerere.hugeicons.stroke.Book04
+import me.rerere.hugeicons.stroke.ChartScatter
 import me.rerere.hugeicons.stroke.Earth
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Image02
@@ -93,6 +94,7 @@ import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.ai.util.encodeBase64
 import me.rerere.common.android.appTempFolder
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.ai.tools.MemoryGraphToolNames
 import me.rerere.rikkahub.data.ai.tools.MemoryToolNames
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
@@ -846,6 +848,8 @@ private fun ChainOfThoughtScope.ExportedToolStep(
                     "scrape_web" -> HugeIcons.Earth
                     MemoryToolNames.DELETE -> HugeIcons.Book02
                     in MemoryToolNames.WRITES -> HugeIcons.Book04
+                    MemoryGraphToolNames.RECALL_RELATIONS -> HugeIcons.ChartScatter
+                    MemoryGraphToolNames.UPSERT_RELATIONS -> HugeIcons.Book04
                     else -> HugeIcons.Wrench01
                 },
                 contentDescription = null,

@@ -5,6 +5,7 @@ import androidx.annotation.StringRes
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Brain02
+import me.rerere.hugeicons.stroke.ChartScatter
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Settings03
 import androidx.compose.foundation.layout.Arrangement
@@ -78,6 +79,7 @@ private enum class MemoryTab(
     @param:StringRes private val labelRes: Int,
 ) : PagerTab {
     FILES(HugeIcons.Brain02, R.string.assistant_page_manage_memory_title),
+    GRAPH(HugeIcons.ChartScatter, R.string.assistant_page_tab_memory_graph),
     SETTINGS(HugeIcons.Settings03, R.string.settings);
 
     override val label: String
@@ -85,7 +87,7 @@ private enum class MemoryTab(
 }
 
 @Composable
-fun AssistantMemoryPage(id: String) {
+fun AssistantMemoryPage(id: String, initialTab: Int = 0) {
     val vm: AssistantDetailVM = koinViewModel(
         parameters = {
             parametersOf(id)
@@ -93,11 +95,15 @@ fun AssistantMemoryPage(id: String) {
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
+    val memoryGraph by vm.memoryGraph.collectAsStateWithLifecycle()
     val consolidation by vm.memoryConsolidation.collectAsStateWithLifecycle()
     val navController = LocalNavController.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val pagerState = rememberPagerState { MemoryTab.entries.size }
+    val pagerState = rememberPagerState(
+        initialPage = initialTab.coerceIn(0, MemoryTab.entries.lastIndex)
+    ) { MemoryTab.entries.size }
     val scope = rememberCoroutineScope()
+    var showAddGraphDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -109,10 +115,20 @@ fun AssistantMemoryPage(id: String) {
                     BackButton()
                 },
                 actions = {
-                    if (MemoryTab.entries[pagerState.currentPage] == MemoryTab.FILES) {
-                        IconButton(onClick = { navController.navigate(Screen.MemoryFile(vm.memoryId, null)) }) {
-                            Icon(HugeIcons.Add01, contentDescription = stringResource(R.string.add))
+                    when (MemoryTab.entries[pagerState.currentPage]) {
+                        MemoryTab.FILES -> {
+                            IconButton(onClick = { navController.navigate(Screen.MemoryFile(vm.memoryId, null)) }) {
+                                Icon(HugeIcons.Add01, contentDescription = stringResource(R.string.add))
+                            }
                         }
+
+                        MemoryTab.GRAPH -> {
+                            IconButton(onClick = { showAddGraphDialog = true }) {
+                                Icon(HugeIcons.Add01, contentDescription = stringResource(R.string.assistant_page_graph_add_relation))
+                            }
+                        }
+
+                        MemoryTab.SETTINGS -> Unit
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -147,6 +163,22 @@ fun AssistantMemoryPage(id: String) {
                         onOrganizeMemory = { vm.organizeMemory() },
                         onOpenMemory = { path -> navController.navigate(Screen.MemoryFile(vm.memoryId, path)) },
                         onDeleteMemory = { vm.deleteMemory(it) },
+                        onOpenSettings = {
+                            scope.launch { pagerState.animateScrollToPage(MemoryTab.SETTINGS.ordinal) }
+                        },
+                    )
+
+                    MemoryTab.GRAPH -> MemoryGraphTab(
+                        snapshot = memoryGraph,
+                        enableMemory = assistant.enableMemory,
+                        showAddRelationDialog = showAddGraphDialog,
+                        onDismissAddRelationDialog = { showAddGraphDialog = false },
+                        onOpenAddRelationDialog = { showAddGraphDialog = true },
+                        onUpsertRelation = vm::upsertGraphRelation,
+                        onSupersedeEdge = vm::supersedeGraphEdge,
+                        onRestoreEdge = vm::restoreGraphEdge,
+                        onDeleteEdge = vm::deleteGraphEdge,
+                        onDeleteNode = vm::deleteGraphNode,
                         onOpenSettings = {
                             scope.launch { pagerState.animateScrollToPage(MemoryTab.SETTINGS.ordinal) }
                         },

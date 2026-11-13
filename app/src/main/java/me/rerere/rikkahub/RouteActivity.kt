@@ -397,7 +397,7 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.AssistantMemory> { key ->
-                                AssistantMemoryPage(key.id)
+                                AssistantMemoryPage(key.id, key.initialTab)
                             }
 
                             entry<Screen.MemoryFile> { key ->
@@ -689,7 +689,7 @@ sealed interface Screen : NavKey {
     data class AssistantPrompt(val id: String) : Screen
 
     @Serializable
-    data class AssistantMemory(val id: String) : Screen
+    data class AssistantMemory(val id: String, val initialTab: Int = 0) : Screen
 
     /** 记忆库 [memoryId] 里的一个文件，[path] 为 null 时新建 */
     @Serializable

@@ -14,6 +14,7 @@ import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
 import me.rerere.rikkahub.data.db.dao.MediaCreationDAO
 import me.rerere.rikkahub.data.db.dao.MemoryConsolidationDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
+import me.rerere.rikkahub.data.db.dao.MemoryGraphDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.dao.TranslationHistoryDAO
 import me.rerere.rikkahub.data.db.dao.UsageRecordDAO
@@ -28,6 +29,8 @@ import me.rerere.rikkahub.data.db.entity.MediaCreationRecordEntity
 import me.rerere.rikkahub.data.db.entity.MediaCreationSessionEntity
 import me.rerere.rikkahub.data.db.entity.MemoryConsolidationEntity
 import me.rerere.rikkahub.data.db.entity.MemoryFileEntity
+import me.rerere.rikkahub.data.db.entity.MemoryGraphEdgeEntity
+import me.rerere.rikkahub.data.db.entity.MemoryGraphNodeEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.entity.TranslationHistoryEntity
 import me.rerere.rikkahub.data.db.entity.UsageRecordEntity
@@ -54,8 +57,10 @@ import me.rerere.rikkahub.utils.JsonInstant
         MediaCreationRecordEntity::class,
         TranslationHistoryEntity::class,
         UsageRecordEntity::class,
+        MemoryGraphNodeEntity::class,
+        MemoryGraphEdgeEntity::class,
     ],
-    version = 33,
+    version = 34,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -90,6 +95,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDAO
 
     abstract fun memoryConsolidationDao(): MemoryConsolidationDAO
+
+    abstract fun memoryGraphDao(): MemoryGraphDAO
 
     abstract fun genMediaDao(): GenMediaDAO
 

@@ -78,8 +78,9 @@ private val MEMORY_SYSTEM_RULES = """
     ## When to read
 
     - If the current scene or question touches established history — recurring people/characters, prior arcs, promises, locations, world lore, or personal context — and the listing has a relevant file, call memory_read before answering. Pass all needed paths in one call.
-    - Do not call memory_read for generic factual/standalone questions that do not depend on shared history.
-    - Before claiming something has no prior context or forgetting an established name/detail, read any listing files that could plausibly cover it.
+    - When you need multi-hop relationships or temporal continuity ("who is currently allied with whom", "what changed between A and B over time", "who currently holds item X"), call recall_relations with mode="network" or mode="timeline".
+    - Do not call memory_read or recall_relations for generic factual/standalone questions that do not depend on shared history.
+    - Before claiming something has no prior context or forgetting an established name/detail, read any listing files or graph timeline that could plausibly cover it.
     - profile and preferences are already included above; do not read them again. Their version attribute can be passed as if_version directly.
 
     ## How to apply
@@ -93,8 +94,8 @@ private val MEMORY_SYSTEM_RULES = """
 
     ## When to write
 
-    - By default, do not write during the conversation. A background process organizes memory automatically once the conversation pauses.
-    - Exception: when the user explicitly asks you to remember / save / update / forget something, do it with the tools in this turn.
+    - By default, do not write during the conversation. A background process (and pre-compression archive) organizes memory and relation graph updates automatically.
+    - Exception: when the user explicitly asks you to remember / save / update / forget something, do it with the tools in this turn (and update graph_upsert_relations if a key relationship or possession state explicitly shifted).
       - Before modifying an existing file, call memory_read and pass the returned version as if_version.
       - Use memory_str_replace or memory_append for small changes; create a file with memory_write and if_version="new".
       - "Forget" means deleting the whole line (pass an empty new_str), not rewriting it as "used to like X". Also delete other lines that were derived from the deleted fact.
@@ -119,6 +120,7 @@ private val MEMORY_CONSOLIDATION_WORKFLOW = """
     3. Group the rest by target file: one write operation per file; sensitive facts get their own operation, last.
     4. For existing files: memory_read first, then memory_str_replace or memory_append. For new files: memory_write with if_version="new". The version attribute on profile and preferences can be passed as if_version directly.
     5. Only touch files you are adding new facts to. While you are in such a file you may also merge lines that say the same thing and correct lines the new turns made outdated. Leave every other file alone.
+    6. Temporal relation graph (<temporal_relation_graph>): whenever <new_turns> establish or shift a concrete relationship, loyalty, location, item custody, vow, or status between two entities, check existing edges with recall_relations(mode="timeline") and record/supersede the edge via graph_upsert_relations (passing replace_relation_types or supersede_edge_ids when an old state is replaced so timeline history stays intact). Skip trivial transient actions.
 
     ## Reading the conversations
 

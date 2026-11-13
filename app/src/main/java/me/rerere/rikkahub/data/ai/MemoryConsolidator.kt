@@ -24,6 +24,7 @@ import me.rerere.rikkahub.data.ai.prompts.MemoryConsolidationConversation
 import me.rerere.rikkahub.data.ai.prompts.buildMemoryConsolidationInput
 import me.rerere.rikkahub.data.ai.prompts.buildMemoryConsolidationPrompt
 import me.rerere.rikkahub.data.ai.tools.MemoryToolNames
+import me.rerere.rikkahub.data.ai.tools.buildMemoryGraphTools
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
 import me.rerere.rikkahub.data.ai.tools.createMemoryConversationTools
 import me.rerere.rikkahub.data.ai.tools.dialogueMessages
@@ -40,6 +41,7 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MemoryFile
 import me.rerere.rikkahub.data.model.getChatModelOf
 import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.data.repository.MemoryGraphRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.memoryId
 import kotlin.uuid.Uuid
@@ -72,6 +74,7 @@ class MemoryConsolidator(
     private val providerManager: ProviderManager,
     private val usageRecorder: UsageRecorder,
     private val memoryRepository: MemoryRepository,
+    private val memoryGraphRepository: MemoryGraphRepository,
     private val conversationRepo: ConversationRepository,
     private val consolidationDao: MemoryConsolidationDAO,
     private val settingsStore: SettingsStore,
@@ -147,6 +150,46 @@ class MemoryConsolidator(
         }
     }
 
+    /**
+     * 压缩检查点前打捞记忆与时序关系图谱：仅提取即将被折叠进摘要的对话轮次，
+     * 让事实条目和关系演变边先落库再丢弃原文上下文。
+     */
+    suspend fun extractBeforeCompression(
+        conversation: Conversation,
+        messagesToCompress: List<UIMessage>,
+    ): MemoryConsolidationRun? = withContext(Dispatchers.IO) {
+        val settings = settingsStore.awaitLoaded()
+        val assistant = settings.getAssistantById(conversation.assistantId)
+            ?.takeIf { it.enableMemory } ?: return@withContext null
+
+        val dialogue = messagesToCompress.filter {
+            it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT
+        }
+        if (dialogue.isEmpty()) return@withContext null
+
+        val consolidatedAt = consolidationDao.getConsolidatedAt(conversation.id.toString())
+            ?: initialMemoryProgress(dialogue).also { advance(conversation.id, it) }
+        val pending = pendingMemoryTurns(
+            messages = dialogue,
+            updatedAt = conversation.updateAt.toEpochMilli(),
+            consolidatedAt = consolidatedAt,
+        )
+        if (pending.turns.isEmpty()) {
+            pending.consolidatedThrough?.let { advance(conversation.id, it) }
+            return@withContext null
+        }
+
+        val batch = Batch(conversation, dialogue, pending)
+        runConsolidationAgent(
+            settings = settings,
+            memoryId = assistant.memoryId,
+            assistants = listOf(assistant),
+            batches = listOf(batch),
+            fullReview = false,
+            sourceConversationId = conversation.id.toString(),
+        )
+    }
+
     private suspend fun consolidateStore(
         memoryId: String,
         conversationIds: Set<Uuid>,
@@ -163,12 +206,33 @@ class MemoryConsolidator(
             .sortedByDescending { it.updateAt }
             .mapNotNull { conversation ->
                 val pending = loadPendingTurns(conversation)
-                if (pending.turns.isEmpty()) null else Batch(conversation, pending)
+                if (pending.turns.isEmpty()) null else Batch(conversation, conversation.dialogueMessages(), pending)
             }
             .withinTranscriptBudget()
+
+        return runConsolidationAgent(
+            settings = settings,
+            memoryId = memoryId,
+            assistants = assistants,
+            batches = batches,
+            fullReview = fullReview,
+            sourceConversationId = batches.singleOrNull()?.conversation?.id?.toString(),
+        )
+    }
+
+    private suspend fun runConsolidationAgent(
+        settings: Settings,
+        memoryId: String,
+        assistants: List<Assistant>,
+        batches: List<Batch>,
+        fullReview: Boolean,
+        sourceConversationId: String? = null,
+    ): MemoryConsolidationRun? {
+        val assistantIds = assistants.map { it.id }.toSet()
         val files = memoryRepository.getFiles(memoryId)
-        // 没有新的轮次时，只有手动清理且记忆库里有东西才值得调用模型
-        if (batches.isEmpty() && (!fullReview || files.isEmpty())) return null
+        val hasGraphData = memoryGraphRepository.getSnapshot(memoryId).nodes.isNotEmpty()
+        // 没有新的轮次时，只有手动清理且记忆库或关系图谱里有东西才值得调用模型
+        if (batches.isEmpty() && (!fullReview || (files.isEmpty() && !hasGraphData))) return null
 
         val (model, reasoningLevel) = settings.consolidationModel(
             batches.firstOrNull()?.conversation,
@@ -179,6 +243,11 @@ class MemoryConsolidator(
         // 自动整理只增改；删文件只在用户手动要求清理整个记忆库时才允许
         val tools = buildMemoryTools(memoryRepository, memoryId)
             .filter { fullReview || it.name != MemoryToolNames.DELETE } +
+            buildMemoryGraphTools(
+                repository = memoryGraphRepository,
+                assistantId = memoryId,
+                sourceConversationId = sourceConversationId,
+            ) +
             createMemoryConversationTools(conversationRepo, assistantIds)
         val systemPrompt = buildMemoryConsolidationPrompt(fullReview)
         // 整次整理的每一步用同一个会话 ID，服务端才能命中前面几步的缓存
@@ -263,9 +332,13 @@ class MemoryConsolidator(
     }.isSuccess
 }
 
-private class Batch(val conversation: Conversation, val pending: PendingMemoryTurns) {
+private class Batch(
+    val conversation: Conversation,
+    private val dialogue: List<UIMessage>,
+    val pending: PendingMemoryTurns,
+) {
     val input: MemoryConsolidationConversation by lazy {
-        val messages = conversation.dialogueMessages().withIndex().filterNot { it.value.isContextCheckpoint }
+        val messages = dialogue.withIndex().filterNot { it.value.isContextCheckpoint }
         val firstPosition = pending.turns.first().position
         MemoryConsolidationConversation(
             id = conversation.id.toString(),

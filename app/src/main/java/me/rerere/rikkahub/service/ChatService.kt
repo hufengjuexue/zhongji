@@ -45,6 +45,7 @@ import me.rerere.rikkahub.data.ai.ChatRequestFactory
 import me.rerere.rikkahub.data.ai.ChatTurnContext
 import me.rerere.rikkahub.data.ai.ConversationMetaGenerator
 import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
+import me.rerere.rikkahub.data.ai.MemoryConsolidator
 import me.rerere.rikkahub.data.ai.TranslationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.prompts.buildCompressPrompt
@@ -116,6 +117,7 @@ class ChatService(
     private val conversationRepo: ConversationRepository,
     private val requestFactory: ChatRequestFactory,
     private val memoryConsolidationScheduler: MemoryConsolidationScheduler,
+    private val memoryConsolidator: MemoryConsolidator,
     private val translationHandler: TranslationHandler,
     private val metaGenerator: ConversationMetaGenerator,
     val mcpManager: McpManager,
@@ -1200,6 +1202,18 @@ class ChatService(
         check(nodes.subList(checkpointIndex + 1, endIndex).none { node ->
             node.currentMessage.getTools().any { it.isPending || it.canResumeExecution }
         }) { context.getString(R.string.chat_page_compress_handle_pending_tools) }
+
+        // 压缩检查点前先打捞记忆与时序关系图谱（失败不阻塞压缩）
+        try {
+            memoryConsolidator.extractBeforeCompression(
+                conversation = conversation,
+                messagesToCompress = conversation.currentMessages.take(endIndex),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logging.log("ChatService", "Pre-compression memory extraction skipped: $e")
+        }
 
         // 必须和对话用同一个模型、同一套请求组装，才能命中提示词缓存
         val turn = requestFactory.createContext(settingsStore.awaitLoaded(), conversation)
