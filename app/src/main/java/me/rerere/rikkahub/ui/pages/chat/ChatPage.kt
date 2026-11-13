@@ -21,6 +21,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PermanentNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SheetValue
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +57,7 @@ import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessagePart
@@ -287,6 +292,10 @@ private fun ChatPageContent(
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val workspaceRepository: WorkspaceRepository = koinInject()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var undoSnackbarJob by remember { mutableStateOf<Job?>(null) }
+    val undoDeletedText = stringResource(R.string.chat_page_message_deleted)
+    val undoActionText = stringResource(R.string.chat_page_message_undo)
 
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
@@ -319,6 +328,7 @@ private fun ChatPageContent(
     ) {
         AssistantBackground(setting = setting, modifier = Modifier.hazeSource(hazeState))
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopBar(
                     settings = setting,
@@ -428,11 +438,28 @@ private fun ChatPageContent(
                         navigateToChatPage(navController, chatId = fork.id)
                     }
                 },
-                onDelete = {
+                onDelete = { msg ->
                     if (loadingJob != null) {
                         vm.showDeleteBlockedWhileGeneratingError()
                     } else {
-                        vm.deleteMessage(it)
+                        vm.deleteMessage(msg) {
+                            undoSnackbarJob?.cancel()
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            undoSnackbarJob = scope.launch {
+                                val res = withTimeoutOrNull(6_000L) {
+                                    snackbarHostState.showSnackbar(
+                                        message = undoDeletedText,
+                                        actionLabel = undoActionText,
+                                        duration = SnackbarDuration.Indefinite,
+                                    )
+                                }
+                                if (res == SnackbarResult.ActionPerformed) {
+                                    vm.undoDeleteMessage()
+                                } else {
+                                    snackbarHostState.currentSnackbarData?.dismiss()
+                                }
+                            }
+                        }
                     }
                 },
                 onUpdateMessage = { newNode ->

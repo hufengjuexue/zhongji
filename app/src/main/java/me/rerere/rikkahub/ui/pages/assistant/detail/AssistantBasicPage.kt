@@ -339,6 +339,29 @@ internal fun AssistantBasicContent(
                 }
             }
             formItem(
+                headlineContent = { Text(stringResource(R.string.assistant_page_top_k)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_top_k_desc)) },
+            ) {
+                var topKInput by remember(assistant.id) {
+                    mutableStateOf(assistant.topK?.toString() ?: "")
+                }
+                OutlinedTextField(
+                    value = topKInput,
+                    onValueChange = { value ->
+                        topKInput = value
+                        val nextTopK = if (value.isBlank()) null else value.toIntOrNull()?.takeIf { it > 0 }
+                        if (value.isBlank() || nextTopK != null) {
+                            onUpdate(assistant.copy(topK = nextTopK))
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    isError = topKInput.isNotBlank() && (topKInput.toIntOrNull()?.let { it <= 0 } ?: true),
+                    placeholder = { Text(stringResource(R.string.assistant_page_top_k_default)) },
+                )
+            }
+            formItem(
                 headlineContent = { Text(stringResource(R.string.assistant_page_context_message_limit)) },
                 supportingContent = { Text(stringResource(R.string.assistant_page_context_message_limit_desc)) },
             ) {
@@ -506,6 +529,41 @@ internal fun AssistantBasicContent(
                     )
                 }
             }
+        }
+
+        CardGroup {
+            switchItem(
+                checked = assistant.disableReasoning,
+                onCheckedChange = {
+                    onUpdate(assistant.copy(disableReasoning = it))
+                },
+                headlineContent = { Text(stringResource(R.string.assistant_page_disable_reasoning)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_disable_reasoning_desc)) },
+            )
+            switchItem(
+                checked = assistant.enableAntiEmptyResponse,
+                onCheckedChange = {
+                    onUpdate(assistant.copy(enableAntiEmptyResponse = it))
+                },
+                headlineContent = { Text(stringResource(R.string.assistant_page_anti_empty_response)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_anti_empty_response_desc)) },
+            )
+            switchItem(
+                checked = assistant.enableProxyFix,
+                onCheckedChange = {
+                    onUpdate(assistant.copy(enableProxyFix = it))
+                },
+                headlineContent = { Text(stringResource(R.string.assistant_page_proxy_fix)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_proxy_fix_desc)) },
+            )
+            switchItem(
+                checked = assistant.enableTransientPrune,
+                onCheckedChange = {
+                    onUpdate(assistant.copy(enableTransientPrune = it))
+                },
+                headlineContent = { Text(stringResource(R.string.assistant_page_transient_prune)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_transient_prune_desc)) },
+            )
         }
     }
 }

@@ -15,15 +15,19 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.fixProxyPromotedReply
 import me.rerere.ai.ui.limitContext
+import me.rerere.ai.ui.pruneOldTransientContent
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.prompts.buildMemoryPrompt
 import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
 import me.rerere.rikkahub.data.ai.transformers.Base64ImageToLocalFileTransformer
 import me.rerere.rikkahub.data.ai.transformers.DocumentAsPromptTransformer
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
+import me.rerere.rikkahub.data.ai.transformers.MemoryVectorTailTransformer
 import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
 import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
+import me.rerere.rikkahub.data.ai.transformers.PersonaInjectionTransformer
 import me.rerere.rikkahub.data.ai.transformers.PlaceholderTransformer
 import me.rerere.rikkahub.data.ai.transformers.PromptInjectionTransformer
 import me.rerere.rikkahub.data.ai.transformers.RegexOutputTransformer
@@ -80,12 +84,14 @@ class ChatRequestFactory(
 ) {
     private val inputTransformers: List<InputMessageTransformer> = listOf(
         TimeReminderTransformer,
+        PersonaInjectionTransformer,
         PromptInjectionTransformer,
         PlaceholderTransformer,
         DocumentAsPromptTransformer,
         OcrTransformer,
         templateTransformer,
         WorkspaceReminderTransformer(workspaceRepository),
+        MemoryVectorTailTransformer,
     )
 
     private val outputTransformers: List<OutputMessageTransformer> = listOf(
@@ -127,6 +133,7 @@ class ChatRequestFactory(
         turn: ChatTurnContext,
         messages: List<UIMessage>,
         processingStatus: MutableStateFlow<String?>,
+        emergencyLimit: Int? = null,
     ): Pair<AgentRequest, AgentHooks> {
         val request = AgentRequest(
             provider = usageRecorder.wrap(
@@ -142,7 +149,7 @@ class ChatRequestFactory(
         val hooks = object : AgentHooks {
             override suspend fun prepareStep(messages: List<UIMessage>): StepRequest {
                 Log.i(TAG, "prepareStep: ${turn.model.id}")
-                return buildStep(turn, messages, processingStatus)
+                return buildStep(turn, messages, processingStatus, emergencyLimit)
             }
 
             override suspend fun previewStep(message: UIMessage, newPartsFrom: Int) =
@@ -153,6 +160,7 @@ class ChatRequestFactory(
             override suspend fun finishStep(message: UIMessage, newPartsFrom: Int) =
                 message.transformNewParts(newPartsFrom) {
                     it.transforms(outputTransformers, context, turn.model, turn.assistant, turn.settings)
+                        .let { parts -> if (turn.assistant.enableProxyFix) parts.fixProxyPromotedReply() else parts }
                         .visualTransforms(outputTransformers, context, turn.model, turn.assistant, turn.settings)
                         .onGenerationFinish(outputTransformers, context, turn.model, turn.assistant, turn.settings)
                 }
@@ -198,9 +206,21 @@ class ChatRequestFactory(
         turn: ChatTurnContext,
         messages: List<UIMessage>,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+        emergencyLimit: Int? = null,
     ): StepRequest {
         val assistant = turn.assistant
-        val requestMessages = buildList {
+        val effectiveLimit = listOfNotNull(
+            assistant.contextMessageLimit.takeIf { it > 0 },
+            emergencyLimit?.takeIf { it > 0 },
+        ).minOrNull() ?: 0
+        val limitedMessages = messages.limitContext(effectiveLimit)
+        val overflowMessages = if (limitedMessages.size < messages.size) {
+            val keptIds = limitedMessages.mapTo(HashSet(limitedMessages.size)) { it.id }
+            messages.filter { it.id !in keptIds && !it.isContextCheckpoint && !it.isSynthetic }
+        } else {
+            emptyList()
+        }
+        val transformedMessages = buildList {
             val system = buildString {
                 val effectiveSystemPrompt =
                     if (assistant.allowConversationSystemPrompt && !turn.conversationSystemPrompt.isNullOrBlank()) {
@@ -226,7 +246,7 @@ class ChatRequestFactory(
             if (system.isNotBlank()) {
                 add(UIMessage.system(prompt = system).copy(isSynthetic = true))
             }
-            addAll(messages.limitContext(assistant.contextMessageLimit))
+            addAll(limitedMessages)
         }.transforms(
             transformers = inputTransformers,
             context = context,
@@ -235,14 +255,27 @@ class ChatRequestFactory(
             settings = turn.settings,
             processingStatus = processingStatus,
             workspaceCwd = turn.workspaceCwd,
+            memories = turn.memories,
+            conversationId = turn.conversationId,
+            overflowMessages = overflowMessages,
         )
+        val requestMessages = if (assistant.enableTransientPrune) {
+            transformedMessages.pruneOldTransientContent(keepUserTurns = 2)
+        } else {
+            transformedMessages
+        }
+        PromptDebugCache.store(turn.conversationId, requestMessages)
         val params = TextGenerationParams(
             model = turn.model,
             temperature = assistant.temperature,
             topP = assistant.topP,
+            topK = assistant.topK,
             maxTokens = assistant.maxTokens,
             tools = turn.tools,
             reasoningLevel = assistant.reasoningLevel,
+            systemPromptInChat = assistant.enableAntiEmptyResponse,
+            enableProxyFix = assistant.enableProxyFix,
+            disableReasoning = assistant.disableReasoning,
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
                 addAll(turn.model.customHeaders)

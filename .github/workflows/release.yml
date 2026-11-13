@@ -1,0 +1,44 @@
+name: Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag'
+        required: true
+        default: 'v3.1.0'
+      run_id:
+        description: 'Source Run ID'
+        required: true
+        default: '40077695481'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Artifact from Run
+        uses: actions/download-artifact@v4
+        with:
+          name: zhongji-rp-release
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Inspect Files
+        run: ls -la
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: 终极 RP · ZhongJi RP ${{ github.event.inputs.tag_name }}
+          draft: false
+          prerelease: false
+          body: |
+            ### 终极 RP (ZhongJi RP) · ${{ github.event.inputs.tag_name }} 正式版
+
+            - **视觉重构**：全套岩仓玲音 (Lain) 高清自适应图标与品牌焕新。
+            - **核心引擎**：首创记忆向量尾部注入机制 (`MemoryVectorTailTransformer`)，100% 保护大模型 Prefix Prompt Caching。
+            - **底层净化**：彻底去除非法签名限制，剔除冗余审查提示词。
+            - **开箱即用**：零门槛沉浸体验，告别复杂滑块调试。
+          files: "*.apk"

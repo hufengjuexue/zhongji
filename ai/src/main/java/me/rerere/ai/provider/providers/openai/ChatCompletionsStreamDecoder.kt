@@ -26,8 +26,10 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.common.http.jsonPrimitiveOrNull
 import kotlin.time.Clock
 
-internal class ChatCompletionsStreamDecoder : StreamChunkDecoder {
-    private val streamState = ChatCompletionsStreamState()
+internal class ChatCompletionsStreamDecoder(
+    private val enableProxyFix: Boolean = false,
+) : StreamChunkDecoder {
+    private val streamState = ChatCompletionsStreamState(enableProxyFix)
     private val toolIdsByIndex = mutableMapOf<Int, String>()
     private val reasoningDetailsByIndex = linkedMapOf<Int, JsonObject>()
     private var responseId: String? = null
@@ -184,23 +186,40 @@ internal class ChatCompletionsStreamDecoder : StreamChunkDecoder {
         )
     }
 
-    private class ChatCompletionsStreamState {
+    private class ChatCompletionsStreamState(private val enableProxyFix: Boolean = false) {
         private var sequence = 0
         private var textId: String? = null
         private var reasoningId: String? = null
         private var imageId: String? = null
         private val openToolIds = linkedSetOf<String>()
         private var lastToolId: String? = null
+        // 中转站兼容：缓冲首段文本开头，凑满 "response" 长度或判定不匹配后再发出
+        private var textHoldback: StringBuilder? = if (enableProxyFix) StringBuilder() else null
 
         fun append(message: UIMessage, sourceId: String?): List<StreamChunk> = buildList {
             message.parts.forEach { part ->
                 when (part) {
                     is UIMessagePart.Text -> if (part.text.isNotEmpty()) {
                         addAll(closeReasoning()); addAll(closeImage()); addAll(closeTools())
-                        val id = textId ?: nextId(sourceId, "text").also {
-                            textId = it; add(StreamChunk.TextStart(it))
+                        val delta: String? = if (textHoldback != null) {
+                            val buffer = textHoldback!!.append(part.text)
+                            val lower = buffer.toString().lowercase()
+                            if (buffer.length > RESPONSE_PREFIX_TAG.length || !RESPONSE_PREFIX_TAG.startsWith(lower)) {
+                                val cleaned = RESPONSE_PREFIX_REGEX.replace(buffer.toString(), "").trimStart()
+                                textHoldback = null
+                                cleaned.ifEmpty { null }
+                            } else {
+                                null
+                            }
+                        } else {
+                            part.text
                         }
-                        add(StreamChunk.TextDelta(id, part.text))
+                        if (delta != null) {
+                            val id = textId ?: nextId(sourceId, "text").also {
+                                textId = it; add(StreamChunk.TextStart(it))
+                            }
+                            add(StreamChunk.TextDelta(id, delta))
+                        }
                     }
                     is UIMessagePart.Reasoning -> if (part.reasoning.isNotEmpty() || part.metadata != null) {
                         addAll(closeText()); addAll(closeImage()); addAll(closeTools())
@@ -236,8 +255,22 @@ internal class ChatCompletionsStreamDecoder : StreamChunkDecoder {
         }
 
         fun finish(reason: String?, responseId: String?, model: String?): List<StreamChunk> = buildList {
+            addAll(flushTextHoldback(responseId))
             addAll(closeText()); addAll(closeReasoning()); addAll(closeImage()); addAll(closeTools())
             add(StreamChunk.Finish(reason, responseId, model))
+        }
+
+        private fun flushTextHoldback(sourceId: String?): List<StreamChunk> {
+            val buffer = textHoldback ?: return emptyList()
+            textHoldback = null
+            val cleaned = RESPONSE_PREFIX_REGEX.replace(buffer.toString(), "").trimStart()
+            if (cleaned.isEmpty()) return emptyList()
+            return buildList {
+                val id = textId ?: nextId(sourceId, "text").also {
+                    textId = it; add(StreamChunk.TextStart(it))
+                }
+                add(StreamChunk.TextDelta(id, cleaned))
+            }
         }
 
         private fun closeText() = textId?.let { textId = null; listOf(StreamChunk.TextEnd(it)) }.orEmpty()
@@ -254,5 +287,7 @@ internal class ChatCompletionsStreamDecoder : StreamChunkDecoder {
 
     private companion object {
         val REASONING_DETAIL_DELTA_FIELDS = setOf("text", "summary", "data", "signature")
+        const val RESPONSE_PREFIX_TAG = "response"
+        val RESPONSE_PREFIX_REGEX = Regex("(?i)^response(?=\\s|:|$|[\\u4e00-\\u9fff\\u3040-\\u30ff])\\s*:?\\s*")
     }
 }

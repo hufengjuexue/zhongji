@@ -6,6 +6,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.MemoryFile
 
 class TransformerContext(
     val context: Context,
@@ -14,6 +15,9 @@ class TransformerContext(
     val settings: Settings,
     val processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     val workspaceCwd: String? = null,
+    val memories: List<MemoryFile> = emptyList(),
+    val conversationId: Any? = null,
+    val overflowMessages: List<UIMessage> = emptyList(),
 )
 
 interface MessageTransformer {
@@ -66,6 +70,9 @@ suspend fun List<UIMessage>.transforms(
     settings: Settings,
     processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     workspaceCwd: String? = null,
+    memories: List<MemoryFile> = emptyList(),
+    conversationId: Any? = null,
+    overflowMessages: List<UIMessage> = emptyList(),
 ): List<UIMessage> {
     val ctx = TransformerContext(
         context = context,
@@ -74,6 +81,9 @@ suspend fun List<UIMessage>.transforms(
         settings = settings,
         processingStatus = processingStatus,
         workspaceCwd = workspaceCwd,
+        memories = memories,
+        conversationId = conversationId,
+        overflowMessages = overflowMessages,
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)

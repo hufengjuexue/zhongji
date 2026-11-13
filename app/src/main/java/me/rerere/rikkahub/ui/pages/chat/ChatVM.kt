@@ -255,9 +255,23 @@ class ChatVM(
         return chatService.forkConversationAtMessage(_conversationId, message.id)
     }
 
-    fun deleteMessage(message: UIMessage) {
+    private var deletedSnapshot: Pair<Uuid, List<MessageNode>>? = null
+
+    fun deleteMessage(message: UIMessage, onDeleted: (() -> Unit)? = null) {
         viewModelScope.launch {
-            chatService.deleteMessage(_conversationId, message)
+            val snapshot = chatService.deleteMessageWithSnapshot(_conversationId, message)
+            if (snapshot != null) {
+                deletedSnapshot = _conversationId to snapshot
+                onDeleted?.invoke()
+            }
+        }
+    }
+
+    fun undoDeleteMessage() {
+        val (convId, snapshot) = deletedSnapshot ?: return
+        deletedSnapshot = null
+        viewModelScope.launch {
+            chatService.restoreConversationNodes(convId, snapshot)
         }
     }
 

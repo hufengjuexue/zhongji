@@ -54,6 +54,10 @@ data class MarkdownTheme(
     val dividerColor: Color,
     /** 正文里引号（"…"、“…”、「…」、『…』）括起来的文字的样式，为 null 时不高亮 */
     val quotedText: SpanStyle? = null,
+    /** 正文里动作/旁白括号（（…）、【…】、《…》、〔…〕）括起来的文字的样式，为 null 时不高亮 */
+    val bracketedText: SpanStyle? = null,
+    /** 斜体（*…* / _…_）文字着色，为 null 时保持默认文本色 */
+    val italicTextColor: Color? = null,
 )
 
 /** 嵌在文本流里的自定义内容，按 [placeholder] 的尺寸占位 */

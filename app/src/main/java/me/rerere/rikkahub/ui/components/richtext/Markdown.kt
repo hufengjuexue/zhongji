@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -126,6 +127,37 @@ private fun MarkdownPreview() {
     }
 }
 
+internal fun String.normalizeCjkTildes(): String {
+    if ('~' !in this) return this
+    fun isCjk(ch: Char): Boolean =
+        ch.code in 0x4E00..0x9FFF || ch.code in 0x3000..0x303F ||
+            ch.code in 0xFF00..0xFFEF || ch.code in 0x2600..0x27BF
+    val out = StringBuilder(length)
+    var i = 0
+    while (i < length) {
+        if (this[i] != '~') { out.append(this[i]); i++; continue }
+        var j = i
+        while (j < length && this[j] == '~') j++
+        val run = j - i
+        val prev = if (i > 0) this[i - 1] else ' '
+        val next = if (j < length) this[j] else ' '
+        if (run == 1 && (isCjk(prev) || isCjk(next))) {
+            out.append('\uFF5E')
+        } else {
+            repeat(run) { out.append('~') }
+        }
+        i = j
+    }
+    return out.toString()
+}
+
+private fun parseHexColorOrNull(hex: String): Color? {
+    val clean = hex.trim().removePrefix("#")
+    if (clean.length != 6 && clean.length != 8) return null
+    val value = clean.toLongOrNull(16) ?: return null
+    return Color(if (clean.length == 6) value or 0xFF000000L else value)
+}
+
 /**
  * 应用内使用的 Markdown：在通用的 [Markdown] 组件上接入代码高亮、图片预览、LaTeX 渲染、
  * 表格工具栏和搜索引用角标这些和应用相关的能力。
@@ -137,13 +169,20 @@ fun MarkdownBlock(
     style: TextStyle = LocalTextStyle.current,
     onClickCitation: (String) -> Unit = {}
 ) {
-    val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
-    val enableQuoteHighlight = LocalSettings.current.displaySetting.enableQuoteHighlight
+    val displaySetting = LocalSettings.current.displaySetting
+    val enableLatexRendering = displaySetting.enableLatexRendering
+    val enableQuoteHighlight = displaySetting.enableQuoteHighlight
     val fontSize = LocalTextStyle.current.merge(style).fontSize
     val density = LocalDensity.current
-    val quoteColor = MaterialTheme.colorScheme.tertiary
+    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val quoteColor = parseHexColorOrNull(displaySetting.quoteColorHex)
+        ?: MaterialTheme.colorScheme.tertiary
+    val bracketColor = parseHexColorOrNull(displaySetting.bracketColorHex)
+        ?: if (isDark) Color(0xFF7EAFC4) else Color(0xFF5B8DEF)
+    val italicColor = parseHexColorOrNull(displaySetting.italicsColorHex)
+        ?: Color(0xFF919191)
     val defaultTheme = MarkdownDefaults.theme(style)
-    val theme = remember(defaultTheme, fontSize, density, enableQuoteHighlight, quoteColor) {
+    val theme = remember(defaultTheme, fontSize, density, enableQuoteHighlight, quoteColor, bracketColor, italicColor) {
         defaultTheme.copy(
             inlineCode = defaultTheme.inlineCode.copy(
                 fontFamily = JetbrainsMono,
@@ -152,8 +191,11 @@ fun MarkdownBlock(
             // 段落间距跟随字号，调整字体大小时保持比例
             blockSpacing = if (fontSize.isSp) with(density) { fontSize.toDp() } else defaultTheme.blockSpacing,
             quotedText = SpanStyle(color = quoteColor).takeIf { enableQuoteHighlight },
+            bracketedText = SpanStyle(color = bracketColor).takeIf { enableQuoteHighlight },
+            italicTextColor = italicColor.takeIf { enableQuoteHighlight },
         )
     }
+    val normalizedContent = remember(content) { content.normalizeCjkTildes() }
 
     val currentOnClickCitation by rememberUpdatedState(onClickCitation)
     val components = remember(enableLatexRendering) {
@@ -195,7 +237,7 @@ fun MarkdownBlock(
     }
 
     Markdown(
-        content = content,
+        content = normalizedContent,
         modifier = modifier.padding(horizontal = 4.dp),
         style = style,
         theme = theme,

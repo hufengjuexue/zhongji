@@ -1,0 +1,13 @@
+{
+  "version": "1.2.1",
+  "versionCode": 5,
+  "publishedAt": "2026-10-26T20:55:00Z",
+  "changelog": "Kairos v1.2.1：\n\n1. 【品牌重铸】全面更名为 Kairos，启用全新自适应图标与独立包名 me.kairos.app\n2. 【记忆解绑】移除记忆系统反 RP / 反情感限制并消除每日时间戳造成的 Prompt Cache 前缀击穿\n3. 【双源尾注】打通溢出窗口历史对话切片的尾部向量召回与本地词法兜底，新增向量模型与扫描深度设置\n4. 【卡包兼容】增强 SillyTavern V2/V3 角色卡导入，自动还原头像并解包内嵌世界书与正则规则\n5. 【紧凑缓存】向量缓存升级 VEC1 二进制 Float32 格式并支持容量上限自动修剪",
+  "downloads": [
+    {
+      "name": "kairos-1.2.1-arm64-v8a.apk",
+      "url": "https://github.com/hufengjuexue/kairos/releases/download/v1.2.1/kairos-1.2.1-arm64-v8a.apk",
+      "size": "约 15 MB"
+    }
+  ]
+}

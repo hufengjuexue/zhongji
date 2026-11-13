@@ -23,11 +23,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub"
+        applicationId = "me.kairos.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 194
-        versionName = "3.1.1"
+        versionCode = 5
+        versionName = "1.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

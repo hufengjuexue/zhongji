@@ -17,6 +17,7 @@ import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
@@ -61,7 +62,9 @@ private class RenderedInlineText(
 private val MATH_SOURCE_STYLE = SpanStyle(fontFamily = FontFamily.Monospace)
 
 // 开引号 -> 闭引号。单引号常被当作撇号（don't、it’s）使用，不参与配对
-private val QUOTE_PAIRS = mapOf('"' to '"', '“' to '”', '「' to '」', '『' to '』')
+private val QUOTE_PAIRS = mapOf('"' to '"', '“' to '”', '「' to '」', '『' to '』', '«' to '»', '＂' to '＂')
+// 动作/旁白括号配对（不拦截英文圆括号避免误伤代码/数学/注脚）
+private val BRACKET_PAIRS = mapOf('（' to '）', '【' to '】', '《' to '》', '〔' to '〕', '｛' to '｝')
 
 private class InlineTextBuilder(
     private val context: MarkdownContext,
@@ -71,9 +74,11 @@ private class InlineTextBuilder(
     private val inlineContent = mutableMapOf<String, InlineTextContent>()
     private var hasMathWidget = false
 
-    // 还没闭合的引号：等待的闭引号，以及开引号在输出文本里的位置。引号可以跨越加粗、链接等节点
+    // 还没闭合的引号/括号：引号/括号可跨越加粗、斜体、链接等节点
     private var pendingQuoteClose: Char? = null
     private var pendingQuoteStart = 0
+    private var pendingBracketClose: Char? = null
+    private var pendingBracketStart = 0
 
     fun build(content: List<MarkdownInline>): RenderedInlineText {
         append(content)
@@ -85,7 +90,14 @@ private class InlineTextBuilder(
     private fun append(node: MarkdownInline) {
         when (node) {
             is MarkdownInline.Text -> appendText(node.text)
-            is MarkdownInline.Styled -> builder.withStyle(node.style) { append(node.children) }
+            is MarkdownInline.Styled -> {
+                val effectiveStyle = if (node.style.fontStyle == FontStyle.Italic && context.theme.italicTextColor != null) {
+                    node.style.merge(SpanStyle(color = context.theme.italicTextColor))
+                } else {
+                    node.style
+                }
+                builder.withStyle(effectiveStyle) { append(node.children) }
+            }
             is MarkdownInline.Code -> builder.withStyle(context.theme.inlineCode) { append(node.code) }
             is MarkdownInline.Link -> appendLink(node)
             is MarkdownInline.Math -> appendMath(node)
@@ -97,18 +109,33 @@ private class InlineTextBuilder(
     private fun appendText(text: String) {
         val offset = builder.length
         builder.append(text)
-        val quoteStyle = context.theme.quotedText ?: return
+        val quoteStyle = context.theme.quotedText
+        val bracketStyle = context.theme.bracketedText
+        if (quoteStyle == null && bracketStyle == null) return
         text.forEachIndexed { index, char ->
-            val close = pendingQuoteClose
-            if (close == null) {
-                QUOTE_PAIRS[char]?.let {
-                    pendingQuoteClose = it
-                    pendingQuoteStart = offset + index
+            if (quoteStyle != null) {
+                val close = pendingQuoteClose
+                if (close == null) {
+                    QUOTE_PAIRS[char]?.let {
+                        pendingQuoteClose = it
+                        pendingQuoteStart = offset + index
+                    }
+                } else if (char == close) {
+                    builder.addStyle(quoteStyle, pendingQuoteStart, offset + index + 1)
+                    pendingQuoteClose = null
                 }
-            } else if (char == close) {
-                // 只高亮已经闭合的引号，避免流式输出时或孤立的引号把后面整段都染色
-                builder.addStyle(quoteStyle, pendingQuoteStart, offset + index + 1)
-                pendingQuoteClose = null
+            }
+            if (bracketStyle != null) {
+                val bClose = pendingBracketClose
+                if (bClose == null) {
+                    BRACKET_PAIRS[char]?.let {
+                        pendingBracketClose = it
+                        pendingBracketStart = offset + index
+                    }
+                } else if (char == bClose) {
+                    builder.addStyle(bracketStyle, pendingBracketStart, offset + index + 1)
+                    pendingBracketClose = null
+                }
             }
         }
     }

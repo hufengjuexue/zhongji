@@ -449,6 +449,31 @@ class ClaudeRequestMessageTest {
         assertEquals("Hello, how are you?", textBlock?.get("text")?.jsonPrimitive?.content)
     }
 
+    @Test
+    fun `mid-conversation system messages are preserved in place and merged with adjacent user turn`() {
+        val messages = listOf(
+            UIMessage.system("Primary system prompt"),
+            UIMessage.user("Hello"),
+            UIMessage.assistant("Hi there"),
+            UIMessage.user("Latest question"),
+            UIMessage.system("[Relevant Past Memories]\n- Old promise"),
+        )
+
+        val result = invokeBuildMessages(messages)
+
+        // First SYSTEM goes to top-level system param (not in messages array);
+        // tail SYSTEM merges into the preceding user turn so user/assistant stay alternating.
+        assertEquals(3, result.size)
+        assertEquals("user", result[0].jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals("assistant", result[1].jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals("user", result[2].jsonObject["role"]?.jsonPrimitive?.content)
+
+        val mergedContent = result[2].jsonObject["content"]?.jsonArray!!
+        assertEquals(2, mergedContent.size)
+        assertEquals("Latest question", mergedContent[0].jsonObject["text"]?.jsonPrimitive?.content)
+        assertEquals("[Relevant Past Memories]\n- Old promise", mergedContent[1].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
     // ==================== Helper Functions ====================
 
     private fun createExecutedTool(

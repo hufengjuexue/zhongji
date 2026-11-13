@@ -59,6 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.onFocusChanged
@@ -303,6 +304,40 @@ fun ChatInput(
                                     },
                                     onlyIcon = true,
                                 )
+                            }
+
+                            // Optional quick bracket wrapper button for RP action narration
+                            val bracketSymbol = settings.displaySetting.bracketButtonSymbol
+                            if (settings.displaySetting.enableBracketButton && bracketSymbol.isNotBlank()) {
+                                Surface(
+                                    onClick = {
+                                        state.textContent.edit {
+                                            val min = selection.min
+                                            val max = selection.max
+                                            if (bracketSymbol.length >= 2 && min < max) {
+                                                val mid = bracketSymbol.length / 2
+                                                val wrapped = bracketSymbol.substring(0, mid) +
+                                                    asCharSequence().subSequence(min, max).toString() +
+                                                    bracketSymbol.substring(mid)
+                                                replace(min, max, wrapped)
+                                                selection = TextRange(min + wrapped.length)
+                                            } else {
+                                                replace(min, max, bracketSymbol)
+                                                val caret = if (bracketSymbol.length >= 2) min + bracketSymbol.length / 2 else min + bracketSymbol.length
+                                                selection = TextRange(caret)
+                                            }
+                                        }
+                                    },
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                ) {
+                                    Text(
+                                        text = bracketSymbol,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    )
+                                }
                             }
 
                         }

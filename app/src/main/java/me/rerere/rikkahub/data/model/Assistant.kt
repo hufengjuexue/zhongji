@@ -40,7 +40,7 @@ data class Assistant(
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBodies: List<CustomBody> = emptyList(),
     val mcpServers: Set<Uuid> = emptySet(),
-    val localTools: List<LocalToolOption> = listOf(LocalToolOption.TimeInfo),
+    val localTools: List<LocalToolOption> = emptyList(),
     val enableWebSearch: Boolean = false, // 网络搜索开关(每个助手独立)
     val workspaceId: Uuid? = null,
     val background: String? = null, // 聊天页背景图地址(本地文件 URI 或网络 URL), 为 null 时无背景
@@ -52,6 +52,16 @@ data class Assistant(
     val enableTimeReminder: Boolean = false, // 时间间隔提醒注入
     val timeReminderIntervalMinutes: Int = 60, // 时间提醒间隔（分钟，至少 1 分钟）
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
+    val alternateGreetings: List<String> = emptyList(), // 角色卡备选开场白
+    val cardDescription: String = "",
+    val cardPersonality: String = "",
+    val cardScenario: String = "",
+    val cardCreatorNotes: String = "",
+    val topK: Int? = null,
+    val enableProxyFix: Boolean = false,
+    val enableAntiEmptyResponse: Boolean = false,
+    val disableReasoning: Boolean = false,
+    val enableTransientPrune: Boolean = true,
 )
 
 @Serializable
@@ -194,12 +204,36 @@ sealed class PromptInjection {
         override val content: String = "",
         override val injectDepth: Int = 4,
         override val role: MessageRole = MessageRole.USER,
-        val keywords: List<String> = emptyList(), // 触发关键词
+        val keywords: List<String> = emptyList(), // 主触发关键词
+        val secondaryKeys: List<String> = emptyList(), // 副触发关键词
+        val selective: Boolean = false, // 启用副关键词过滤
+        val selectiveLogic: SelectiveLogic = SelectiveLogic.AND_ANY, // 副关键词逻辑
         val useRegex: Boolean = false, // 是否使用正则匹配
         val caseSensitive: Boolean = false, // 大小写敏感
+        val matchWholeWords: Boolean = false, // 整词匹配
         val scanDepth: Int = 4, // 扫描最近N条消息
         val constantActive: Boolean = false, // 常驻激活（无需匹配）
+        val probability: Int = 100, // 触发概率 0..100
+        val useProbability: Boolean = false, // 是否启用概率过滤
+        val sticky: Int = 0, // 激活后粘性持续轮数
+        val cooldown: Int = 0, // 冷却轮数
+        val delay: Int = 0, // 延迟生效轮数（历史非系统消息数不足则跳过）
     ) : PromptInjection()
+}
+
+@Serializable
+enum class SelectiveLogic {
+    @SerialName("and_any")
+    AND_ANY,
+
+    @SerialName("not_all")
+    NOT_ALL,
+
+    @SerialName("not_any")
+    NOT_ANY,
+
+    @SerialName("and_all")
+    AND_ALL,
 }
 
 /**
@@ -214,33 +248,94 @@ data class Lorebook(
     val entries: List<PromptInjection.RegexInjection> = emptyList(),
 )
 
+private val regexKeyCache = SimpleCache.builder<String, Result<Regex>>()
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build()
+
+private fun matchesEntryKey(
+    context: String,
+    key: String,
+    useRegex: Boolean,
+    caseSensitive: Boolean,
+    matchWholeWords: Boolean,
+): Boolean {
+    if (key.isEmpty()) return false
+    if (useRegex) {
+        val normalized = normalizeWorldInfoRegex(key)
+        val cacheKey = "${if (caseSensitive) "1" else "0"}:$normalized"
+        val compiled = regexKeyCache.getIfPresent(cacheKey)?.getOrNull() ?: run {
+            val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
+            val res = runCatching { Regex(normalized, options) }
+            regexKeyCache.put(cacheKey, res)
+            res.getOrNull()
+        } ?: return false
+        return compiled.containsMatchIn(context)
+    }
+    if (matchWholeWords && key.all { it.isLetterOrDigit() || it == '_' || it == ' ' }) {
+        val pattern = "\\b${Regex.escape(key)}\\b"
+        val cacheKey = "w:${if (caseSensitive) "1" else "0"}:$pattern"
+        val compiled = regexKeyCache.getIfPresent(cacheKey)?.getOrNull() ?: run {
+            val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
+            val res = runCatching { Regex(pattern, options) }
+            regexKeyCache.put(cacheKey, res)
+            res.getOrNull()
+        } ?: return false
+        return compiled.containsMatchIn(context)
+    }
+    return context.contains(key, ignoreCase = !caseSensitive)
+}
+
+private fun normalizeWorldInfoRegex(raw: String): String {
+    if (!raw.startsWith("/") || raw.length < 2) return raw
+    val lastSlash = raw.lastIndexOf('/')
+    if (lastSlash <= 0) return raw
+    val pattern = raw.substring(1, lastSlash)
+    val flags = raw.substring(lastSlash + 1)
+    if (flags.any { it !in "gimsuyd" }) return raw
+    val inlineFlags = buildString {
+        if ('i' in flags) append('i')
+        if ('m' in flags) append('m')
+        if ('s' in flags) append('s')
+    }
+    return if (inlineFlags.isNotEmpty()) "(?$inlineFlags)$pattern" else pattern
+}
+
 /**
  * 检查 RegexInjection 是否被触发
  *
  * @param context 要扫描的上下文文本
  * @return 是否触发
  */
-fun PromptInjection.RegexInjection.isTriggered(context: String): Boolean {
+fun PromptInjection.RegexInjection.isTriggered(
+    context: String,
+    rollProbability: Boolean = true,
+): Boolean {
     if (!enabled) return false
     if (constantActive) return true
     if (keywords.isEmpty()) return false
 
-    return keywords.any { keyword ->
-        if (useRegex) {
-            try {
-                val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
-                Regex(keyword, options).containsMatchIn(context)
-            } catch (e: Exception) {
-                false
-            }
-        } else {
-            if (caseSensitive) {
-                context.contains(keyword)
-            } else {
-                context.contains(keyword, ignoreCase = true)
-            }
-        }
+    val primaryMatched = keywords.any { key ->
+        matchesEntryKey(context, key, useRegex, caseSensitive, matchWholeWords)
     }
+    if (!primaryMatched) return false
+
+    if (selective && secondaryKeys.isNotEmpty()) {
+        val secMatches = secondaryKeys.map { key ->
+            matchesEntryKey(context, key, useRegex, caseSensitive, matchWholeWords)
+        }
+        val secondaryPassed = when (selectiveLogic) {
+            SelectiveLogic.AND_ANY -> secMatches.any { it }
+            SelectiveLogic.AND_ALL -> secMatches.all { it }
+            SelectiveLogic.NOT_ALL -> !secMatches.all { it }
+            SelectiveLogic.NOT_ANY -> secMatches.none { it }
+        }
+        if (!secondaryPassed) return false
+    }
+
+    if (rollProbability && useProbability && probability < 100) {
+        if (kotlin.random.Random.nextInt(100) >= probability.coerceIn(0, 100)) return false
+    }
+    return true
 }
 
 /**

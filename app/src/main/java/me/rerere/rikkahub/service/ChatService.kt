@@ -47,6 +47,7 @@ import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.prompts.buildCompressPrompt
 import me.rerere.rikkahub.data.ai.tools.InvalidMcpServerNamesException
 import me.rerere.rikkahub.data.ai.tools.shouldUseExternalWebSearch
+import me.rerere.rikkahub.data.ai.transformers.PlaceholderTransformer
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.event.AppEvent
@@ -54,6 +55,7 @@ import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.bindConfig
 import me.rerere.rikkahub.data.model.cancelInterruptedTools
 import me.rerere.rikkahub.data.model.deleteMessage
@@ -277,14 +279,51 @@ class ChatService(
         block(session)
     }
 
-    // 新建对话, 并添加预设消息
+    // 新建对话, 并添加预设消息与备选开场白（同步替换 {{user}}/{{char}} 等安全宏，多开场白直接挂载为首条消息分支）
     private suspend fun newConversation(conversationId: Uuid): Conversation {
-        val assistant = settingsStore.awaitLoaded().getCurrentAssistant()
-        return Conversation.ofId(
+        val settings = settingsStore.awaitLoaded()
+        val assistant = settings.getCurrentAssistant()
+        fun renderGreeting(text: String) = PlaceholderTransformer.substituteGreetingMacros(
+            text = text,
+            settings = settings,
+            assistant = assistant,
+        )
+        val renderedPresets = assistant.presetMessages.map { msg ->
+            msg.copy(
+                parts = msg.parts.map { part ->
+                    if (part is UIMessagePart.Text) part.copy(text = renderGreeting(part.text)) else part
+                }
+            )
+        }
+        val renderedAlts = assistant.alternateGreetings
+            .filter { it.isNotBlank() }
+            .map { UIMessage.assistant(renderGreeting(it)) }
+
+        val base = Conversation.ofId(
             id = conversationId,
             assistantId = assistant.id,
             newConversation = true
-        ).updateCurrentMessages(assistant.presetMessages)
+        )
+        if (renderedAlts.isEmpty()) {
+            return base.updateCurrentMessages(renderedPresets)
+        }
+        val nodes = when {
+            renderedPresets.firstOrNull()?.role == MessageRole.ASSISTANT -> {
+                val firstNode = MessageNode(
+                    messages = listOf(renderedPresets.first()) + renderedAlts,
+                    selectIndex = 0,
+                )
+                listOf(firstNode) + renderedPresets.drop(1).map { it.toMessageNode() }
+            }
+            renderedPresets.isEmpty() -> {
+                listOf(MessageNode(messages = renderedAlts, selectIndex = 0))
+            }
+            else -> {
+                renderedPresets.map { it.toMessageNode() } +
+                    listOf(MessageNode(messages = renderedAlts, selectIndex = 0))
+            }
+        }
+        return base.copy(messageNodes = nodes)
     }
 
     // 引入会话配置之前创建的会话没有固定配置，加载时按助手当前的值补上，之后不再随助手变化。
@@ -622,32 +661,67 @@ class ChatService(
             }
             warnIfToolsUnavailable(turn, conversationId)
 
-            val (request, hooks) = requestFactory.createAgent(turn, history, session.processingStatus)
+            var emergencyLimit: Int? = null
+            var overflowAttempt = 0
             var finishReason: AgentFinishReason? = null
             try {
-                runAgent(request, hooks).flowOn(Dispatchers.IO).collect { event ->
-                    when (event) {
-                        is AgentEvent.MessageUpdated -> {
-                            // 生成过程中只有网络重试的提示会留着，收到新内容说明重试已经成功
-                            session.processingStatus.value = null
-                            session.update { it.upsertMessage(replyNodeId, event.message) }
-                            session.replyMessageId.value = event.message.id
-                            // 通知等边缘副作用由 ChatNotificationManager 消费；
-                            // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
-                            appEventBus.tryEmit(
-                                AppEvent.ChatGenerationUpdate(conversationId, event.message, senderName)
-                            )
-                        }
+                while (true) {
+                    var emittedContent = false
+                    val (request, hooks) = requestFactory.createAgent(
+                        turn = turn,
+                        messages = history,
+                        processingStatus = session.processingStatus,
+                        emergencyLimit = emergencyLimit,
+                    )
+                    finishReason = null
+                    try {
+                        runAgent(request, hooks).flowOn(Dispatchers.IO).collect { event ->
+                            when (event) {
+                                is AgentEvent.MessageUpdated -> {
+                                    // 生成过程中只有网络重试的提示会留着，收到新内容说明重试已经成功
+                                    session.processingStatus.value = null
+                                    if (event.message.toText().isNotEmpty() || event.message.getTools().isNotEmpty()) {
+                                        emittedContent = true
+                                    }
+                                    session.update { it.upsertMessage(replyNodeId, event.message) }
+                                    session.replyMessageId.value = event.message.id
+                                    // 通知等边缘副作用由 ChatNotificationManager 消费；
+                                    // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
+                                    appEventBus.tryEmit(
+                                        AppEvent.ChatGenerationUpdate(conversationId, event.message, senderName)
+                                    )
+                                }
 
-                        is AgentEvent.Retrying -> {
-                            logRetry(event.attempt)
-                            session.processingStatus.value = retryStatus(event.attempt)
-                        }
+                                is AgentEvent.Retrying -> {
+                                    logRetry(event.attempt)
+                                    session.processingStatus.value = retryStatus(event.attempt)
+                                }
 
-                        is AgentEvent.Finished -> {
-                            Log.i(TAG, "runTurn: finished (${event.reason})")
-                            finishReason = event.reason
+                                is AgentEvent.Finished -> {
+                                    Log.i(TAG, "runTurn: finished (${event.reason})")
+                                    finishReason = event.reason
+                                }
+                            }
                         }
+                        break
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (!emittedContent && overflowAttempt < 3 && isContextLengthError(e)) {
+                            overflowAttempt++
+                            val baseCount = emergencyLimit
+                                ?: turn.assistant.contextMessageLimit.takeIf { it > 0 && it < history.size }
+                                ?: history.size
+                            val nextLimit = (baseCount * 65 / 100).coerceAtLeast(4)
+                            if (nextLimit < baseCount) {
+                                emergencyLimit = nextLimit
+                                session.processingStatus.value =
+                                    context.getString(R.string.chat_generation_context_trimming, nextLimit)
+                                Log.w(TAG, "Context overflow, trimming to $nextLimit messages (attempt $overflowAttempt)", e)
+                                continue
+                            }
+                        }
+                        throw e
                     }
                 }
             } finally {
@@ -711,6 +785,26 @@ class ChatService(
                 title = context.getString(R.string.error_title_tool_unavailable)
             )
         }
+    }
+
+    private fun isContextLengthError(error: Throwable): Boolean {
+        var cur: Throwable? = error
+        val needles = listOf(
+            "maximum context length",
+            "context_length_exceeded",
+            "too many tokens",
+            "token limit",
+            "exceeds the maximum",
+            "context window",
+        )
+        var depth = 0
+        while (cur != null && depth < 5) {
+            val msg = cur.message?.lowercase().orEmpty()
+            if (needles.any { it in msg }) return true
+            cur = cur.cause
+            depth++
+        }
+        return false
     }
 
     private fun logRetry(attempt: RetryAttempt) {
@@ -1237,6 +1331,41 @@ class ChatService(
         message: UIMessage,
     ) {
         deleteMessage(conversationId, message.id, failIfMissing = false)
+    }
+
+    suspend fun deleteMessageWithSnapshot(
+        conversationId: Uuid,
+        message: UIMessage,
+    ): List<MessageNode>? {
+        var snapshot: List<MessageNode>? = null
+        mutate(conversationId) { conversation ->
+            val updated = conversation.deleteMessage(message.id)
+            if (updated != null) {
+                snapshot = conversation.messageNodes
+                updated
+            } else {
+                conversation
+            }
+        }
+        return snapshot
+    }
+
+    suspend fun restoreConversationNodes(
+        conversationId: Uuid,
+        nodes: List<MessageNode>,
+    ) {
+        mutate(conversationId) { conversation ->
+            conversation.copy(messageNodes = nodes)
+        }
+    }
+
+    suspend fun appendProactiveAssistantMessage(
+        conversationId: Uuid,
+        message: UIMessage,
+    ) {
+        mutate(conversationId) { conversation ->
+            conversation.appendMessage(message)
+        }
     }
 
     // 停止当前会话生成任务（不清理会话缓存）

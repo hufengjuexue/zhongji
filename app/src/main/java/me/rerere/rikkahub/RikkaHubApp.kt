@@ -115,6 +115,7 @@ class RikkaHubApp : Application() {
         // Resume media generations interrupted by the last process death
         resumeMediaCreations()
         resumeMemoryConsolidation()
+        resumeProactiveMessaging()
 
         // Increment launch count
         incrementLaunchCount()
@@ -144,6 +145,19 @@ class RikkaHubApp : Application() {
                 get<MemoryConsolidationScheduler>().resumePending()
             }.onFailure {
                 Log.e(TAG, "resumeMemoryConsolidation failed", it)
+            }
+        }
+    }
+
+    private fun resumeProactiveMessaging() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                val setting = get<SettingsStore>().awaitLoaded().proactiveMessageSetting.normalized()
+                if (setting.enabled) {
+                    ProactiveMessageWorker.scheduleNext(this@RikkaHubApp, setting)
+                }
+            }.onFailure {
+                Log.e(TAG, "resumeProactiveMessaging failed", it)
             }
         }
     }

@@ -58,6 +58,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ChartColumn
+import me.rerere.hugeicons.stroke.Code
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.FolderAdd
@@ -76,6 +77,7 @@ import me.rerere.hugeicons.stroke.TransactionHistory
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
+import me.rerere.rikkahub.data.ai.PromptDebugCache
 import me.rerere.rikkahub.data.datastore.ConversationSortOrder
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
@@ -98,6 +100,7 @@ import me.rerere.rikkahub.ui.modifier.onClick
 import me.rerere.rikkahub.utils.navigateToChatPage
 import me.rerere.rikkahub.utils.toDp
 import me.rerere.ui.components.Tooltip
+import me.rerere.ui.webview.WebViewContentCache
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
@@ -256,6 +259,25 @@ fun ChatDrawerContent(
                     }
                     Greeting(
                         style = MaterialTheme.typography.labelMedium,
+                    )
+                    val activePersona = settings.resolveActivePersona(settings.assistantId)
+                    Text(
+                        text = stringResource(
+                            R.string.drawer_persona_chip,
+                            activePersona?.name?.ifBlank { activePersona.title }
+                                ?: stringResource(R.string.drawer_persona_none),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (activePersona != null) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable {
+                            navController.navigate(Screen.Persona)
+                        },
                     )
                 }
             }
@@ -420,6 +442,23 @@ fun ChatDrawerContent(
                             onClick = {
                                 showMenuPopup = false
                                 navController.navigate(Screen.ImageGen)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_page_menu_view_prompt)) },
+                            leadingIcon = { Icon(HugeIcons.Code, null) },
+                            onClick = {
+                                showMenuPopup = false
+                                val html = PromptDebugCache.get(current.id)
+                                if (html == null) {
+                                    toaster.show(
+                                        context.getString(R.string.chat_page_menu_view_prompt_empty),
+                                        type = ToastType.Info,
+                                    )
+                                } else {
+                                    val contentId = WebViewContentCache.store(context.cacheDir, html)
+                                    navController.navigate(Screen.WebView(contentId = contentId))
+                                }
                             }
                         )
                     }

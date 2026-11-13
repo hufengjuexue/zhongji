@@ -172,6 +172,18 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
 
         // 赞助提醒
         plain(SPONSOR_ALERT_DISMISSED_AT, Settings::sponsorAlertDismissedAt) { copy(sponsorAlertDismissedAt = it) },
+
+        // 向量检索（Vector Storage）
+        plain(VECTOR_STORAGE_ENABLED, Settings::vectorStorageEnabled) { copy(vectorStorageEnabled = it) },
+        SettingsField(
+            VECTOR_STORAGE_MODEL_ID,
+            Settings::vectorStorageModelId,
+            { copy(vectorStorageModelId = it) },
+            encode = { it?.toString() },
+            decode = { Uuid.parse(it) },
+        ),
+        plain(VECTOR_STORAGE_THRESHOLD, Settings::vectorStorageThreshold) { copy(vectorStorageThreshold = it) },
+        plain(VECTOR_STORAGE_SCAN_DEPTH, Settings::vectorStorageScanDepth) { copy(vectorStorageScanDepth = it) },
     )
 }
 

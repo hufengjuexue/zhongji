@@ -179,7 +179,7 @@ internal class InteractionsAPI(
             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .configureSessionHeaders(url, params.sessionId)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-goog-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
+            .addHeader("x-goog-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), params.sessionId))
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
     }
@@ -268,15 +268,20 @@ internal class InteractionsAPI(
     }
 
     internal fun buildInput(messages: List<UIMessage>): JsonArray = buildJsonArray {
-        messages
-            .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
-            .forEach { message ->
-                if (message.role == MessageRole.ASSISTANT) {
-                    addModelSteps(message)
-                } else {
-                    addUserStep(message)
-                }
+        val firstSystemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
+        messages.forEach { message ->
+            if (message.role == MessageRole.SYSTEM) {
+                if (message === firstSystemMessage) return@forEach
+                addUserStep(message)
+                return@forEach
             }
+            if (!message.isValidToUpload()) return@forEach
+            if (message.role == MessageRole.ASSISTANT) {
+                addModelSteps(message)
+            } else {
+                addUserStep(message)
+            }
+        }
     }
 
     private fun JsonArrayBuilder.addUserStep(message: UIMessage) {

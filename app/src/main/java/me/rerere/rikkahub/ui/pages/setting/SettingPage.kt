@@ -213,6 +213,27 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                 }
             }
 
+            item("roleplaySettings") {
+                val containerColor = MaterialTheme.colorScheme.secondaryContainer
+                val contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                CardGroup(
+                    title = { Text(stringResource(R.string.setting_page_roleplay)) },
+                ) {
+                    item(
+                        onClick = { navController.navigate(Screen.Persona) },
+                        leadingContent = { CardGroupIcon(HugeIcons.InLove, containerColor = containerColor, contentColor = contentColor) },
+                        supportingContent = { Text(stringResource(R.string.setting_page_persona_desc)) },
+                        headlineContent = { Text(stringResource(R.string.setting_page_persona)) },
+                    )
+                    item(
+                        onClick = { navController.navigate(Screen.SettingProactiveMessage) },
+                        leadingContent = { CardGroupIcon(HugeIcons.Megaphone01, containerColor = containerColor, contentColor = contentColor) },
+                        supportingContent = { Text(stringResource(R.string.setting_page_proactive_message_desc)) },
+                        headlineContent = { Text(stringResource(R.string.setting_page_proactive_message)) },
+                    )
+                }
+            }
+
             item("modelServices") {
                 val containerColor = MaterialTheme.colorScheme.tertiaryContainer
                 val contentColor = MaterialTheme.colorScheme.onTertiaryContainer

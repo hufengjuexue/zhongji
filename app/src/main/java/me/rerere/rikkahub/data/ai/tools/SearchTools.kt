@@ -10,10 +10,8 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.utils.JsonInstantPretty
-import me.rerere.rikkahub.utils.toLocalString
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
-import java.time.LocalDate
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
@@ -31,7 +29,6 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                     If a date or primary source is missing, or sources conflict, run another focused search
                     or use scrape_web to verify the most relevant source before answering.
                     Generate focused keywords and run multiple searches if needed.
-                    Today is ${LocalDate.now().toLocalString(true)}.
 
                     Response format:
                     - retrievedAt is the local retrieval time, never a publication date
@@ -39,14 +36,11 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                     - images[]: image urls related to the query (may be empty)
 
                     Citations:
-                    - After using results, add `[citation,domain](id)` after the sentence.
-                    - Multiple citations are allowed.
-                    - If no results are cited, omit citations.
+                    - When stating factual claims from search results, add `[citation,domain](id)` after the sentence.
+                    - If no results are cited or the conversation is narrative/creative, omit citations.
 
                     Images:
-                    - When images help the user understand the answer, embed relevant ones using Markdown: `![](url)`.
-                    - Embed 2 to 4 images, and only use urls from `images[]` (never fabricate or alter urls).
-                    - Usually place the images at the very beginning of your reply; skip them entirely if none are relevant.
+                    - Only embed image URLs from `images[]` (`![](url)`) if visual illustration genuinely helps answer a factual query; otherwise omit images. Never fabricate or alter URLs.
 
                     Example:
                     The capital of France is Paris. [citation,example.com](abc123)

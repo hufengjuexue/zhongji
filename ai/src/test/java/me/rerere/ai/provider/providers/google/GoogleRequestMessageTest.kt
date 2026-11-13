@@ -415,6 +415,31 @@ class GoogleRequestMessageTest {
             response?.get("result")?.jsonPrimitive?.content?.contains("Expected output value") == true)
     }
 
+    @Test
+    fun `mid-conversation system messages are preserved as user turns and merged cleanly`() {
+        val messages = listOf(
+            UIMessage.system("Primary system prompt"),
+            UIMessage.user("Hello"),
+            UIMessage.assistant("Hi there"),
+            UIMessage.user("Latest question"),
+            UIMessage.system("[Relevant Past Memories]\n- Old promise"),
+        )
+
+        val result = invokeBuildContents(messages)
+
+        // First SYSTEM goes to systemInstruction (skipped in contents);
+        // tail SYSTEM is preserved as a user turn and merged with adjacent pure-text user turn.
+        assertEquals(3, result.size)
+        assertEquals("user", result[0].jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals("model", result[1].jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals("user", result[2].jsonObject["role"]?.jsonPrimitive?.content)
+
+        val mergedParts = result[2].jsonObject["parts"]?.jsonArray!!
+        assertEquals(2, mergedParts.size)
+        assertEquals("Latest question", mergedParts[0].jsonObject["text"]?.jsonPrimitive?.content)
+        assertEquals("[Relevant Past Memories]\n- Old promise", mergedParts[1].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
     // ==================== Helper Functions ====================
 
     private fun createExecutedTool(

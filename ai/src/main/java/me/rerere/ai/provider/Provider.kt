@@ -68,12 +68,16 @@ data class TextGenerationParams(
     val model: Model,
     val temperature: Float? = null,
     val topP: Float? = null,
+    val topK: Int? = null,
     val maxTokens: Int? = null,
     val tools: List<Tool> = emptyList(),
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
     val sessionId: String? = Uuid.random().toString(),
+    val systemPromptInChat: Boolean = false,
+    val enableProxyFix: Boolean = false,
+    val disableReasoning: Boolean = false,
 )
 
 @Serializable

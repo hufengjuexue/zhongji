@@ -108,7 +108,7 @@ class ResponseAPI(
         capabilities = resolveResponseProviderCapabilities(baseUrl.toHttpUrl().host),
         configureRequest = {
             headers(mergeCustomHeaders(params.customHeaders))
-            addHeader("Authorization", "Bearer ${keyRoulette.next(apiKey, id.toString())}")
+            addHeader("Authorization", "Bearer ${keyRoulette.next(apiKey, id.toString(), params.sessionId)}")
             configureReferHeaders(baseUrl)
             configureSessionHeaders(baseUrl, params.sessionId)
         },
@@ -336,14 +336,16 @@ class ResponseAPI(
     }
 
     internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
+        val firstSystemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
         messages
             .filter { message ->
-                message.role != MessageRole.SYSTEM && (
-                    message.isValidToUpload() || message.parts.any { part ->
-                        part is UIMessagePart.Reasoning &&
-                            part.metadataAs<OpenAIReasoningMetadata>()?.encryptedContent != null
-                    }
-                    )
+                if (message.role == MessageRole.SYSTEM) {
+                    return@filter message !== firstSystemMessage && message.isValidToUpload()
+                }
+                message.isValidToUpload() || message.parts.any { part ->
+                    part is UIMessagePart.Reasoning &&
+                        part.metadataAs<OpenAIReasoningMetadata>()?.encryptedContent != null
+                }
             }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {

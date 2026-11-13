@@ -22,9 +22,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
+import me.rerere.ai.provider.ModelType
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.BackgroundEffectType
 import me.rerere.rikkahub.data.datastore.DisplaySetting
+import me.rerere.rikkahub.ui.components.ai.ModelField
+import me.rerere.rikkahub.ui.components.ai.ModelListSheet
+import me.rerere.rikkahub.ui.components.ai.rememberModelListState
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.CardGroupValue
@@ -43,6 +47,11 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
     var ttsPlaybackSpeed by remember(settings.defaultTTSPlaybackSpeed) {
         mutableFloatStateOf(settings.defaultTTSPlaybackSpeed)
     }
+    val embeddingModel = rememberModelListState(
+        modelId = settings.vectorStorageModelId,
+        providers = settings.providers,
+        type = ModelType.EMBEDDING,
+    )
 
     fun updateDisplaySetting(setting: DisplaySetting) {
         displaySetting = setting
@@ -265,6 +274,63 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                     )
                 }
             }
+
+            item {
+                CardGroup(
+                    title = { Text("向量检索 (Vector Storage)") },
+                ) {
+                    switchItem(
+                        checked = settings.vectorStorageEnabled,
+                        onCheckedChange = { v -> vm.updateSettings { it.copy(vectorStorageEnabled = v) } },
+                        headlineContent = { Text("启用记忆向量检索") },
+                        supportingContent = { Text("对 topics 记忆与溢出窗口的早先对话自动进行语义召回，尾部注入死保前缀缓存（未配嵌入模型时自动降级词法召回）") },
+                    )
+                    if (settings.vectorStorageEnabled) {
+                        formItem(
+                            headlineContent = { Text("嵌入模型 (Embedding)") },
+                            supportingContent = { Text("用于记忆与历史对话语义编码；留空则自动跟随可用嵌入模型，无模型时自动走本地词法召回") },
+                        ) {
+                            ModelField(
+                                model = embeddingModel.currentModel,
+                                onClick = { embeddingModel.open() },
+                                placeholder = "自动匹配（无嵌入模型时走词法兜底）",
+                                onClear = { vm.updateSettings { latest -> latest.copy(vectorStorageModelId = null) } },
+                            )
+                        }
+                        formItem(
+                            headlineContent = { Text("相似度阈值") },
+                            trailingContent = { CardGroupValue("${(settings.vectorStorageThreshold * 100).toInt()}%") },
+                        ) {
+                            Slider(
+                                value = settings.vectorStorageThreshold,
+                                onValueChange = { v -> vm.updateSettings { s -> s.copy(vectorStorageThreshold = v) } },
+                                valueRange = 0.1f..0.8f,
+                                steps = 13,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        formItem(
+                            headlineContent = { Text("检索扫描深度") },
+                            supportingContent = { Text("取最近几条非系统消息拼接为本轮检索 Query") },
+                            trailingContent = { CardGroupValue("最近 ${settings.vectorStorageScanDepth} 条") },
+                        ) {
+                            Slider(
+                                value = settings.vectorStorageScanDepth.toFloat().coerceIn(1f, 8f),
+                                onValueChange = { v ->
+                                    vm.updateSettings { s -> s.copy(vectorStorageScanDepth = v.roundToInt().coerceIn(1, 8)) }
+                                },
+                                valueRange = 1f..8f,
+                                steps = 6,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        ModelListSheet(state = embeddingModel) {
+            vm.updateSettings { latest -> latest.copy(vectorStorageModelId = it.id) }
         }
     }
 }
