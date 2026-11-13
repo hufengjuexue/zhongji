@@ -358,7 +358,8 @@ object MemoryVectorTailTransformer : InputMessageTransformer, KoinComponent {
             UsageTag(
                 source = UsageSource.MEMORY,
                 assistantId = ctx.assistant.id,
-                conversationId = ctx.conversationId,
+                conversationId = (ctx.conversationId as? Uuid)
+                    ?: (ctx.conversationId as? String)?.let { runCatching { Uuid.parse(it) }.getOrNull() },
             ),
         )
         val useDecisionsApi = providerSetting is ProviderSetting.Google &&
