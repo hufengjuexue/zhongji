@@ -130,6 +130,7 @@ class SettingsStore internal constructor(
         // 向量检索（Vector Storage）
         val VECTOR_STORAGE_ENABLED = booleanPreferencesKey("vector_storage_enabled")
         val VECTOR_STORAGE_MODEL_ID = stringPreferencesKey("vector_storage_model_id")
+        val VECTOR_DECISION_MODEL_ID = stringPreferencesKey("vector_decision_model_id")
         val VECTOR_STORAGE_THRESHOLD = floatPreferencesKey("vector_storage_threshold")
         val VECTOR_STORAGE_SCAN_DEPTH = intPreferencesKey("vector_storage_scan_depth")
 

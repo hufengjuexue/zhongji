@@ -53,6 +53,12 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
         providers = settings.providers,
         type = ModelType.EMBEDDING,
     )
+    val decisionModel = rememberModelListState(
+        modelId = settings.vectorDecisionModelId,
+        providers = settings.providers,
+        type = ModelType.DECISION,
+        allowedTypes = setOf(ModelType.DECISION, ModelType.CHAT),
+    )
 
     fun updateDisplaySetting(setting: DisplaySetting) {
         displaySetting = setting
@@ -333,6 +339,17 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                             )
                         }
                         formItem(
+                            headlineContent = { Text("决策重排模型 (Decision / Rerank)") },
+                            supportingContent = { Text("二阶段精排过滤误召回（推荐 gemini-decision-1 或轻量快速模型）；留空若已配 Decision 模型则自动启用，否则跳过重排") },
+                        ) {
+                            ModelField(
+                                model = decisionModel.currentModel,
+                                onClick = { decisionModel.open() },
+                                placeholder = "自动匹配 Decision 模型（无则跳过重排）",
+                                onClear = { vm.updateSettings { latest -> latest.copy(vectorDecisionModelId = null) } },
+                            )
+                        }
+                        formItem(
                             headlineContent = { Text("相似度阈值") },
                             trailingContent = { CardGroupValue("${(settings.vectorStorageThreshold * 100).toInt()}%") },
                         ) {
@@ -366,6 +383,9 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
 
         ModelListSheet(state = embeddingModel) {
             vm.updateSettings { latest -> latest.copy(vectorStorageModelId = it.id) }
+        }
+        ModelListSheet(state = decisionModel) {
+            vm.updateSettings { latest -> latest.copy(vectorDecisionModelId = it.id) }
         }
     }
 }

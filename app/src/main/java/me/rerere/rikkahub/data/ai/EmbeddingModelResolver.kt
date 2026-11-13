@@ -31,3 +31,26 @@ fun Settings.resolveEmbeddingModel(): Pair<ProviderSetting, Model>? {
     }
     return null
 }
+
+/**
+ * 解析记忆 / 历史回顾尾部重排使用的决策模型。
+ *
+ * 解析顺序：
+ * 1. 显式设置的 [Settings.vectorDecisionModelId]（允许 [ModelType.DECISION] 或轻量 [ModelType.CHAT] 模型）；
+ * 2. 未设置或已失效时，自动匹配快速模型所在提供商（或任意已启用提供商）的第一个 [ModelType.DECISION] 模型；
+ *    不擅自劫持普通对话模型，以免额外消耗与延迟。
+ */
+fun Settings.resolveDecisionModel(): Pair<ProviderSetting, Model>? {
+    val enabledProviders = providers.filter { it.enabled }
+    vectorDecisionModelId?.let { id ->
+        enabledProviders.firstOrNull { p ->
+            p.models.any { it.id == id && (it.type == ModelType.DECISION || it.type == ModelType.CHAT) }
+        }?.let { p -> return p to p.models.first { it.id == id } }
+    }
+    val fastProvider = enabledProviders.firstOrNull { p -> p.models.any { it.id == fastModelId } }
+    val orderedProviders = if (fastProvider != null) listOf(fastProvider) + (enabledProviders - fastProvider) else enabledProviders
+    orderedProviders.forEach { provider ->
+        provider.models.firstOrNull { it.type == ModelType.DECISION }?.let { return provider to it }
+    }
+    return null
+}

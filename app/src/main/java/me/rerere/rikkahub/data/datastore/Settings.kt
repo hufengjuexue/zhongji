@@ -90,6 +90,7 @@ data class Settings(
     // 向量检索（Vector Storage）
     val vectorStorageEnabled: Boolean = false,
     val vectorStorageModelId: Uuid? = null,
+    val vectorDecisionModelId: Uuid? = null,
     val vectorStorageThreshold: Float = 0.25f,
     val vectorStorageScanDepth: Int = 2,
     // 玩家人设 (User Personas) 与主动消息

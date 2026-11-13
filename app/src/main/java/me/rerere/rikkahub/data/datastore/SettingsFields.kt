@@ -186,6 +186,13 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
             encode = { it?.toString() },
             decode = { Uuid.parse(it) },
         ),
+        SettingsField(
+            VECTOR_DECISION_MODEL_ID,
+            Settings::vectorDecisionModelId,
+            { copy(vectorDecisionModelId = it) },
+            encode = { it?.toString() },
+            decode = { Uuid.parse(it) },
+        ),
         plain(VECTOR_STORAGE_THRESHOLD, Settings::vectorStorageThreshold) { copy(vectorStorageThreshold = it) },
         plain(VECTOR_STORAGE_SCAN_DEPTH, Settings::vectorStorageScanDepth) { copy(vectorStorageScanDepth = it) },
 

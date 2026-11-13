@@ -1119,6 +1119,7 @@ private fun ModelTypeSelector(
                     ModelType.CHAT -> R.string.setting_provider_page_chat_model
                     ModelType.EMBEDDING -> R.string.setting_provider_page_embedding_model
                     ModelType.IMAGE -> R.string.setting_provider_page_image_model
+                    ModelType.DECISION -> R.string.setting_provider_page_decision_model
                 }
             ),
             selected = selected,

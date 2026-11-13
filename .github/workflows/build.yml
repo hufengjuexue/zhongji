@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ master, main, mingli, huadeng ]
+    branches: [ master, main ]
     tags: [ 'v*' ]
   workflow_dispatch:
 
@@ -44,6 +44,11 @@ jobs:
           keyPassword=android
           EOF
           fi
+      - name: Run Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :ai:testDebugUnitTest :search:testDebugUnitTest :ui:testDebugUnitTest :workspace:testDebugUnitTest :app:testGithubDebugUnitTest --no-build-cache --stacktrace 2>&1 | tee test.log
+          exit ${PIPESTATUS[0]}
       - name: Build
         run: |
           chmod +x gradlew
@@ -73,7 +78,10 @@ jobs:
         if: failure()
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            test.log
+          if-no-files-found: ignore
       - name: Upload APK
         uses: actions/upload-artifact@v4
         if: success()
