@@ -44,6 +44,22 @@ jobs:
           keyPassword=android
           EOF
           fi
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
+
+      - name: Install web-ui dependencies
+        working-directory: web-ui
+        run: pnpm install --frozen-lockfile
+
       - name: Run Unit Tests
         run: |
           chmod +x gradlew
@@ -52,7 +68,7 @@ jobs:
       - name: Build
         run: |
           chmod +x gradlew
-          ./gradlew assembleGithubRelease -x :web:buildWebUi --no-build-cache --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleGithubRelease --no-build-cache --stacktrace 2>&1 | tee build.log
           exit ${PIPESTATUS[0]}
       - name: Collect and Rename APK
         id: rename
