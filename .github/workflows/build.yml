@@ -59,7 +59,13 @@ jobs:
           mkdir -p release-output
           find app/build/outputs/apk -type f -name "*.apk" | while read -r f; do
             echo "Found APK: $f"
-            cp "$f" "release-output/kairos-${V}-arm64-v8a.apk"
+            base=$(basename "$f")
+            case "$base" in
+              *arm64-v8a*) cp "$f" "release-output/kairos-${V}-arm64-v8a.apk" ;;
+              *universal*) cp "$f" "release-output/kairos-${V}-universal.apk" ;;
+              *x86_64*) echo "Skip x86_64 APK: $base" ;;
+              *) cp "$f" "release-output/kairos-${V}-${base}" ;;
+            esac
           done
           ls -la release-output/
       - name: Upload build log
