@@ -30,8 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.util.lerp
 import androidx.core.content.FileProvider
-import androidx.core.net.toFile
-import androidx.core.net.toUri
+import me.rerere.rikkahub.data.files.FileUtils
 
 /**
  * 按压进度：按下趋向 1，松开回到 0，用来让容器的圆角在按下时收紧。
@@ -48,9 +47,11 @@ internal fun animatePressProgress(interactionSource: InteractionSource): State<F
 }
 
 internal fun Context.openLocalFile(url: String) {
+    val file = FileUtils.resolveLocalFile(this, url) ?: return
+    if (!file.exists()) return
     val intent = Intent(Intent.ACTION_VIEW)
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    intent.data = FileProvider.getUriForFile(this, "$packageName.fileprovider", url.toUri().toFile())
+    intent.data = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
     startActivity(Intent.createChooser(intent, null))
 }
 

@@ -296,13 +296,10 @@ class FilesManager(
                 activityContext.exportImage(activity, bitmap)
             }
 
-            image.startsWith("file:") -> {
-                val file = image.toUri().toFile()
+            image.startsWith("file:") || image.startsWith("/") -> {
+                val file = FileUtils.resolveLocalFile(context, image)
+                    ?: error("Invalid local image path: $image")
                 activityContext.exportImageFile(activity, file)
-            }
-
-            image.startsWith("/") -> {
-                activityContext.exportImageFile(activity, File(image))
             }
 
             image.startsWith("http") -> {

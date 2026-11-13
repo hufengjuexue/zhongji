@@ -8,6 +8,7 @@ val JsonInstant by lazy {
     Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        coerceInputValues = true
     }
 }
 
@@ -15,6 +16,7 @@ val JsonInstantPretty by lazy {
     Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        coerceInputValues = true
         prettyPrint = true
     }
 }

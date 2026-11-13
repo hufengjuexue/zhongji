@@ -86,7 +86,6 @@ data class Settings(
     val webServerAccessPassword: String = "",
     val webServerLocalhostOnly: Boolean = false,
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
-    val sponsorAlertDismissedAt: Int = 0,
     // 向量检索（Vector Storage）
     val vectorStorageEnabled: Boolean = false,
     val vectorStorageModelId: Uuid? = null,

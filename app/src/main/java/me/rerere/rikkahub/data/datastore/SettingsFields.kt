@@ -174,9 +174,6 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
         // 备份提醒
         json(BACKUP_REMINDER_CONFIG, Settings::backupReminderConfig) { copy(backupReminderConfig = it) },
 
-        // 赞助提醒
-        plain(SPONSOR_ALERT_DISMISSED_AT, Settings::sponsorAlertDismissedAt) { copy(sponsorAlertDismissedAt = it) },
-
         // 向量检索（Vector Storage）
         plain(VECTOR_STORAGE_ENABLED, Settings::vectorStorageEnabled) { copy(vectorStorageEnabled = it) },
         SettingsField(

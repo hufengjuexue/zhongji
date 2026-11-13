@@ -174,7 +174,7 @@ private class PhoneUseSession(
                 "Ask them to turn it on in Settings > Notifications (and grant the overlay permission) first."
         }
         val controller = manager.controller.value ?: error(
-            "Phone Use is not enabled. Ask the user to turn on \"RikkaHub Phone Use\" in the system accessibility settings."
+            "Phone Use is not enabled. Ask the user to turn on \"Kairos Phone Use\" in the system accessibility settings."
         )
         when (val action = params.string("action") ?: error("action is required")) {
             "list_apps" -> text(

@@ -7,6 +7,8 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import android.webkit.MimeTypeMap
+import androidx.core.net.toFile
+import androidx.core.net.toUri
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -14,6 +16,45 @@ import kotlin.uuid.Uuid
 
 object FileUtils {
     private const val TAG = "FileUtils"
+
+    private val APP_FILES_URL_REGEX = Regex(
+        """^(file://)?/data/(?:user/\d+|data)/[^/]+/files/((?:upload|skills|fonts|media_creation|images|tool_outputs)/.+)$"""
+    )
+
+    /**
+     * 将其他包名（如上游 me.rerere.rikkahub）或其他用户目录的私有 filesDir 路径/URI
+     * 重映射到当前应用的 [filesDir]，保证跨应用导入备份后图片、文档与头像仍可访问。
+     */
+    fun remapAppFileUrl(filesDir: File, raw: String): String {
+        val match = APP_FILES_URL_REGEX.matchEntire(raw) ?: return raw
+        val scheme = match.groupValues[1]
+        val relativePath = match.groupValues[2]
+        val baseDir = filesDir.invariantSeparatorsPath.trimEnd('/')
+        return if (scheme.isNotEmpty()) {
+            "file://$baseDir/$relativePath"
+        } else {
+            "$baseDir/$relativePath"
+        }
+    }
+
+    /**
+     * 解析本地附件或图片路径，若原路径不存在则自动回退到重映射后的当前应用 [Context.filesDir]。
+     */
+    fun resolveLocalFile(context: Context, url: String): File? {
+        val direct = toRawFile(url)
+        if (direct != null && direct.exists()) return direct
+        val remapped = remapAppFileUrl(context.filesDir, url)
+        if (remapped != url) {
+            return toRawFile(remapped) ?: direct
+        }
+        return direct
+    }
+
+    private fun toRawFile(url: String): File? = when {
+        url.startsWith("file:") -> runCatching { url.toUri().toFile() }.getOrNull()
+        url.startsWith("/") -> File(url)
+        else -> null
+    }
 
     fun buildUuidFileName(displayName: String?, mimeType: String?): String {
         val extFromName = displayName

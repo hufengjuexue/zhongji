@@ -32,11 +32,13 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.roundToInt
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
@@ -57,9 +60,12 @@ import me.rerere.hugeicons.stroke.StopCircle
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.DEFAULT_SYSTEM_TTS_ID
+import me.rerere.rikkahub.data.datastore.DisplaySetting
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
+import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.components.ui.CardGroupValue
 import me.rerere.rikkahub.ui.components.ui.ItemAction
 import me.rerere.rikkahub.ui.components.ui.ItemActionMenu
 import me.rerere.rikkahub.ui.components.ui.PagerTab
@@ -67,6 +73,7 @@ import me.rerere.rikkahub.ui.components.ui.PagerTabs
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
 import me.rerere.rikkahub.ui.components.ui.longPressReorder
+import me.rerere.rikkahub.ui.components.ui.switchItem
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.pages.setting.components.ASRProviderConfigure
 import me.rerere.rikkahub.ui.pages.setting.components.ProviderEditSheet
@@ -252,6 +259,66 @@ private fun TTSProviderList(
                     action = if (isSelected) {
                         { TTSTestButton() }
                     } else null,
+                )
+            }
+        }
+
+        // 统一归入语音服务页：TTS 播报与朗读行为设置（放在提供商列表后，保持拖拽索引不变）
+        item(key = "tts_behavior_settings") {
+            var ttsPlaybackSpeed by remember(settings.defaultTTSPlaybackSpeed) {
+                mutableFloatStateOf(settings.defaultTTSPlaybackSpeed)
+            }
+            val displaySetting = settings.displaySetting
+            fun updateDisplaySetting(next: DisplaySetting) {
+                onUpdateSettings { it.copy(displaySetting = next) }
+            }
+            CardGroup(
+                modifier = Modifier.padding(top = 8.dp),
+                title = { Text(stringResource(R.string.setting_page_tts_settings)) },
+            ) {
+                formItem(
+                    headlineContent = { Text(stringResource(R.string.setting_tts_page_default_playback_speed)) },
+                    supportingContent = { Text(stringResource(R.string.setting_tts_page_default_playback_speed_description)) },
+                    trailingContent = { CardGroupValue("x${"%.1f".format(ttsPlaybackSpeed)}") },
+                ) {
+                    Slider(
+                        value = ttsPlaybackSpeed,
+                        onValueChange = {
+                            ttsPlaybackSpeed = (it * 10).roundToInt() / 10f
+                        },
+                        onValueChangeFinished = {
+                            onUpdateSettings {
+                                it.copy(defaultTTSPlaybackSpeed = ttsPlaybackSpeed)
+                            }
+                        },
+                        valueRange = 0.5f..2.0f,
+                        steps = 14,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                switchItem(
+                    checked = displaySetting.ttsOnlyReadQuoted,
+                    onCheckedChange = { updateDisplaySetting(displaySetting.copy(ttsOnlyReadQuoted = it)) },
+                    supportingContent = { Text(stringResource(R.string.setting_display_page_tts_only_read_quoted_desc)) },
+                    headlineContent = { Text(stringResource(R.string.setting_display_page_tts_only_read_quoted_title)) },
+                )
+                switchItem(
+                    checked = displaySetting.ttsOnlyReadOutsideBrackets,
+                    onCheckedChange = { updateDisplaySetting(displaySetting.copy(ttsOnlyReadOutsideBrackets = it)) },
+                    supportingContent = { Text(stringResource(R.string.setting_display_page_tts_read_outside_brackets_desc)) },
+                    headlineContent = { Text(stringResource(R.string.setting_display_page_tts_read_outside_brackets_title)) },
+                )
+                switchItem(
+                    checked = displaySetting.autoPlayTTSAfterGeneration,
+                    onCheckedChange = { updateDisplaySetting(displaySetting.copy(autoPlayTTSAfterGeneration = it)) },
+                    supportingContent = { Text(stringResource(R.string.setting_display_page_auto_play_tts_desc)) },
+                    headlineContent = { Text(stringResource(R.string.setting_display_page_auto_play_tts_title)) },
+                )
+                switchItem(
+                    checked = displaySetting.voiceModeListenWhileReplying,
+                    onCheckedChange = { updateDisplaySetting(displaySetting.copy(voiceModeListenWhileReplying = it)) },
+                    supportingContent = { Text(stringResource(R.string.setting_display_page_voice_listen_while_replying_desc)) },
+                    headlineContent = { Text(stringResource(R.string.setting_display_page_voice_listen_while_replying_title)) },
                 )
             }
         }

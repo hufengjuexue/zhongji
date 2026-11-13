@@ -1,6 +1,9 @@
 package me.rerere.rikkahub.ui.pages.setting
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -43,14 +46,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toOffset
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Code
-import me.rerere.hugeicons.stroke.Earth
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Github
+import me.rerere.hugeicons.stroke.Idea01
 import me.rerere.hugeicons.stroke.SmartPhone01
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.components.onboarding.OnboardingGuideOverlay
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.CardGroupIcon
 import me.rerere.rikkahub.ui.components.ui.drawAppLogo
@@ -91,7 +95,10 @@ fun SettingAboutPage() {
     // 表情从 logo 中心喷出，坐标要换算到 EmojiBurstHost 里
     var hostCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var logoCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    Scaffold(
+    var showGuide by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
         topBar = {
             TopAppBar(
                 title = {
@@ -204,26 +211,41 @@ fun SettingAboutPage() {
                     val contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                     CardGroup {
                         item(
-                            onClick = { context.openUrl("https://rikka-ai.com/") },
-                            leadingContent = { CardGroupIcon(HugeIcons.Earth, containerColor = containerColor, contentColor = contentColor) },
-                            supportingContent = { Text("https://rikka-ai.com") },
-                            headlineContent = { Text(stringResource(R.string.about_page_website)) },
+                            onClick = { showGuide = true },
+                            leadingContent = { CardGroupIcon(HugeIcons.Idea01, containerColor = containerColor, contentColor = contentColor) },
+                            supportingContent = { Text("重温 Kairos 核心 3 模型与记忆工作流演示") },
+                            headlineContent = { Text("查看新手引导") },
                         )
                         item(
-                            onClick = { context.openUrl("https://github.com/rikkahub/rikkahub") },
+                            onClick = { context.openUrl("https://github.com/hufengjuexue/kairos") },
                             leadingContent = { CardGroupIcon(HugeIcons.Github, containerColor = containerColor, contentColor = contentColor) },
-                            supportingContent = { Text("https://github.com/rikkahub/rikkahub") },
+                            supportingContent = { Text("https://github.com/hufengjuexue/kairos") },
                             headlineContent = { Text(stringResource(R.string.about_page_github)) },
                         )
                         item(
-                            onClick = { context.openUrl("https://github.com/rikkahub/rikkahub/blob/master/LICENSE") },
+                            onClick = { context.openUrl("https://github.com/hufengjuexue/kairos/blob/main/LICENSE") },
                             leadingContent = { CardGroupIcon(HugeIcons.File02, containerColor = containerColor, contentColor = contentColor) },
-                            supportingContent = { Text("https://github.com/rikkahub/rikkahub/blob/master/LICENSE") },
+                            supportingContent = { Text("https://github.com/hufengjuexue/kairos/blob/main/LICENSE") },
                             headlineContent = { Text(stringResource(R.string.about_page_license)) },
                         )
                     }
                 }
             }
+        }
+    }
+
+        AnimatedVisibility(
+            visible = showGuide,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            OnboardingGuideOverlay(
+                onFinish = { showGuide = false },
+                onGoToProviders = {
+                    showGuide = false
+                    navController.navigate(Screen.SettingProvider)
+                },
+            )
         }
     }
 }

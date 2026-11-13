@@ -3,12 +3,10 @@ package me.rerere.rikkahub.ui.pages.setting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Delete01
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -196,8 +194,13 @@ private fun AddProviderDialog(
     onDismiss: () -> Unit,
     onConfirm: (SearchServiceOptions) -> Unit
 ) {
+    // 隐藏原作者托管付费服务选项，保留反序列化兼容性
+    val availableTypes = remember {
+        SearchServiceOptions.TYPES.keys
+            .filterNot { it == SearchServiceOptions.RikkaHubOptions::class }
+    }
     var selectedType by remember {
-        mutableStateOf(SearchServiceOptions.TYPES.keys.first())
+        mutableStateOf(availableTypes.first())
     }
 
     AlertDialog(
@@ -209,7 +212,7 @@ private fun AddProviderDialog(
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(SearchServiceOptions.TYPES.keys.toList()) { type ->
+                items(availableTypes) { type ->
                     val name = SearchServiceOptions.TYPES[type] ?: "Unknown"
                     val isSelected = selectedType == type
                     Card(
