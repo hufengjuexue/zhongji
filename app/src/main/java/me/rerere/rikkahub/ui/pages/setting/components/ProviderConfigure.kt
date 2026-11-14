@@ -5,37 +5,54 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ContainedLoadingIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.ui.toast.ToastType
 import me.rerere.ai.provider.ClaudePromptCacheTtl
+import me.rerere.ai.provider.KeyRotationMode
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ProviderQuota
 import me.rerere.ai.provider.UsageWindow
 import me.rerere.ai.provider.supportsQuota
+import me.rerere.ai.util.KeyCooldownReason
+import me.rerere.ai.util.KeyPoolMonitor
+import me.rerere.ai.util.maskApiKey
+import me.rerere.ai.util.parseApiKeys
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.account.AccountLoginStatus
 import me.rerere.rikkahub.data.ai.account.ChatGPTAuth
@@ -586,7 +603,10 @@ private fun ProviderConfigureGoogle(
     CardGroup {
         nameItem(provider, onEdit)
         if (!useServiceAccount) {
-            apiKeyItem(provider.apiKey) { onEdit(provider.copy(apiKey = it)) }
+            googleKeyPoolItem(
+                apiKey = provider.apiKey,
+                onApiKeyChange = { onEdit(provider.copy(apiKey = it)) },
+            )
         }
         if (!provider.vertexAI) {
             textFieldItem(
@@ -607,6 +627,35 @@ private fun ProviderConfigureGoogle(
     }
 
     CardGroup {
+        if (!useServiceAccount) {
+            formItem(
+                headlineContent = { Text("多 Key 轮询策略") },
+                supportingContent = {
+                    Text(
+                        when (provider.keyRotationMode) {
+                            KeyRotationMode.STICKY ->
+                                "同一对话优先锁定同一把 Key 保前缀缓存；撞 429 或 RPD 用尽自动切下一把"
+                            KeyRotationMode.ROUND_ROBIN ->
+                                "每次请求在健康池里轮换不同 Key，分散 5 RPM 高频并发限制"
+                        }
+                    )
+                },
+            ) {
+                ConnectedChoiceButtons(
+                    options = KeyRotationMode.entries,
+                    selected = provider.keyRotationMode,
+                    onSelect = { onEdit(provider.copy(keyRotationMode = it)) },
+                ) { mode, selected ->
+                    ConnectedChoiceLabel(
+                        text = when (mode) {
+                            KeyRotationMode.STICKY -> "缓存优先"
+                            KeyRotationMode.ROUND_ROBIN -> "逐次轮询"
+                        },
+                        selected = selected,
+                    )
+                }
+            }
+        }
         switchItem(
             checked = provider.vertexAI,
             onCheckedChange = { onEdit(provider.copy(vertexAI = it)) },
@@ -659,5 +708,343 @@ private fun ProviderConfigureGoogle(
                 onValueChange = { onEdit(provider.copy(projectId = it.trim())) },
             )
         }
+    }
+}
+
+private fun CardGroupScope.googleKeyPoolItem(
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit,
+) = formItem(
+    headlineContent = {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("API Key 号池")
+            GoogleKeyPoolSummaryBadge(apiKey = apiKey)
+        }
+    },
+) {
+    GoogleKeyPoolEditor(
+        apiKey = apiKey,
+        onApiKeyChange = onApiKeyChange,
+    )
+}
+
+@Composable
+private fun GoogleKeyPoolSummaryBadge(apiKey: String) {
+    val statusVersion by KeyPoolMonitor.statusVersion.collectAsStateWithLifecycle()
+    val statuses = remember(apiKey, statusVersion) { KeyPoolMonitor.inspect(apiKey) }
+    val total = statuses.size
+    val cooling = statuses.count { it.reason != KeyCooldownReason.READY }
+    val ready = total - cooling
+
+    val (containerColor, contentColor, label) = when {
+        total == 0 -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "未配置",
+        )
+        cooling == 0 -> Triple(
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            "$total 把就绪",
+        )
+        ready > 0 -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            "$ready 就绪 / $cooling 冷却",
+        )
+        else -> Triple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            "全部冷却 ($cooling)",
+        )
+    }
+
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+@Composable
+private fun GoogleKeyPoolEditor(
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit,
+) {
+    val toaster = LocalToaster.current
+    val statusVersion by KeyPoolMonitor.statusVersion.collectAsStateWithLifecycle()
+    val statuses = remember(apiKey, statusVersion) { KeyPoolMonitor.inspect(apiKey) }
+    val coolingCount = statuses.count { it.reason != KeyCooldownReason.READY }
+
+    var visible by remember { mutableStateOf(false) }
+    var showAllKeys by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = { onApiKeyChange(it) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            maxLines = 6,
+            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
+            placeholder = {
+                Text(
+                    "每行一个、或用英文逗号/空格分隔填入多个项目 Key",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            supportingText = {
+                Text(
+                    when {
+                        statuses.isEmpty() ->
+                            "支持一次粘贴多账号 / 多项目 Key；别忘了点右下角保存生效"
+                        statuses.size == 1 ->
+                            "当前 1 把 Key；点下方「批量导入」或直接换行追加即可组池轮询"
+                        else ->
+                            "已识别 ${statuses.size} 把不重复 Key，撞 429 或 RPD 耗尽自动切流"
+                    }
+                )
+            },
+            visualTransformation = if (!visible) PasswordVisualTransformation() else VisualTransformation.None,
+            trailingIcon = {
+                IconButton(onClick = { visible = !visible }) {
+                    Icon(if (visible) HugeIcons.ViewOff else HugeIcons.View, contentDescription = null)
+                }
+            },
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            FilledTonalButton(
+                onClick = { showImportDialog = true },
+            ) {
+                Icon(
+                    imageVector = HugeIcons.FileImport,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("批量导入 Key")
+            }
+
+            if (coolingCount > 0) {
+                OutlinedButton(
+                    onClick = {
+                        KeyPoolMonitor.reset(apiKey)
+                        toaster.show("已重置 $coolingCount 把 Key 的冷却状态", type = ToastType.Success)
+                    },
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.Refresh03,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("重置冷却")
+                }
+            }
+        }
+
+        if (statuses.isNotEmpty()) {
+            val maxCollapsed = 5
+            val visibleKeys = if (showAllKeys || statuses.size <= maxCollapsed) {
+                statuses
+            } else {
+                statuses.take(maxCollapsed)
+            }
+            val nowMs = System.currentTimeMillis()
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                visibleKeys.forEachIndexed { index, info ->
+                    val statusLabel = when (info.reason) {
+                        KeyCooldownReason.READY -> "就绪"
+                        KeyCooldownReason.RPM_LIMIT -> {
+                            val sec = ((info.cooldownUntilMs - nowMs) / 1000L).coerceAtLeast(1L)
+                            "限流 ${sec}s"
+                        }
+                        KeyCooldownReason.RPD_EXHAUSTED -> {
+                            val mins = ((info.cooldownUntilMs - nowMs) / 60_000L).coerceAtLeast(1L)
+                            if (mins >= 60) "RPD耗尽 · ${mins / 60}h" else "RPD耗尽 · ${mins}m"
+                        }
+                        KeyCooldownReason.AUTH_ERROR -> "鉴权失败"
+                        KeyCooldownReason.SERVER_ERROR -> "服务异常"
+                    }
+                    val badgeColor = when (info.reason) {
+                        KeyCooldownReason.READY -> MaterialTheme.colorScheme.secondaryContainer
+                        KeyCooldownReason.RPM_LIMIT, KeyCooldownReason.SERVER_ERROR ->
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        KeyCooldownReason.RPD_EXHAUSTED, KeyCooldownReason.AUTH_ERROR ->
+                            MaterialTheme.colorScheme.errorContainer
+                    }
+                    val badgeTextColor = when (info.reason) {
+                        KeyCooldownReason.READY -> MaterialTheme.colorScheme.onSecondaryContainer
+                        KeyCooldownReason.RPM_LIMIT, KeyCooldownReason.SERVER_ERROR ->
+                            MaterialTheme.colorScheme.onTertiaryContainer
+                        KeyCooldownReason.RPD_EXHAUSTED, KeyCooldownReason.AUTH_ERROR ->
+                            MaterialTheme.colorScheme.onErrorContainer
+                    }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "#${index + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(28.dp),
+                            )
+                            Text(
+                                text = maskApiKey(info.key),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Surface(
+                                color = badgeColor,
+                                contentColor = badgeTextColor,
+                                shape = RoundedCornerShape(999.dp),
+                            ) {
+                                Text(
+                                    text = statusLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    val updated = parseApiKeys(apiKey).filterNot { it == info.key }
+                                    onApiKeyChange(updated.joinToString("\n"))
+                                },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    imageVector = HugeIcons.Cancel01,
+                                    contentDescription = stringResource(R.string.delete),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (statuses.size > maxCollapsed) {
+                    TextButton(
+                        onClick = { showAllKeys = !showAllKeys },
+                        modifier = Modifier.align(Alignment.End),
+                    ) {
+                        Text(
+                            if (showAllKeys) "收起列表" else "展开全部 ${statuses.size} 把 Key"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showImportDialog) {
+        var importText by remember { mutableStateOf("") }
+        val existingKeys = remember(apiKey) { parseApiKeys(apiKey) }
+        val importedKeys = remember(importText) {
+            parseApiKeys(importText).map { it.trim('"', '\'') }.filter { it.isNotBlank() }.distinct()
+        }
+        val newlyAddedCount = remember(existingKeys, importedKeys) {
+            val existingSet = existingKeys.toSet()
+            importedKeys.count { it !in existingSet }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showImportDialog = false },
+            title = { Text("批量导入 Google API Key") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "直接粘贴多把 AI Studio Key（支持换行、逗号、分号或空格分隔），会自动去重。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = importText,
+                        onValueChange = { importText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 5,
+                        maxLines = 10,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
+                        placeholder = {
+                            Text(
+                                "AIzaSy...\nAIzaSy...\nAIzaSy...",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        },
+                    )
+                    Text(
+                        text = if (importedKeys.isEmpty()) {
+                            "尚未识别到 Key"
+                        } else {
+                            "已识别 ${importedKeys.size} 把（其中新增 $newlyAddedCount 把）"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (existingKeys.isNotEmpty()) {
+                        OutlinedButton(
+                            enabled = importedKeys.isNotEmpty(),
+                            onClick = {
+                                val merged = (existingKeys + importedKeys).distinct()
+                                onApiKeyChange(merged.joinToString("\n"))
+                                showImportDialog = false
+                                toaster.show("已追加 $newlyAddedCount 把 Key（记得点保存）", type = ToastType.Success)
+                            },
+                        ) {
+                            Text("追加")
+                        }
+                    }
+                    Button(
+                        enabled = importedKeys.isNotEmpty(),
+                        onClick = {
+                            onApiKeyChange(importedKeys.joinToString("\n"))
+                            showImportDialog = false
+                            toaster.show("已导入 ${importedKeys.size} 把 Key（记得点保存）", type = ToastType.Success)
+                        },
+                    ) {
+                        Text(if (existingKeys.isEmpty()) "导入" else "覆盖")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }

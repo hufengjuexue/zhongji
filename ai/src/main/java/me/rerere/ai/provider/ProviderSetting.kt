@@ -35,6 +35,17 @@ enum class ClaudePromptCacheTtl(val apiValue: String?) {
     ONE_HOUR("1h")
 }
 
+@Serializable
+enum class KeyRotationMode {
+    /** 缓存优先：同一对话优先绑定同一把健康 Key 以保 Prompt Caching，限流/耗尽时自动切备用 Key */
+    @SerialName("sticky")
+    STICKY,
+
+    /** 均衡轮询：每次请求按最久未使用轮换健康 Key，分散高并发与 RPM 限流压力 */
+    @SerialName("round_robin")
+    ROUND_ROBIN,
+}
+
 /**
  * 是否支持模型内置联网搜索（[BuiltInTools.Search]）。
  *
@@ -151,6 +162,7 @@ sealed class ProviderSetting {
         var location: String = "us-central1", // only for vertex AI service account
         var projectId: String = "", // only for vertex AI service account
         var useInteractionsApi: Boolean = false, // ignored when vertex AI is enabled
+        var keyRotationMode: KeyRotationMode = KeyRotationMode.STICKY,
     ) : ApiKey() {
         override fun withQuotaQuery(query: QuotaQuery): ApiKey = copy(quotaQuery = query)
 
