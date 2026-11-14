@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
@@ -360,7 +361,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val maxAttempts = maxKeyAttempts(providerSetting)
         val attemptIndex = AtomicInteger(0)
         val hasEmittedEvent = AtomicBoolean(false)
-        @Volatile var activeEventSource: EventSource? = null
+        val activeEventSource = AtomicReference<EventSource?>(null)
         val scope = this
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
@@ -491,7 +492,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     }
                 }
 
-                activeEventSource = client.newEventSource(signed.request, listener)
+                activeEventSource.getAndSet(client.newEventSource(signed.request, listener))?.cancel()
             }
         }
 
@@ -499,7 +500,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         awaitClose {
             println("[awaitClose] 关闭eventSource")
-            activeEventSource?.cancel()
+            activeEventSource.get()?.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
@@ -1214,7 +1215,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         EmbeddingGenerationResult(
-            usage = null,
+            model = params.model.modelId,
             embeddings = allEmbeddings,
         )
     }

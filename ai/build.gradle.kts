@@ -13,6 +13,11 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        // 单元测试允许 android.util.Log 等返回默认值，避免阻塞纯 HTTP 集成回环测试
+        unitTests.isReturnDefaultValues = true
+    }
+
     defaultConfig {
 //        externalNativeBuild {
 //            cmake {
