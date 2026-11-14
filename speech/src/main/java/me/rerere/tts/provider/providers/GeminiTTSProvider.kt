@@ -1,6 +1,7 @@
 package me.rerere.tts.provider.providers
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -383,6 +384,12 @@ class GeminiTTSProvider(
                             GeminiTtsPoolTracker.recordFailure(apiKey, modelId, retryEx.statusCode, retryEx.errorBody)
                             if (emittedAudio) throw toTtsException(retryEx)
                             continue
+                        } catch (retryEx: CancellationException) {
+                            throw retryEx
+                        } catch (retryEx: Exception) {
+                            lastError = retryEx
+                            if (emittedAudio) throw retryEx
+                            continue
                         }
                     }
                 }
@@ -392,6 +399,8 @@ class GeminiTTSProvider(
                 if (e.statusCode !in setOf(401, 403, 404, 408, 429) && e.statusCode < 500) {
                     throw toTtsException(e)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 lastError = e
                 if (emittedAudio) throw e
@@ -442,7 +451,9 @@ class GeminiTTSProvider(
                 val errText = response.body.string()
                 throw GeminiTtsHttpException(response.code, response.message, errText)
             }
-            val contentType = response.header("Content-Type").orEmpty().lowercase()
+            val contentType = (response.header("Content-Type") ?: response.body.contentType()?.toString())
+                .orEmpty()
+                .lowercase()
             var hasAudio = false
 
             if ("text/event-stream" in contentType) {

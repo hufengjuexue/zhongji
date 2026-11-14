@@ -77,6 +77,7 @@ class GeminiTTSProviderTest {
         .protocol(Protocol.HTTP_1_1)
         .code(code)
         .message(if (code in 200..299) "OK" else "Error")
+        .header("Content-Type", contentType)
         .body(body.toResponseBody(contentType.toMediaType()))
         .build()
 
@@ -446,7 +447,7 @@ class GeminiTTSProviderTest {
         assertEquals(
             listOf(
                 "POST" to "/v1beta/voices",
-                "GET" to "/v1beta/voices?page_size=100&type=prompted",
+                "GET" to "/v1beta/voices?type=prompted&page_size=100",
                 "DELETE" to "/v1beta/voices/voice_generated_777",
             ),
             requests,
