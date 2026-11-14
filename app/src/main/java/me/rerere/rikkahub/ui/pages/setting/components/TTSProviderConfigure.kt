@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.ui.pages.setting.components
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -9,10 +11,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,30 +29,48 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.CardGroupScope
+import me.rerere.tts.controller.AudioPlayer
+import me.rerere.tts.model.AudioFormat
+import me.rerere.tts.model.TTSRequest
+import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.providers.GEMINI_TTS_MODEL_LADDER
 import me.rerere.tts.provider.providers.GeminiTtsPoolTracker
+import me.rerere.tts.provider.providers.MIMO_OFFICIAL_VOICES
+import me.rerere.tts.provider.providers.MiMoTTSProvider
 import me.rerere.tts.provider.providers.parseGeminiTtsKeys
+import me.rerere.tts.provider.providers.parseMiMoTtsKeys
 import me.rerere.ui.components.OutlinedNumberInput
 import me.rerere.ui.components.SelectTextField
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 
 @Composable
 fun TTSProviderConfigure(
@@ -59,6 +82,19 @@ fun TTSProviderConfigure(
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = modifier.verticalScroll(rememberScrollState())
     ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "现代 VoiceDesign 自动接力：当列表同时配置 Gemini 3.8 与 MiMo V2.5 TTS 时，3.8 额度用完或限流将自动无感接力另一现代引擎。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+
         CardGroup {
             formItem(
                 headlineContent = { Text(stringResource(R.string.setting_tts_page_provider_type)) },
@@ -270,15 +306,37 @@ private fun CardGroupScope.openAITTSItems(
     }
 }
 
+private val MIMO_VOICE_DESIGN_INSPIRATIONS = listOf(
+    "温柔御姐" to "温柔知性的年轻御姐女声，声线温润带一点磁性，语速从容自然，略带亲昵贴耳感。",
+    "清冷电波" to "清冷克制的少女声线，咬字清晰干净，略带空灵与电波感，语调平稳疏离却有细腻情绪。",
+    "元气少女" to "元气清脆的年轻少女音，音色明亮甜美，语速轻快活泼，带着自然的笑意与灵动感。",
+    "磁性男声" to "低沉磁性的年轻男声，胸腔共鸣饱满，语速沉稳克制，温柔而有安全感。",
+)
+
+private const val MAX_MIMO_CLONE_AUDIO_BYTES = 5 * 1024 * 1024
+
+@OptIn(ExperimentalLayoutApi::class)
 private fun CardGroupScope.miMoTTSItems(
     setting: TTSProviderSetting.MiMo,
     onValueChange: (TTSProviderSetting) -> Unit
 ) {
-    // MiMo 配置均为自由输入 默认值只是占位
-    // API Key
+    val mimoKeys = parseMiMoTtsKeys(setting.apiKey)
+    val modelTrimmed = setting.model.trim()
+    val isVoiceDesign = modelTrimmed.equals("mimo-v2.5-tts-voicedesign", ignoreCase = true)
+    val isVoiceClone = modelTrimmed.equals("mimo-v2.5-tts-voiceclone", ignoreCase = true)
+
+    // API Key 号池
     formItem(
-        headlineContent = { Text(stringResource(R.string.setting_tts_page_api_key)) },
-        supportingContent = { Text(stringResource(R.string.setting_tts_page_api_key_description)) }
+        headlineContent = { Text("API Key 号池") },
+        supportingContent = {
+            Text(
+                if (mimoKeys.isEmpty()) {
+                    "支持填写多把 MiMo API Key（逗号、空格或换行分隔），遇 429/5xx 自动冷却轮换"
+                } else {
+                    "已识别 ${mimoKeys.size} 把 MiMo Key（限时免费 100 RPM / 无日封顶，低延迟 pcm16 流式）"
+                }
+            )
+        }
     ) {
         OutlinedTextField(
             value = setting.apiKey,
@@ -286,7 +344,9 @@ private fun CardGroupScope.miMoTTSItems(
                 onValueChange(setting.copy(apiKey = newApiKey))
             },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("mimo-xxx") },
+            minLines = 2,
+            maxLines = 4,
+            placeholder = { Text("mimo-xxx（可粘贴多把，换行或逗号分隔）") },
         )
     }
 
@@ -301,54 +361,330 @@ private fun CardGroupScope.miMoTTSItems(
                 onValueChange(setting.copy(baseUrl = newBaseUrl))
             },
             modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
             placeholder = { Text("https://api.xiaomimimo.com/v1") }
         )
     }
 
-    // Model
+    // Model + 3 档快捷切换胶囊
     formItem(
         headlineContent = { Text(stringResource(R.string.setting_tts_page_model)) },
-        supportingContent = { Text(stringResource(R.string.setting_tts_page_model_description)) }
+        supportingContent = { Text("MiMo-V2.5-TTS 全系支持流式 pcm16：支持无限免费捏声线、9 个预设音色与唱歌、以及音频克隆") }
     ) {
-        OutlinedTextField(
-            value = setting.model,
-            onValueChange = { newModel ->
-                onValueChange(setting.copy(model = newModel))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("mimo-v2-tts") }
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                value = setting.model,
+                onValueChange = { newModel ->
+                    onValueChange(setting.copy(model = newModel))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("mimo-v2.5-tts-voicedesign") }
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                listOf(
+                    "mimo-v2.5-tts-voicedesign" to "VoiceDesign 捏声线",
+                    "mimo-v2.5-tts" to "内置音色+唱歌",
+                    "mimo-v2.5-tts-voiceclone" to "VoiceClone 克隆",
+                ).forEach { (id, label) ->
+                    FilterChip(
+                        selected = modelTrimmed.equals(id, ignoreCase = true),
+                        onClick = { onValueChange(setting.copy(model = id)) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        }
     }
 
-    // Voice
-    val voices = listOf(
-        "mimo_default",
-        "冰糖",
-        "茉莉",
-        "苏打",
-        "白桦",
-        "Mia",
-        "Chloe",
-        "Milo",
-        "Dean"
-    )
-
+    // VoiceDesign / 导演指令 + 4 个灵感胶囊
     formItem(
-        headlineContent = { Text(stringResource(R.string.setting_tts_page_voice)) },
-        supportingContent = { Text(stringResource(R.string.setting_tts_page_voice_description)) }
+        headlineContent = {
+            Text(
+                if (isVoiceDesign) "声线描述 (VoiceDesign Prompt)"
+                else "导演 / 情感控制指令（可选）"
+            )
+        },
+        supportingContent = {
+            Text(
+                if (isVoiceDesign) {
+                    "通过自然语言描述音色年龄、质感与情绪（以 user 角色发送；留空则兜底温柔女声）"
+                } else {
+                    "非空时以 user 角色发送导演/情感控制指令（如“低声耳语，语速偏慢”）"
+                }
+            )
+        }
     ) {
-        SelectTextField(
-            value = setting.voice,
-            options = voices,
-            onValueChange = { newVoice ->
-                onValueChange(setting.copy(voice = newVoice))
-            },
-            onOptionSelected = { voice ->
-                onValueChange(setting.copy(voice = voice))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("mimo_default") }
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = setting.voiceDesignPrompt,
+                onValueChange = { newPrompt ->
+                    onValueChange(setting.copy(voiceDesignPrompt = newPrompt))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                maxLines = 4,
+                placeholder = {
+                    Text(
+                        if (isVoiceDesign) "例如：温柔知性的年轻女声，吐字清晰，略带气声与亲昵感"
+                        else "可选：填写情感、语气或角色导演指令"
+                    )
+                }
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                MIMO_VOICE_DESIGN_INSPIRATIONS.forEach { (label, prompt) ->
+                    FilterChip(
+                        selected = setting.voiceDesignPrompt.trim() == prompt,
+                        onClick = { onValueChange(setting.copy(voiceDesignPrompt = prompt)) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        }
+    }
+
+    if (isVoiceDesign) {
+        formItem(
+            headlineContent = { Text("智能文案润色 (optimize_text_preview)") },
+            supportingContent = { Text("开启后由模型根据声线描述润色试听台词（仅 VoiceDesign 模式生效）") }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (setting.optimizeTextPreview) "已开启" else "已关闭（严格按原文本朗读）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Switch(
+                    checked = setting.optimizeTextPreview,
+                    onCheckedChange = { enabled ->
+                        onValueChange(setting.copy(optimizeTextPreview = enabled))
+                    }
+                )
+            }
+        }
+    } else if (isVoiceClone) {
+        formItem(
+            headlineContent = { Text("克隆参考音频样本 (Base64)") },
+            supportingContent = { Text("支持直接粘贴音频 Base64，或导入本地 mp3 / wav 样本（建议 5~15 秒，≤ 5MB）") }
+        ) {
+            val context = LocalContext.current
+            var importStatus by remember(setting.id) { mutableStateOf<String?>(null) }
+            val audioPicker = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                if (uri == null) return@rememberLauncherForActivityResult
+                try {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                        val out = ByteArrayOutputStream()
+                        val buf = ByteArray(8192)
+                        var total = 0
+                        while (true) {
+                            val read = input.read(buf)
+                            if (read < 0) break
+                            total += read
+                            if (total > MAX_MIMO_CLONE_AUDIO_BYTES) {
+                                importStatus = "样本文件超过 5MB 限制，请裁剪后重试"
+                                return@use null
+                            }
+                            out.write(buf, 0, read)
+                        }
+                        out.toByteArray()
+                    }
+                    if (bytes != null && bytes.isNotEmpty()) {
+                        val b64 = Base64.getEncoder().encodeToString(bytes)
+                        onValueChange(setting.copy(cloneAudioBase64 = b64))
+                        importStatus = "已导入音频样本 (${(bytes.size / 1024).coerceAtLeast(1)} KB)"
+                    } else if (bytes != null) {
+                        importStatus = "所选音频文件为空"
+                    }
+                } catch (e: Exception) {
+                    importStatus = "读取失败: ${e.message ?: e::class.simpleName}"
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = setting.cloneAudioBase64,
+                    onValueChange = { newB64 ->
+                        onValueChange(setting.copy(cloneAudioBase64 = newB64))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4,
+                    placeholder = { Text("粘贴参考音频 Base64（不带 data:audio/... 前缀或纯 Base64）") }
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = { audioPicker.launch(arrayOf("audio/*")) }
+                    ) {
+                        Text("导入本地 mp3 / wav")
+                    }
+                    if (setting.cloneAudioBase64.isNotBlank()) {
+                        TextButton(
+                            onClick = {
+                                onValueChange(setting.copy(cloneAudioBase64 = ""))
+                                importStatus = "已清空克隆样本"
+                            }
+                        ) {
+                            Text("清空")
+                        }
+                    }
+                }
+                importStatus?.let { msg ->
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    } else {
+        // 9 个官方预设音色
+        formItem(
+            headlineContent = { Text(stringResource(R.string.setting_tts_page_voice)) },
+            supportingContent = { Text("mimo-v2.5-tts 全部 9 个官方预设音色，支持正文使用 (风格) 与 [叹气]/[轻笑]/[抽泣]/[气声]/[唱歌]") }
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SelectTextField(
+                    value = setting.voice,
+                    options = MIMO_OFFICIAL_VOICES,
+                    onValueChange = { newVoice ->
+                        onValueChange(setting.copy(voice = newVoice))
+                    },
+                    onOptionSelected = { voice ->
+                        onValueChange(setting.copy(voice = voice))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("mimo_default") }
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    MIMO_OFFICIAL_VOICES.forEach { presetVoice ->
+                        FilterChip(
+                            selected = setting.voice.trim() == presetVoice,
+                            onClick = { onValueChange(setting.copy(voice = presetVoice)) },
+                            label = { Text(presetVoice) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // 就地一键试听当前效果
+    formItem(
+        headlineContent = { Text("即时试听") },
+        supportingContent = { Text("直接使用当前 MiMo 模型、声线与提示词合成一段 24kHz PCM16 试听语音") }
+    ) {
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+        val mimoProvider = remember { MiMoTTSProvider() }
+        val audioPlayer = remember(setting.id) { AudioPlayer(context.applicationContext) }
+        var previewJob by remember(setting.id) { mutableStateOf<Job?>(null) }
+        var isLoading by remember(setting.id) { mutableStateOf(false) }
+        var isPlaying by remember(setting.id) { mutableStateOf(false) }
+        var previewError by remember(setting.id) { mutableStateOf<String?>(null) }
+
+        DisposableEffect(setting.id) {
+            onDispose {
+                previewJob?.cancel()
+                audioPlayer.release()
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    enabled = mimoKeys.isNotEmpty(),
+                    onClick = {
+                        if (isLoading || isPlaying) {
+                            previewJob?.cancel()
+                            previewJob = null
+                            audioPlayer.stop()
+                            isLoading = false
+                            isPlaying = false
+                            return@Button
+                        }
+                        previewError = null
+                        isLoading = true
+                        previewJob = scope.launch {
+                            try {
+                                val bytes = withContext(Dispatchers.IO) {
+                                    val out = ByteArrayOutputStream()
+                                    mimoProvider.generateSpeech(
+                                        context = context.applicationContext,
+                                        providerSetting = setting,
+                                        request = TTSRequest("你好，我是小米 MiMo 语音助手，很高兴为你服务。"),
+                                    ).collect { chunk ->
+                                        out.write(chunk.data)
+                                    }
+                                    out.toByteArray()
+                                }
+                                isLoading = false
+                                if (bytes.isEmpty()) {
+                                    previewError = "未收到音频数据"
+                                    return@launch
+                                }
+                                isPlaying = true
+                                audioPlayer.play(
+                                    TTSResponse(
+                                        audioData = bytes,
+                                        format = AudioFormat.PCM,
+                                        sampleRate = 24000,
+                                    )
+                                )
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                previewError = "试听失败: ${e.message ?: e::class.simpleName}"
+                            } finally {
+                                isLoading = false
+                                isPlaying = false
+                            }
+                        }
+                    },
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("合成中...")
+                    } else if (isPlaying) {
+                        Text("停止试听")
+                    } else {
+                        Text("一键试听当前效果")
+                    }
+                }
+            }
+            previewError?.let { err ->
+                Text(
+                    text = err,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }
 
@@ -455,20 +791,7 @@ private fun CardGroupScope.geminiTTSItems(
     setting: TTSProviderSetting.Gemini,
     onValueChange: (TTSProviderSetting) -> Unit
 ) {
-    var showVoiceStudio by remember(setting.id) { mutableStateOf(false) }
-    var poolRefreshTick by remember { mutableIntStateOf(0) }
-    val keys = remember(setting.apiKey) { parseGeminiTtsKeys(setting.apiKey) }
-    val poolSummary = remember(setting.apiKey, poolRefreshTick) {
-        GeminiTtsPoolTracker.summarizePool(setting.apiKey)
-    }
-
-    if (showVoiceStudio) {
-        GeminiVoiceStudioDialog(
-            setting = setting,
-            onDismiss = { showVoiceStudio = false },
-            onUpdateSetting = { updated -> onValueChange(updated) },
-        )
-    }
+    val keys = parseGeminiTtsKeys(setting.apiKey)
 
     // API Key 号池
     formItem(
@@ -476,13 +799,18 @@ private fun CardGroupScope.geminiTTSItems(
         supportingContent = {
             Text(
                 if (keys.isEmpty()) {
-                    "支持填写多把 Google API Key（换行或逗号分隔），每把 Key 4 档模型合计约 40 次/天"
+                    "支持填写多把 Google API Key（换行或逗号分隔），每把 Key 3.8 双子星合计约 20 次/天"
                 } else {
-                    "已识别 ${keys.size} 把 Key（顺序吃空防风控，合计最高 ${keys.size * 40} 次/天）"
+                    "已识别 ${keys.size} 把 Key（单 Key 先吃空 3.8 Flash → 3.8 Lite 再换下把 Key，合计最高 ${keys.size * 20} 次/天）"
                 }
             )
         }
     ) {
+        var poolRefreshTick by remember { mutableIntStateOf(0) }
+        val poolSummary = remember(setting.apiKey, poolRefreshTick) {
+            GeminiTtsPoolTracker.summarizePool(setting.apiKey)
+        }
+
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = setting.apiKey,
@@ -511,7 +839,7 @@ private fun CardGroupScope.geminiTTSItems(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "今日号池配额估算（太平洋零点清零）",
+                                text = "今日 3.8 号池配额估算（太平洋零点清零）",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -531,8 +859,6 @@ private fun CardGroupScope.geminiTTSItems(
                             val labels = mapOf(
                                 "gemini-3.8-flash-tts" to "3.8 Flash",
                                 "gemini-3.8-flash-lite-tts" to "3.8 Lite",
-                                "gemini-3.1-flash-tts-preview" to "3.1 TTS",
-                                "gemini-2.5-flash-preview-tts" to "2.5 TTS",
                             )
                             GEMINI_TTS_MODEL_LADDER.forEach { modelId ->
                                 val (used, cap) = poolSummary[modelId] ?: (0 to keys.size * 10)
@@ -555,10 +881,10 @@ private fun CardGroupScope.geminiTTSItems(
         }
     }
 
-    // Model + 4 档快选胶囊
+    // Model + 3.8 双子星快选胶囊
     formItem(
-        headlineContent = { Text("首选语音模型") },
-        supportingContent = { Text("推荐首选 gemini-3.8-flash-tts（支持捏声线、style 指令与音色表演标签）") }
+        headlineContent = { Text("首选语音模型 (Gemini 3.8)") },
+        supportingContent = { Text("仅使用现代 Gemini 3.8 双子星（支持捏声线 VoiceDesign、style 指令与音色表演标签）") }
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedTextField(
@@ -577,8 +903,6 @@ private fun CardGroupScope.geminiTTSItems(
                 listOf(
                     "gemini-3.8-flash-tts" to "3.8 Flash",
                     "gemini-3.8-flash-lite-tts" to "3.8 Lite",
-                    "gemini-3.1-flash-tts-preview" to "3.1 Preview",
-                    "gemini-2.5-flash-preview-tts" to "2.5 Flash",
                 ).forEach { (id, label) ->
                     FilterChip(
                         selected = setting.model.trim().equals(id, ignoreCase = true),
@@ -592,8 +916,8 @@ private fun CardGroupScope.geminiTTSItems(
 
     // 自动降级接力开关
     formItem(
-        headlineContent = { Text("四代模型自动接力降级") },
-        supportingContent = { Text("当前 Key 的首选模型 429/满额时，先切号池同级 Key，再沿 3.8 Flash → 3.8 Lite → 3.1 → 2.5 接力") }
+        headlineContent = { Text("3.8 双子星自动接力降级") },
+        supportingContent = { Text("单 Key 内先尝试 3.8 Flash (10 次/天) → 3.8 Lite (10 次/天)，吃空后自动切号池下一把 Key") }
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -601,7 +925,7 @@ private fun CardGroupScope.geminiTTSItems(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (setting.autoFallbackModels) "已开启（单 Key 最高吃满 40 次/天）" else "已关闭（仅使用所选模型）",
+                text = if (setting.autoFallbackModels) "已开启（单 Key 最高吃满 20 次/天）" else "已关闭（仅使用所选 3.8 模型）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -621,19 +945,46 @@ private fun CardGroupScope.geminiTTSItems(
             val isCustom = setting.voiceName.trim().startsWith("voice_") || setting.voiceName.trim().startsWith("voicekey_")
             Text(
                 if (isCustom) {
-                    val owner = setting.voiceOwnerKeyHint.ifBlank { "创建时的项目 Key" }
-                    "当前使用 3.8 定制声线（归属 $owner），切 Key 或降级 3.1/2.5 时将自动切换至下方相似备选"
+                    val syncedCount = setting.voiceIdsByKeyHint.size
+                    if (syncedCount > 1) {
+                        "当前使用 3.8 定制声线（已同步 $syncedCount 把 Key，换 Key 不变声线）；未同步 Key 将使用下方相似备选"
+                    } else {
+                        val owner = setting.voiceOwnerKeyHint.ifBlank { "创建时的项目 Key" }
+                        "当前使用 3.8 定制声线（归属 $owner），可在声线工坊一键「同步捏到全部 Key」"
+                    }
                 } else {
                     "可填写官方预置名（如 Kore / Aoede / Leda）或打开声线工坊捏专属声线并试听"
                 }
             )
         }
     ) {
+        var showVoiceStudio by remember(setting.id) { mutableStateOf(false) }
+
+        if (showVoiceStudio) {
+            GeminiVoiceStudioDialog(
+                setting = setting,
+                onDismiss = { showVoiceStudio = false },
+                onUpdateSetting = { updated -> onValueChange(updated) },
+            )
+        }
+
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = setting.voiceName,
                 onValueChange = { newVoiceName ->
-                    onValueChange(setting.copy(voiceName = newVoiceName))
+                    val trimmed = newVoiceName.trim()
+                    val isCustom = trimmed.startsWith("voice_") || trimmed.startsWith("voicekey_")
+                    onValueChange(
+                        if (isCustom) {
+                            setting.copy(voiceName = newVoiceName)
+                        } else {
+                            setting.copy(
+                                voiceName = newVoiceName,
+                                voiceOwnerKeyHint = "",
+                                voiceIdsByKeyHint = emptyMap(),
+                            )
+                        }
+                    )
                 },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -643,7 +994,7 @@ private fun CardGroupScope.geminiTTSItems(
                 onClick = { showVoiceStudio = true },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("打开声线工坊（捏声线 · 试听官方音色库）")
+                Text("打开 3.8 声线工坊（同步多 Key 捏声线 · 官方音色库）")
             }
         }
     }
@@ -651,7 +1002,7 @@ private fun CardGroupScope.geminiTTSItems(
     // 相似备选音色
     formItem(
         headlineContent = { Text("相似备选官方音色") },
-        supportingContent = { Text("当换到其他项目的 Key 或降级到 3.1 / 2.5 时自动接力使用，保证声音风格连贯（也可在声线工坊一键设定）") }
+        supportingContent = { Text("当换到未同步定制声线的 Key 时自动接力使用，保证声音风格连贯（也可在声线工坊一键设定）") }
     ) {
         OutlinedTextField(
             value = setting.fallbackVoiceName,
@@ -667,7 +1018,7 @@ private fun CardGroupScope.geminiTTSItems(
     // 语气 / 风格 Prompt（3.8 专用）
     formItem(
         headlineContent = { Text("默认语气 / 表演风格 (3.8)") },
-        supportingContent = { Text("仅 Gemini 3.8 生效。正文还支持 [sigh] [laugh] [whisper] 等标签，客户端会自动保留并转为 3.8/3.1 表演指令") }
+        supportingContent = { Text("Gemini 3.8 生效。正文还支持 [sigh] [laugh] [whispers] 等标签，客户端会自动转为 3.8 表演指令") }
     ) {
         OutlinedTextField(
             value = setting.stylePrompt,

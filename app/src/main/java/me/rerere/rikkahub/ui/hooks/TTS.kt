@@ -52,7 +52,7 @@ fun rememberCustomTtsState(): CustomTtsState {
         settings.ttsProviders,
         settings.defaultTTSPlaybackSpeed,
     ) {
-        ttsState.updateProvider(settings.getSelectedTTSProvider())
+        ttsState.updateProvider(settings.getSelectedTTSProvider(), settings.ttsProviders)
         ttsState.setSpeed(settings.defaultTTSPlaybackSpeed)
         onDispose { }
     }
@@ -138,8 +138,11 @@ private class CustomTtsStateImpl(
     override val totalChunks: StateFlow<Int> get() = controller.totalChunks
     override val playbackState: StateFlow<PlaybackState> get() = controller.playbackState
 
-    fun updateProvider(provider: TTSProviderSetting?) {
-        controller.setProvider(provider)
+    fun updateProvider(
+        provider: TTSProviderSetting?,
+        fallbackProviders: List<TTSProviderSetting> = emptyList(),
+    ) {
+        controller.setProvider(provider, fallbackProviders)
     }
 
     override fun speak(text: String, flushCalled: Boolean) {

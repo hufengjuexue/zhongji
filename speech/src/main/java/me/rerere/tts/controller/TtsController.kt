@@ -49,6 +49,7 @@ class TtsController(
 
     // Provider & 作业
     private var currentProvider: TTSProviderSetting? = null
+    private var currentFallbackProviders: List<TTSProviderSetting> = emptyList()
     private var workerJob: Job? = null
     private var isPaused = false
 
@@ -97,8 +98,13 @@ class TtsController(
     }
 
     /** 选择/取消选择 Provider */
-    fun setProvider(provider: TTSProviderSetting?) {
+    @JvmOverloads
+    fun setProvider(
+        provider: TTSProviderSetting?,
+        fallbackProviders: List<TTSProviderSetting> = emptyList(),
+    ) {
         currentProvider = provider
+        currentFallbackProviders = fallbackProviders
         _isAvailable.update { provider != null }
         if (provider == null) stop()
     }
@@ -224,6 +230,7 @@ class TtsController(
             _error.update { "No TTS provider selected" }
             return
         }
+        val fallbackProviders = currentFallbackProviders
 
         workerJob = scope.launch {
             _isSpeaking.update { true }
@@ -251,7 +258,7 @@ class TtsController(
                     prefetchNextChunks(chunk.index)
 
                     val response = try {
-                        awaitOrCreate(chunk, provider)
+                        awaitOrCreate(chunk, provider, fallbackProviders)
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Synthesis error", e)
@@ -284,18 +291,23 @@ class TtsController(
 
     private fun prefetchNextChunks(currentIndex: Int) {
         val provider = currentProvider ?: return
+        val fallbackProviders = currentFallbackProviders
         val begin = currentIndex + 1
         val endExclusive = (begin + prefetchCount).coerceAtMost(allChunks.size)
         if (begin >= endExclusive) return
 
         for (i in begin until endExclusive) {
             val chunk = allChunks.getOrNull(i) ?: continue
-            getOrCreateSynthesis(chunk, provider)
+            getOrCreateSynthesis(chunk, provider, fallbackProviders)
         }
     }
 
-    private suspend fun awaitOrCreate(chunk: TtsChunk, provider: TTSProviderSetting): TTSResponse {
-        val deferred = getOrCreateSynthesis(chunk, provider)
+    private suspend fun awaitOrCreate(
+        chunk: TtsChunk,
+        provider: TTSProviderSetting,
+        fallbackProviders: List<TTSProviderSetting> = emptyList(),
+    ): TTSResponse {
+        val deferred = getOrCreateSynthesis(chunk, provider, fallbackProviders)
         return try {
             deferred.await()
         } catch (e: Exception) {
@@ -307,23 +319,25 @@ class TtsController(
 
     private fun getOrCreateSynthesis(
         chunk: TtsChunk,
-        provider: TTSProviderSetting
+        provider: TTSProviderSetting,
+        fallbackProviders: List<TTSProviderSetting> = emptyList(),
     ): kotlinx.coroutines.Deferred<TTSResponse> {
         return cache.computeIfAbsent(chunk.id) {
             scope.async(Dispatchers.IO) {
-                synthesizeWithRetry(provider, chunk)
+                synthesizeWithRetry(provider, fallbackProviders, chunk)
             }
         }
     }
 
     private suspend fun synthesizeWithRetry(
         provider: TTSProviderSetting,
+        fallbackProviders: List<TTSProviderSetting>,
         chunk: TtsChunk
     ): TTSResponse {
         var attempt = 1
         while (true) {
             try {
-                return synthesizer.synthesize(provider, chunk)
+                return synthesizer.synthesize(provider, chunk, fallbackProviders)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

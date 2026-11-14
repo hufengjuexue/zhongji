@@ -56,6 +56,33 @@ data class GoogleBucketUsage(
     val cooldownUntilMs: Long = 0L,
 )
 
+const val GOOGLE_MODEL_HYDROGEN = "gemini-4-hydrogen"
+const val GOOGLE_MODEL_3_8_FLASH = "gemini-3.8-flash"
+const val GOOGLE_MODEL_3_6_FLASH = "gemini-3.6-flash"
+const val GOOGLE_MODEL_3_5_LITE = "gemini-3.5-flash-lite"
+
+data class GoogleDispatchCandidate(
+    val apiKey: String,
+    val modelId: String,
+)
+
+data class GoogleBucketSummary(
+    val bucket: GoogleQuotaBucket,
+    val used: Int,
+    val totalCapacity: Int,
+    val exhaustedKeys: Int,
+    val effectiveKeyCount: Int,
+) {
+    val allExhausted: Boolean
+        get() = effectiveKeyCount > 0 && exhaustedKeys >= effectiveKeyCount
+}
+
+data class GooglePoolSummary(
+    val keyCount: Int,
+    val bucketSummaries: Map<GoogleQuotaBucket, GoogleBucketSummary>,
+    val otherChatCount: Int = 0,
+)
+
 data class KeyPoolItemSnapshot(
     val key: String,
     val globalReason: KeyCooldownReason,
@@ -144,6 +171,37 @@ interface KeyRoulette {
         }
     }
 
+    /**
+     * 按 Google 号池统一调度规则生成当前可用的 `(apiKey, modelId)` 候选优先级列表。
+     * 主力 3 桶（Hydrogen / 3.8 / 3.6）遵循：同 Key 强→弱、1 分钟短冷用前 2 把 Key 的 3.5fl 兜底、
+     * 3 桶全 RPD 耗尽跳过该 Key 切下一把 Key、全部 Key 3 桶耗尽才统一落入前 2 把 Key 的 3.5fl。
+     */
+    fun planGoogleCandidates(
+        keys: String,
+        requestedModelId: String,
+        now: Long = System.currentTimeMillis(),
+        excluded: Set<GoogleDispatchCandidate> = emptySet(),
+    ): List<GoogleDispatchCandidate> =
+        KeyCooldownTracker.planGoogleCandidates(
+            keysRaw = keys,
+            requestedModelId = requestedModelId,
+            now = now,
+            excluded = excluded,
+        )
+
+    fun nextGoogleCandidate(
+        keys: String,
+        requestedModelId: String,
+        excluded: Set<GoogleDispatchCandidate> = emptySet(),
+        now: Long = System.currentTimeMillis(),
+    ): GoogleDispatchCandidate? =
+        planGoogleCandidates(
+            keys = keys,
+            requestedModelId = requestedModelId,
+            now = now,
+            excluded = excluded,
+        ).firstOrNull()
+
     companion object {
         fun default(): KeyRoulette = DefaultKeyRoulette()
 
@@ -163,6 +221,12 @@ object KeyPoolMonitor {
 
     fun inspectPool(keysRaw: String, now: Long = System.currentTimeMillis()): List<KeyPoolItemSnapshot> =
         parseApiKeys(keysRaw).map { key -> KeyCooldownTracker.inspectKeyDetail(key, now) }
+
+    fun summarizePool(keysRaw: String, now: Long = System.currentTimeMillis()): GooglePoolSummary =
+        KeyCooldownTracker.summarizePool(keysRaw, now)
+
+    fun summarizePool(pool: List<KeyPoolItemSnapshot>): GooglePoolSummary =
+        KeyCooldownTracker.summarizePool(pool)
 
     fun reset(keysRaw: String) {
         KeyCooldownTracker.resetKeys(parseApiKeys(keysRaw))
@@ -387,7 +451,7 @@ internal object KeyCooldownTracker {
         if (key.isBlank()) return
         var changed = false
         val targetEntryKey = when {
-            statusCode == 429 && !modelId.isNullOrBlank() -> entryKey(key, modelId)
+            (statusCode == 429 || statusCode in 500..599) && !modelId.isNullOrBlank() -> entryKey(key, modelId)
             else -> key
         }
         map.compute(targetEntryKey) { _, prev ->
@@ -498,6 +562,225 @@ internal object KeyCooldownTracker {
         } else {
             keyList.minByOrNull { cooldownUntil(it, modelId) } ?: primary
         }
+    }
+
+    fun isKeyGloballyBlocked(key: String, now: Long = System.currentTimeMillis()): Boolean {
+        val globalState = map[key] ?: return false
+        if (now >= globalState.cooldownUntilMs) {
+            map.remove(key, globalState)
+            return false
+        }
+        return globalState.reason == KeyCooldownReason.AUTH_ERROR ||
+            globalState.reason == KeyCooldownReason.RPD_EXHAUSTED
+    }
+
+    fun isModelDailyExhausted(key: String, modelId: String, now: Long = System.currentTimeMillis()): Boolean {
+        val norm = normalizeQuotaModelId(modelId)
+        if (norm.isNotBlank()) {
+            val mk = "$key|$norm"
+            val state = map[mk]
+            if (state != null) {
+                if (now < state.cooldownUntilMs) {
+                    if (state.reason == KeyCooldownReason.RPD_EXHAUSTED) return true
+                } else {
+                    map.remove(mk, state)
+                }
+            }
+        }
+        val bucket = classifyGoogleModelBucket(modelId) ?: return false
+        val ptToday = currentPacificDateString(now)
+        if (ptToday != currentPtDate) return false
+        val used = dailyCounts[key]?.entries
+            ?.sumOf { (m, c) -> if (classifyGoogleModelBucket(m) == bucket) c else 0 }
+            ?: 0
+        return used >= bucket.perKeyDailyLimit
+    }
+
+    fun summarizePool(keysRaw: String, now: Long = System.currentTimeMillis()): GooglePoolSummary =
+        summarizePool(parseApiKeys(keysRaw).map { inspectKeyDetail(it, now) })
+
+    fun summarizePool(pool: List<KeyPoolItemSnapshot>): GooglePoolSummary {
+        val bucketSummaries = GoogleQuotaBucket.entries.associateWith { bucket ->
+            val effectivePool = if (bucket == GoogleQuotaBucket.GEMINI_3_5_LITE) {
+                pool.take(2)
+            } else {
+                pool
+            }
+            val effectiveCount = effectivePool.size
+            val used = effectivePool.sumOf { it.bucketUsage[bucket]?.used ?: 0 }
+            val exhausted = effectivePool.count { snap ->
+                val bu = snap.bucketUsage[bucket]
+                bu?.reason == KeyCooldownReason.RPD_EXHAUSTED ||
+                    (bu?.used ?: 0) >= bucket.perKeyDailyLimit
+            }
+            GoogleBucketSummary(
+                bucket = bucket,
+                used = used,
+                totalCapacity = effectiveCount * bucket.perKeyDailyLimit,
+                exhaustedKeys = exhausted,
+                effectiveKeyCount = effectiveCount,
+            )
+        }
+        return GooglePoolSummary(
+            keyCount = pool.size,
+            bucketSummaries = bucketSummaries,
+            otherChatCount = pool.sumOf { it.otherChatCount },
+        )
+    }
+
+    fun resolveGoogleFallbackChain(requestedModelId: String): List<String> {
+        return when (classifyGoogleModelBucket(requestedModelId)) {
+            GoogleQuotaBucket.GEMINI_4_HYDROGEN -> listOf(
+                requestedModelId,
+                GOOGLE_MODEL_3_8_FLASH,
+                GOOGLE_MODEL_3_6_FLASH,
+            ).distinctBy { normalizeQuotaModelId(it) }
+
+            GoogleQuotaBucket.GEMINI_3_8 -> listOf(
+                requestedModelId,
+                GOOGLE_MODEL_3_6_FLASH,
+            ).distinctBy { normalizeQuotaModelId(it) }
+
+            GoogleQuotaBucket.GEMINI_3_6 -> listOf(requestedModelId)
+            GoogleQuotaBucket.GEMINI_3_5_LITE -> listOf(requestedModelId)
+            else -> listOf(requestedModelId)
+        }
+    }
+
+    fun planGoogleCandidates(
+        keysRaw: String,
+        requestedModelId: String,
+        now: Long = System.currentTimeMillis(),
+        excluded: Set<GoogleDispatchCandidate> = emptySet(),
+    ): List<GoogleDispatchCandidate> {
+        val keyList = parseApiKeys(keysRaw)
+        if (keyList.isEmpty()) {
+            return if (excluded.isEmpty()) {
+                listOf(GoogleDispatchCandidate("", requestedModelId))
+            } else {
+                emptyList()
+            }
+        }
+
+        val bucket = classifyGoogleModelBucket(requestedModelId)
+        if (bucket == GoogleQuotaBucket.GEMINI_4_HYDROGEN ||
+            bucket == GoogleQuotaBucket.GEMINI_3_8 ||
+            bucket == GoogleQuotaBucket.GEMINI_3_6
+        ) {
+            val primaryChain = resolveGoogleFallbackChain(requestedModelId)
+            val liteKeys = keyList.take(2)
+
+            for (k in keyList.indices) {
+                val key = keyList[k]
+                if (isKeyGloballyBlocked(key, now)) continue
+
+                val nonExhaustedModels = primaryChain.filter { model ->
+                    !isModelDailyExhausted(key, model, now)
+                }
+                if (nonExhaustedModels.isEmpty()) {
+                    // 该 Key 的主力档位本日已全数 RPD 耗尽：立即跳过，绝不消耗该 Key 的 3.5fl
+                    continue
+                }
+
+                val result = mutableListOf<GoogleDispatchCandidate>()
+                nonExhaustedModels.forEach { model ->
+                    val candidate = GoogleDispatchCandidate(key, model)
+                    if (candidate !in excluded && isHealthy(key, model, now)) {
+                        result.add(candidate)
+                    }
+                }
+
+                val liteOrder = if (k in 0..1) {
+                    listOf(key) + liteKeys.filter { it != key }
+                } else {
+                    liteKeys
+                }
+                liteOrder.forEach { lk ->
+                    if (!isKeyGloballyBlocked(lk, now) && !isModelDailyExhausted(lk, GOOGLE_MODEL_3_5_LITE, now)) {
+                        val candidate = GoogleDispatchCandidate(lk, GOOGLE_MODEL_3_5_LITE)
+                        if (candidate !in excluded && isHealthy(lk, GOOGLE_MODEL_3_5_LITE, now)) {
+                            result.add(candidate)
+                        }
+                    }
+                }
+
+                if (result.isEmpty() && excluded.isEmpty()) {
+                    val cooledBackup = buildList {
+                        liteOrder.forEach { lk ->
+                            if (!isKeyGloballyBlocked(lk, now) && !isModelDailyExhausted(lk, GOOGLE_MODEL_3_5_LITE, now)) {
+                                add(GoogleDispatchCandidate(lk, GOOGLE_MODEL_3_5_LITE))
+                            }
+                        }
+                        nonExhaustedModels.forEach { model ->
+                            add(GoogleDispatchCandidate(key, model))
+                        }
+                    }.minByOrNull { cooldownUntil(it.apiKey, it.modelId) }
+                    if (cooledBackup != null) {
+                        result.add(cooledBackup)
+                    }
+                }
+
+                return result
+            }
+
+            // 全部 Key 的主力梯队都今日 RPD 耗尽或全局失败 -> 统一降落到前 2 把 Key 的 3.5fl
+            val liteFallbacks = liteKeys.mapNotNull { lk ->
+                if (isKeyGloballyBlocked(lk, now) || isModelDailyExhausted(lk, GOOGLE_MODEL_3_5_LITE, now)) {
+                    null
+                } else {
+                    val candidate = GoogleDispatchCandidate(lk, GOOGLE_MODEL_3_5_LITE)
+                    if (candidate !in excluded && isHealthy(lk, GOOGLE_MODEL_3_5_LITE, now)) candidate else null
+                }
+            }
+            if (liteFallbacks.isNotEmpty()) return liteFallbacks
+
+            if (excluded.isEmpty()) {
+                val cooledLite = liteKeys
+                    .filter { !isKeyGloballyBlocked(it, now) && !isModelDailyExhausted(it, GOOGLE_MODEL_3_5_LITE, now) }
+                    .map { GoogleDispatchCandidate(it, GOOGLE_MODEL_3_5_LITE) }
+                    .minByOrNull { cooldownUntil(it.apiKey, it.modelId) }
+                if (cooledLite != null) return listOf(cooledLite)
+
+                val safety = keyList
+                    .map { GoogleDispatchCandidate(it, requestedModelId) }
+                    .minByOrNull { cooldownUntil(it.apiKey, it.modelId) }
+                    ?: GoogleDispatchCandidate(keyList.first(), requestedModelId)
+                return listOf(safety)
+            }
+            return emptyList()
+        }
+
+        // 直选 3.5 Flash Lite 时限定前 2 把 Key；其余模型保持单模型跨 Key 顺序轮换
+        val candidateKeys = if (bucket == GoogleQuotaBucket.GEMINI_3_5_LITE) {
+            keyList.take(2)
+        } else {
+            keyList
+        }
+
+        val healthy = candidateKeys.mapNotNull { key ->
+            if (isKeyGloballyBlocked(key, now) || isModelDailyExhausted(key, requestedModelId, now)) {
+                null
+            } else {
+                val candidate = GoogleDispatchCandidate(key, requestedModelId)
+                if (candidate !in excluded && isHealthy(key, requestedModelId, now)) candidate else null
+            }
+        }
+        if (healthy.isNotEmpty()) return healthy
+
+        if (excluded.isEmpty()) {
+            val cooled = candidateKeys
+                .filter { !isKeyGloballyBlocked(it, now) && !isModelDailyExhausted(it, requestedModelId, now) }
+                .map { GoogleDispatchCandidate(it, requestedModelId) }
+                .minByOrNull { cooldownUntil(it.apiKey, it.modelId) }
+            if (cooled != null) return listOf(cooled)
+
+            val safety = candidateKeys
+                .map { GoogleDispatchCandidate(it, requestedModelId) }
+                .minByOrNull { cooldownUntil(it.apiKey, it.modelId) }
+                ?: GoogleDispatchCandidate(candidateKeys.first(), requestedModelId)
+            return listOf(safety)
+        }
+        return emptyList()
     }
 
     private fun loadFromDisk(cacheDir: File) {

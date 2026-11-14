@@ -771,7 +771,7 @@ private fun CardGroupScope.googleAuxiliaryKeyItem(
             ) {
                 val count = remember(auxiliaryApiKey) { parseApiKeys(auxiliaryApiKey).size }
                 Text(
-                    text = if (count == 0) "默认复用主池 #1" else "已独立 ($count 把)",
+                    text = if (count == 0) "默认复用主池 #1~#2" else "已独立 ($count 把)",
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                 )
@@ -779,7 +779,7 @@ private fun CardGroupScope.googleAuxiliaryKeyItem(
         }
     },
     supportingContent = {
-        Text("Embedding 2 (1K/日) 与 Decision 1 (10K/日) 专用通道；填 1~2 把即可与聊天号池物理隔离，留空则固定复用主池第 1 把")
+        Text("Embedding 2 (1K/日) 与 Decision 1 (10K/日) 专用通道；填 1~2 把即可与聊天号池物理隔离，留空则按顺序复用主池前 2 把 (#1 主用 / #2 热备)")
     },
 ) {
     GoogleAuxiliaryKeyField(
@@ -803,7 +803,7 @@ private fun GoogleAuxiliaryKeyField(
         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
         placeholder = {
             Text(
-                "可选：粘贴专用项目 Key（留空即固定用主池 #1）",
+                "可选：粘贴专用项目 Key（留空即复用主池 #1~#2）",
                 style = MaterialTheme.typography.bodySmall,
             )
         },
@@ -878,19 +878,19 @@ private fun GoogleDailyUsageDashboard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         if (keyCount > 0) {
+            val summary = remember(pool) { KeyPoolMonitor.summarizePool(pool) }
             GoogleQuotaBucket.CHAT_RP_BUCKETS.chunked(2).forEach { rowBuckets ->
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     rowBuckets.forEach { bucket ->
-                        val usedSum = pool.sumOf { it.bucketUsage[bucket]?.used ?: 0 }
-                        val exhaustedKeys = pool.count {
-                            it.bucketUsage[bucket]?.reason == KeyCooldownReason.RPD_EXHAUSTED
-                        }
-                        val totalCap = keyCount * bucket.perKeyDailyLimit
+                        val bucketSummary = summary.bucketSummaries[bucket]
+                        val usedSum = bucketSummary?.used ?: 0
+                        val exhaustedKeys = bucketSummary?.exhaustedKeys ?: 0
+                        val totalCap = bucketSummary?.totalCapacity ?: 0
                         val progress = if (totalCap > 0) (usedSum.toFloat() / totalCap).coerceIn(0f, 1f) else 0f
-                        val allExhausted = exhaustedKeys >= keyCount
+                        val allExhausted = bucketSummary?.allExhausted == true
 
                         Surface(
                             color = if (allExhausted) {
@@ -1034,7 +1034,7 @@ private fun GoogleKeyPoolEditor(
                         pool.size == 1 ->
                             "当前 1 把 Key；点下方「批量导入」或换行追加即可组池（PT 零点自动清零）"
                         else ->
-                            "已识别 ${pool.size} 把不重复 Key，每日容量 ${pool.size * 20} 次/模型（PT 零点自动清零）"
+                            "已识别 ${pool.size} 把不重复 Key，主力 3 档每日各 ${pool.size * 20} 次，3.5L 每日 ${minOf(pool.size, 2) * 500} 次（PT 零点自动清零）"
                     }
                 )
             },
@@ -1180,7 +1180,14 @@ private fun GoogleKeyPoolEditor(
                                         .padding(start = 30.dp, end = 6.dp),
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    GoogleQuotaBucket.CHAT_RP_BUCKETS.forEach { bucket ->
+                                    val rowBuckets = if (index < 2) {
+                                        GoogleQuotaBucket.CHAT_RP_BUCKETS
+                                    } else {
+                                        GoogleQuotaBucket.CHAT_RP_BUCKETS.filter {
+                                            it != GoogleQuotaBucket.GEMINI_3_5_LITE
+                                        }
+                                    }
+                                    rowBuckets.forEach { bucket ->
                                         val bu = snap.bucketUsage[bucket]
                                         val used = bu?.used ?: 0
                                         val reason = bu?.reason ?: KeyCooldownReason.READY
@@ -1190,10 +1197,14 @@ private fun GoogleKeyPoolEditor(
                                                 MaterialTheme.colorScheme.onErrorContainer,
                                                 if (used > 0) "${bucket.shortLabel} $used 满" else "${bucket.shortLabel} 满",
                                             )
-                                            reason == KeyCooldownReason.RPM_LIMIT -> Triple(
+                                            reason == KeyCooldownReason.RPM_LIMIT || reason == KeyCooldownReason.SERVER_ERROR -> Triple(
                                                 MaterialTheme.colorScheme.tertiaryContainer,
                                                 MaterialTheme.colorScheme.onTertiaryContainer,
-                                                "${bucket.shortLabel} 限",
+                                                if (reason == KeyCooldownReason.SERVER_ERROR) {
+                                                    "${bucket.shortLabel} 异"
+                                                } else {
+                                                    "${bucket.shortLabel} 限"
+                                                },
                                             )
                                             used > 0 -> Triple(
                                                 MaterialTheme.colorScheme.primaryContainer,

@@ -17,12 +17,14 @@ import java.io.ByteArrayOutputStream
 class TtsSynthesizer(
     private val ttsManager: TTSManager
 ) {
+    @JvmOverloads
     suspend fun synthesize(
         setting: TTSProviderSetting,
-        chunk: TtsChunk
+        chunk: TtsChunk,
+        fallbackProviders: List<TTSProviderSetting> = emptyList(),
     ): TTSResponse = withContext(Dispatchers.IO) {
         collectToResponse(
-            ttsManager.generateSpeech(setting, TTSRequest(text = chunk.text))
+            ttsManager.generateSpeech(setting, fallbackProviders, TTSRequest(text = chunk.text))
         )
     }
 

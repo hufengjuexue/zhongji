@@ -29,8 +29,6 @@ private val VOICE_JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTyp
 val GEMINI_TTS_MODEL_LADDER = listOf(
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
-    "gemini-3.1-flash-tts-preview",
-    "gemini-2.5-flash-preview-tts",
 )
 
 data class GeminiFeaturedVoice(
@@ -40,7 +38,7 @@ data class GeminiFeaturedVoice(
 )
 
 /**
- * Gemini TTS 30 个官方精选 Studio 预设音色（4 代模型通用）。
+ * Gemini TTS 30 个官方精选 Studio 预设音色（3.8 双子星通用）。
  */
 val GEMINI_FEATURED_VOICES: List<GeminiFeaturedVoice> = listOf(
     GeminiFeaturedVoice("Kore", "坚定沉稳 · 清晰中性女声", "female"),
@@ -122,7 +120,7 @@ internal fun extractRetryDelayMsForTts(body: String?): Long? {
 
 /**
  * Gemini TTS 轻量级 `(key, model)` 冷却与每日使用计数器。
- * - 默认严格锁定靠前的 Key，仅在 429 / 401 / 5xx 时切换到下一 Key 或下一代模型；
+ * - 默认严格按同 Key 内 3.8 Flash → 3.8 Lite 顺序吃空，仅在 429 / 401 / 5xx 时切下一档或下一 Key；
  * - 每日 0 点（太平洋时间）自动清零计数。
  */
 object GeminiTtsPoolTracker {

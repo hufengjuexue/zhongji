@@ -223,11 +223,14 @@ internal fun GeminiVoiceStudioDialog(
                         voiceName = voiceId,
                         fallbackVoiceName = voiceId,
                         autoFallbackModels = false,
+                        voiceIdsByKeyHint = emptyMap(),
                     )
                 } else {
                     setting.copy(
+                        model = "gemini-3.8-flash-tts",
                         voiceName = voiceId,
                         fallbackVoiceName = voiceId,
+                        voiceIdsByKeyHint = emptyMap(),
                     )
                 }
                 val bytes = withContext(Dispatchers.IO) {
@@ -341,12 +344,17 @@ internal fun GeminiVoiceStudioDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Gemini 声线工坊",
+                            text = "Gemini 3.8 声线工坊",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
+                        val syncBadge = if (setting.voiceIdsByKeyHint.size > 1) {
+                            " (已同步 ${setting.voiceIdsByKeyHint.size} Key)"
+                        } else {
+                            ""
+                        }
                         Text(
-                            text = "主: ${setting.voiceName.ifBlank { "未设" }} · 备选: ${setting.fallbackVoiceName.ifBlank { "Kore" }}",
+                            text = "主: ${setting.voiceName.ifBlank { "未设" }}$syncBadge · 备选: ${setting.fallbackVoiceName.ifBlank { "Kore" }}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -376,7 +384,7 @@ internal fun GeminiVoiceStudioDialog(
                         onClick = { selectedTab = 1 },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                     ) {
-                        Text("官方音色库 (全系)")
+                        Text("官方音色库 (3.8)")
                     }
                 }
 
@@ -441,7 +449,7 @@ internal fun GeminiVoiceStudioDialog(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Text(
-                            text = "用自然语言描述声线并保存到当前 Key 所属项目（仅 Gemini 3.8 TTS 可用）。跨 Key 或自动降级到 3.1/2.5 时，会自动切换成右栏设置的「相似备选官方音色」。",
+                            text = "用自然语言描述声线并保存到项目（仅 Gemini 3.8 TTS 可用）。多 Key 模式下建议点击「同步捏到全部 Key」，换 Key 依然使用同一定制声线；未同步 Key 将使用「相似备选官方音色」。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -502,53 +510,141 @@ internal fun GeminiVoiceStudioDialog(
                             modifier = Modifier.fillMaxWidth(),
                         )
 
-                        Row(
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Button(
-                                enabled = !isCreating && activeKey.isNotBlank() && designPrompt.isNotBlank(),
-                                onClick = {
-                                    statusError = null
-                                    statusMessage = null
-                                    isCreating = true
-                                    scope.launch {
-                                        try {
-                                            val result = withContext(Dispatchers.IO) {
-                                                voicesClient.createPromptedVoice(
-                                                    baseUrl = setting.baseUrl,
-                                                    apiKey = activeKey,
-                                                    displayName = designName.trim().ifBlank { "Kairos-Voice" },
-                                                    gender = designGender,
-                                                    languageCode = designLanguage,
-                                                    prompt = designPrompt.trim(),
-                                                )
+                            if (keys.size > 1) {
+                                Button(
+                                    enabled = !isCreating && keys.isNotEmpty() && designPrompt.isNotBlank(),
+                                    onClick = {
+                                        statusError = null
+                                        statusMessage = null
+                                        isCreating = true
+                                        val cleanName = designName.trim().ifBlank { "Kairos-Voice" }
+                                        val cleanPrompt = designPrompt.trim()
+                                        scope.launch {
+                                            try {
+                                                val (succeeded, failures) = withContext(Dispatchers.IO) {
+                                                    val okList = mutableListOf<GeminiCreatedVoice>()
+                                                    val errList = mutableListOf<String>()
+                                                    for (key in keys) {
+                                                        try {
+                                                            okList += voicesClient.createPromptedVoice(
+                                                                baseUrl = setting.baseUrl,
+                                                                apiKey = key,
+                                                                displayName = cleanName,
+                                                                gender = designGender,
+                                                                languageCode = designLanguage,
+                                                                prompt = cleanPrompt,
+                                                                model = "gemini-3.8-flash-tts",
+                                                            )
+                                                        } catch (e: CancellationException) {
+                                                            throw e
+                                                        } catch (e: Exception) {
+                                                            errList += "${maskGeminiTtsKey(key)}: ${e.message ?: e::class.simpleName}"
+                                                        }
+                                                    }
+                                                    okList to errList
+                                                }
+                                                if (succeeded.isEmpty()) {
+                                                    statusError = "同步捏声线失败: ${failures.firstOrNull().orEmpty()}"
+                                                } else {
+                                                    val syncedMap = succeeded.associate { it.ownerKeyHint to it.id }
+                                                    val primary = succeeded.first()
+                                                    createdVoice = primary
+                                                    onUpdateSetting(
+                                                        setting.copy(
+                                                            voiceName = primary.id,
+                                                            voiceOwnerKeyHint = primary.ownerKeyHint,
+                                                            voiceIdsByKeyHint = syncedMap,
+                                                        )
+                                                    )
+                                                    statusMessage = if (failures.isEmpty()) {
+                                                        "已同步捏声线到全部 ${succeeded.size} 把 Key 并设为主音色: ${primary.id}"
+                                                    } else {
+                                                        "已同步 ${succeeded.size}/${keys.size} 把 Key（主: ${primary.id}）；部分失败: ${failures.joinToString("; ")}"
+                                                    }
+                                                    if (primary.sampleWavBytes.isNotEmpty()) {
+                                                        playBytes(primary.id, primary.sampleWavBytes, AudioFormat.WAV)
+                                                    }
+                                                }
+                                            } catch (e: CancellationException) {
+                                                throw e
+                                            } finally {
+                                                isCreating = false
                                             }
-                                            createdVoice = result
-                                            statusMessage = "已生成并保存到项目 (${result.ownerKeyHint}): ${result.id}"
-                                            if (result.sampleWavBytes.isNotEmpty()) {
-                                                playBytes(result.id, result.sampleWavBytes, AudioFormat.WAV)
-                                            }
-                                        } catch (e: CancellationException) {
-                                            throw e
-                                        } catch (e: Exception) {
-                                            statusError = "生成失败: ${e.message ?: e::class.simpleName}"
-                                        } finally {
-                                            isCreating = false
                                         }
+                                    },
+                                ) {
+                                    if (isCreating) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("同步生成中...")
+                                    } else {
+                                        Text("同步捏到全部 Key (${keys.size})")
                                     }
-                                },
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                if (isCreating) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("生成中...")
-                                } else {
-                                    Text("生成并试听")
+                                }
+                            }
+
+                            val singleCreateAction = {
+                                statusError = null
+                                statusMessage = null
+                                isCreating = true
+                                scope.launch {
+                                    try {
+                                        val result = withContext(Dispatchers.IO) {
+                                            voicesClient.createPromptedVoice(
+                                                baseUrl = setting.baseUrl,
+                                                apiKey = activeKey,
+                                                displayName = designName.trim().ifBlank { "Kairos-Voice" },
+                                                gender = designGender,
+                                                languageCode = designLanguage,
+                                                prompt = designPrompt.trim(),
+                                                model = "gemini-3.8-flash-tts",
+                                            )
+                                        }
+                                        createdVoice = result
+                                        statusMessage = "已生成并保存到项目 (${result.ownerKeyHint}): ${result.id}"
+                                        if (result.sampleWavBytes.isNotEmpty()) {
+                                            playBytes(result.id, result.sampleWavBytes, AudioFormat.WAV)
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        statusError = "生成失败: ${e.message ?: e::class.simpleName}"
+                                    } finally {
+                                        isCreating = false
+                                    }
+                                }
+                            }
+
+                            if (keys.size > 1) {
+                                OutlinedButton(
+                                    enabled = !isCreating && activeKey.isNotBlank() && designPrompt.isNotBlank(),
+                                    onClick = { singleCreateAction() },
+                                ) {
+                                    Text("仅当前 Key 试捏")
+                                }
+                            } else {
+                                Button(
+                                    enabled = !isCreating && activeKey.isNotBlank() && designPrompt.isNotBlank(),
+                                    onClick = { singleCreateAction() },
+                                ) {
+                                    if (isCreating) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("生成中...")
+                                    } else {
+                                        Text("生成并试听")
+                                    }
                                 }
                             }
 
@@ -596,6 +692,7 @@ internal fun GeminiVoiceStudioDialog(
                                                     setting.copy(
                                                         voiceName = cv.id,
                                                         voiceOwnerKeyHint = cv.ownerKeyHint,
+                                                        voiceIdsByKeyHint = setting.voiceIdsByKeyHint + (cv.ownerKeyHint to cv.id),
                                                     )
                                                 )
                                                 statusMessage = "已设为专属主音色: ${cv.id}"
@@ -694,10 +791,12 @@ internal fun GeminiVoiceStudioDialog(
                                         }
                                         Button(
                                             onClick = {
+                                                val ownerHint = maskGeminiTtsKey(activeKey)
                                                 onUpdateSetting(
                                                     setting.copy(
                                                         voiceName = entry.id,
-                                                        voiceOwnerKeyHint = maskGeminiTtsKey(activeKey),
+                                                        voiceOwnerKeyHint = ownerHint,
+                                                        voiceIdsByKeyHint = setting.voiceIdsByKeyHint + (ownerHint to entry.id),
                                                     )
                                                 )
                                                 statusMessage = "已设为主音色: ${entry.id}"
@@ -737,7 +836,7 @@ internal fun GeminiVoiceStudioDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            text = "全系（3.8 / 3.1 / 2.5）与多 Key 通用。可试听后一键设为主音色，或设为捏声线的「相似备选」用于降级/换 Key 接力。",
+                            text = "Gemini 3.8 双子星与多 Key 通用。可试听后一键设为主音色，或设为捏声线的「相似备选」用于未同步 Key 接力。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -870,6 +969,7 @@ internal fun GeminiVoiceStudioDialog(
                                                         setting.copy(
                                                             voiceName = item.id,
                                                             voiceOwnerKeyHint = "",
+                                                            voiceIdsByKeyHint = emptyMap(),
                                                         )
                                                     )
                                                     statusMessage = "已设为主音色: ${item.id}"

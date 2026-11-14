@@ -8,7 +8,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
+import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.resolveVoiceDesignRelayCandidates
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -19,7 +21,6 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -34,6 +35,7 @@ class GeminiTTSProviderTest {
     @Before
     fun resetPool() {
         GeminiTtsPoolTracker.clearAllForTesting()
+        MiMoTtsKeyTracker.clearAllForTesting()
     }
 
     private fun buildMinimalWav(pcmPayload: ByteArray): ByteArray {
@@ -79,67 +81,68 @@ class GeminiTTSProviderTest {
         .build()
 
     @Test
-    fun prepareGeminiTtsText_translatesTagsAndStyleAcrossGenerations() {
+    fun prepareGeminiTtsText_translatesTagsAndStyleFor38() {
         val raw = "[style: warm and gentle]你回来啦[chuckle][short pause]我想你了。"
 
         val p38 = prepareGeminiTtsText(raw, "soft laugh", "gemini-3.8-flash-tts")
         assertEquals("soft laugh; warm and gentle", p38.style)
         assertEquals("你回来啦<chuckle><short pause>我想你了。", p38.text)
-
-        val p31 = prepareGeminiTtsText(raw, "ignored", "gemini-3.1-flash-tts-preview")
-        assertEquals("", p31.style)
-        assertEquals("你回来啦<chuckle><short pause>我想你了。", p31.text)
-
-        val p25 = prepareGeminiTtsText(raw, "ignored", "gemini-2.5-flash-preview-tts")
-        assertEquals("", p25.style)
-        assertEquals("你回来啦 我想你了。", p25.text)
     }
 
     @Test
-    fun buildGeminiTtsCandidateModels_followsLadderOrSingleModel() {
+    fun buildGeminiTtsCandidateModels_onlyUses38LadderAndConvergesLegacyModels() {
         assertEquals(
             listOf(
                 "gemini-3.8-flash-tts",
                 "gemini-3.8-flash-lite-tts",
-                "gemini-3.1-flash-tts-preview",
-                "gemini-2.5-flash-preview-tts",
+            ),
+            GEMINI_TTS_MODEL_LADDER,
+        )
+        assertEquals(
+            listOf(
+                "gemini-3.8-flash-tts",
+                "gemini-3.8-flash-lite-tts",
             ),
             buildGeminiTtsCandidateModels("gemini-3.8-flash-tts", autoFallback = true),
         )
         assertEquals(
+            listOf("gemini-3.8-flash-lite-tts"),
+            buildGeminiTtsCandidateModels("gemini-3.8-flash-lite-tts", autoFallback = true),
+        )
+        // Legacy 3.1 / 2.5 converge back to 3.8
+        assertEquals(
             listOf(
-                "gemini-3.1-flash-tts-preview",
-                "gemini-2.5-flash-preview-tts",
+                "gemini-3.8-flash-tts",
+                "gemini-3.8-flash-lite-tts",
             ),
             buildGeminiTtsCandidateModels("models/gemini-3.1-flash-tts-preview", autoFallback = true),
         )
         assertEquals(
             listOf("gemini-3.8-flash-tts"),
-            buildGeminiTtsCandidateModels("gemini-3.8-flash-tts", autoFallback = false),
+            buildGeminiTtsCandidateModels("gemini-2.5-flash-preview-tts", autoFallback = false),
         )
     }
 
     @Test
-    fun resolveGeminiVoiceForAttempt_respectsProjectOwnerAndModelGeneration() {
+    fun resolveGeminiVoiceForAttempt_matchesSyncedVoicePerKeyAndFallsBackForUnsyncedKey() {
         val key1 = "AIzaSyKeyOne1234567890"
         val key2 = "AIzaSyKeyTwo0987654321"
+        val key3 = "AIzaSyKeyThree55555555"
         val setting = TTSProviderSetting.Gemini(
-            apiKey = "$key1\n$key2",
-            voiceName = "voice_custom_123",
+            apiKey = "$key1\n$key2\n$key3",
+            voiceName = "voice_custom_key1",
             fallbackVoiceName = "Aoede",
             voiceOwnerKeyHint = maskGeminiTtsKey(key1),
+            voiceIdsByKeyHint = mapOf(
+                maskGeminiTtsKey(key1) to "voice_custom_key1",
+                maskGeminiTtsKey(key2) to "voice_custom_key2",
+            ),
         )
 
-        // 归属 Key + 3.8 -> 保留 voice_custom_123
-        assertEquals("voice_custom_123", resolveGeminiVoiceForAttempt(setting, key1, "gemini-3.8-flash-tts"))
-        assertEquals("voice_custom_123", resolveGeminiVoiceForAttempt(setting, key1, "gemini-3.8-flash-lite-tts"))
-
-        // 同 Key 降级 3.1 / 2.5 -> 自动切换相似备选 Aoede
-        assertEquals("Aoede", resolveGeminiVoiceForAttempt(setting, key1, "gemini-3.1-flash-tts-preview"))
-        assertEquals("Aoede", resolveGeminiVoiceForAttempt(setting, key1, "gemini-2.5-flash-preview-tts"))
-
-        // 切到另一项目的 Key2（即使仍在 3.8）-> 自动切换 Aoede
-        assertEquals("Aoede", resolveGeminiVoiceForAttempt(setting, key2, "gemini-3.8-flash-tts"))
+        assertEquals("voice_custom_key1", resolveGeminiVoiceForAttempt(setting, key1, "gemini-3.8-flash-tts"))
+        assertEquals("voice_custom_key2", resolveGeminiVoiceForAttempt(setting, key2, "gemini-3.8-flash-lite-tts"))
+        // Unsynced key3 falls back to Aoede
+        assertEquals("Aoede", resolveGeminiVoiceForAttempt(setting, key3, "gemini-3.8-flash-tts"))
     }
 
     @Test
@@ -217,68 +220,67 @@ class GeminiTTSProviderTest {
     }
 
     @Test
-    fun synthesizeSpeechFlow_fallsBackAcrossAllFourGenerationsAndTracksCounts() = runBlocking {
-        val seenModels = mutableListOf<String>()
-        val seenVoices = mutableListOf<String>()
-        var model31HadAnnotations = true
-
+    fun synthesizeSpeechFlow_exhaustsFlashThenLitePerKeyBeforeSwitchingKeyAndUsesSyncedVoices() = runBlocking {
+        val attempts = mutableListOf<Triple<String, String, String>>()
         val pcmFinal = byteArrayOf(11, 22, 33, 44)
         val pcmFinalB64 = Base64.getEncoder().encodeToString(pcmFinal)
 
-        val client = clientWithHandler { req ->
-            val rawBody = readRequestBody(req)
-            val obj = json.parseToJsonElement(rawBody).jsonObject
-            val model = obj["model"]?.jsonPrimitive?.content.orEmpty()
-            seenModels += model
+        val key1 = "AIzaSyPrimaryPoolKey1111"
+        val key2 = "AIzaSySecondaryPoolKey2222"
 
-            if (req.url.encodedPath.endsWith("/interactions")) {
-                val contentObj = obj["input"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
-                if (model.contains("3.1")) {
-                    model31HadAnnotations = contentObj.containsKey("annotations")
-                }
-                val voice = obj["generation_config"]!!.jsonObject["speech_config"]!!.jsonArray[0]
-                    .jsonObject["voice"]!!.jsonPrimitive.content
-                seenVoices += voice
+        val client = clientWithHandler { req ->
+            val key = req.header("x-goog-api-key").orEmpty()
+            val obj = json.parseToJsonElement(readRequestBody(req)).jsonObject
+            val model = obj["model"]?.jsonPrimitive?.content.orEmpty()
+            val voice = obj["generation_config"]!!.jsonObject["speech_config"]!!.jsonArray[0]
+                .jsonObject["voice"]!!.jsonPrimitive.content
+            attempts += Triple(key, model, voice)
+
+            if (key == key1 || model == "gemini-3.8-flash-tts") {
                 buildJsonResponse(
                     req,
                     429,
                     """{"error":{"message":"Quota exceeded","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerDay"}]}]}}""",
                 )
             } else {
-                val voice = obj["generationConfig"]!!.jsonObject["speechConfig"]!!.jsonObject["voiceConfig"]!!
-                    .jsonObject["prebuiltVoiceConfig"]!!.jsonObject["voiceName"]!!.jsonPrimitive.content
-                seenVoices += voice
-                val legacyBody = """{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/L16;rate=24000","data":"$pcmFinalB64"}}]}}]}"""
-                buildJsonResponse(req, 200, legacyBody)
+                val sse = """data: {"event_type":"step.delta","delta":{"type":"audio","data":"$pcmFinalB64"}}""" +
+                    "\n\ndata: [DONE]\n"
+                buildJsonResponse(req, 200, sse, "text/event-stream")
             }
         }
 
-        val key = "AIzaSySingleKeyForLadder999"
         val provider = GeminiTTSProvider(httpClient = client)
         val setting = TTSProviderSetting.Gemini(
-            apiKey = key,
+            apiKey = "$key1\n$key2",
             model = "gemini-3.8-flash-tts",
-            voiceName = "voice_owner_custom",
+            voiceName = "voice_synced_k1",
             fallbackVoiceName = "Leda",
-            voiceOwnerKeyHint = maskGeminiTtsKey(key),
+            voiceOwnerKeyHint = maskGeminiTtsKey(key1),
+            voiceIdsByKeyHint = mapOf(
+                maskGeminiTtsKey(key1) to "voice_synced_k1",
+                maskGeminiTtsKey(key2) to "voice_synced_k2",
+            ),
             stylePrompt = "soft",
             autoFallbackModels = true,
         )
 
-        val chunks = provider.synthesizeSpeechFlow(setting, TTSRequest("测试降级[laugh]")).toList()
+        val chunks = provider.synthesizeSpeechFlow(setting, TTSRequest("测试同Key双档耗尽再换Key")).toList()
 
-        assertEquals(GEMINI_TTS_MODEL_LADDER, seenModels)
         assertEquals(
-            listOf("voice_owner_custom", "voice_owner_custom", "Leda", "Leda"),
-            seenVoices,
+            listOf(
+                Triple(key1, "gemini-3.8-flash-tts", "voice_synced_k1"),
+                Triple(key1, "gemini-3.8-flash-lite-tts", "voice_synced_k1"),
+                Triple(key2, "gemini-3.8-flash-tts", "voice_synced_k2"),
+                Triple(key2, "gemini-3.8-flash-lite-tts", "voice_synced_k2"),
+            ),
+            attempts,
         )
-        assertFalse("Gemini 3.1 must not receive speech_metadata annotations", model31HadAnnotations)
         assertEquals(1, chunks.size)
         assertArrayEquals(pcmFinal, chunks[0].data)
 
-        val summary = GeminiTtsPoolTracker.summarizePool(key)
-        assertEquals(1 to 10, summary["gemini-2.5-flash-preview-tts"])
-        assertEquals(0 to 10, summary["gemini-3.8-flash-tts"])
+        val summary = GeminiTtsPoolTracker.summarizePool("$key1\n$key2")
+        assertEquals(1 to 20, summary["gemini-3.8-flash-lite-tts"])
+        assertEquals(0 to 20, summary["gemini-3.8-flash-tts"])
     }
 
     @Test
@@ -313,6 +315,75 @@ class GeminiTTSProviderTest {
         assertEquals(listOf("voice_other_project", "Kore"), requestedVoices)
         assertEquals(1, chunks.size)
         assertArrayEquals(pcmOk, chunks[0].data)
+    }
+
+    @Test
+    fun ttsManager_relaysFromExhaustedGemini38ToMiMoVoiceDesign() = runBlocking {
+        val mimoPcm = byteArrayOf(21, 22, 23, 24)
+        val mimoB64 = Base64.getEncoder().encodeToString(mimoPcm)
+        val callTrace = mutableListOf<String>()
+
+        val geminiClient = clientWithHandler { req ->
+            val obj = json.parseToJsonElement(readRequestBody(req)).jsonObject
+            callTrace += "gemini:${obj["model"]?.jsonPrimitive?.content}"
+            buildJsonResponse(
+                req,
+                429,
+                """{"error":{"message":"Quota exceeded"}}""",
+            )
+        }
+
+        val mimoClient = clientWithHandler { req ->
+            val obj = json.parseToJsonElement(readRequestBody(req)).jsonObject
+            callTrace += "mimo:${obj["model"]?.jsonPrimitive?.content}"
+            val sse = """data: {"choices":[{"delta":{"audio":{"data":"$mimoB64"}}}]}""" +
+                "\n\ndata: [DONE]\n\n"
+            buildJsonResponse(req, 200, sse, "text/event-stream")
+        }
+
+        val geminiSetting = TTSProviderSetting.Gemini(
+            apiKey = "AIzaSyExhaustedKey1111",
+            model = "gemini-3.8-flash-tts",
+            autoFallbackModels = true,
+        )
+        val emptyOpenAi = TTSProviderSetting.OpenAI(apiKey = "")
+        val systemTts = TTSProviderSetting.SystemTTS()
+        val mimoSetting = TTSProviderSetting.MiMo(
+            apiKey = "mimo-free-key",
+            model = "mimo-v2.5-tts-voicedesign",
+            voiceDesignPrompt = "温柔知性女声",
+        )
+        val otherCloud = TTSProviderSetting.OpenAI(apiKey = "sk-backup")
+
+        val relayOrder = resolveVoiceDesignRelayCandidates(
+            primary = geminiSetting,
+            fallbackProviders = listOf(geminiSetting, emptyOpenAi, systemTts, otherCloud, mimoSetting),
+        )
+        // MiMo VoiceDesign must be prioritized over non-VoiceDesign cloud backups, and empty/system filtered out
+        assertEquals(listOf(mimoSetting, otherCloud), relayOrder)
+
+        val manager = TTSManager(
+            context = null,
+            geminiProvider = GeminiTTSProvider(httpClient = geminiClient),
+            miMoProvider = MiMoTTSProvider(httpClient = mimoClient),
+        )
+
+        val chunks = manager.generateSpeech(
+            providerSetting = geminiSetting,
+            fallbackProviders = listOf(geminiSetting, emptyOpenAi, systemTts, mimoSetting),
+            request = TTSRequest("跨引擎接力测试"),
+        ).toList()
+
+        assertEquals(
+            listOf(
+                "gemini:gemini-3.8-flash-tts",
+                "gemini:gemini-3.8-flash-lite-tts",
+                "mimo:mimo-v2.5-tts-voicedesign",
+            ),
+            callTrace,
+        )
+        assertTrue(chunks.isNotEmpty())
+        assertArrayEquals(mimoPcm, chunks[0].data)
     }
 
     @Test

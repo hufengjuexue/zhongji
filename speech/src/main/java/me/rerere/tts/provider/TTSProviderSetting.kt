@@ -48,6 +48,7 @@ sealed class TTSProviderSetting {
         val voiceOwnerKeyHint: String = "",
         val stylePrompt: String = "",
         val autoFallbackModels: Boolean = true,
+        val voiceIdsByKeyHint: Map<String, String> = emptyMap(),
     ) : TTSProviderSetting() {
         override fun copyProvider(
             id: Uuid,
@@ -175,7 +176,10 @@ sealed class TTSProviderSetting {
         val apiKey: String = "",
         val baseUrl: String = "https://api.xiaomimimo.com/v1",
         val model: String = "mimo-v2.5-tts",
-        val voice: String = "mimo_default"
+        val voice: String = "mimo_default",
+        val voiceDesignPrompt: String = "",
+        val cloneAudioBase64: String = "",
+        val optimizeTextPreview: Boolean = false,
     ) : TTSProviderSetting() {
         override fun copyProvider(
             id: Uuid,

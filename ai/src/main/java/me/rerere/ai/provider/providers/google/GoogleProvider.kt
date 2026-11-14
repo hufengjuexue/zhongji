@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -69,7 +70,10 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.GoogleDispatchCandidate
+import me.rerere.ai.util.GoogleQuotaBucket
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.classifyGoogleModelBucket
 import me.rerere.ai.util.parseApiKeys
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
@@ -134,22 +138,49 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private fun maxKeyAttempts(
         providerSetting: ProviderSetting.Google,
         keysOverride: String? = null,
+        modelId: String? = null,
     ): Int {
         if (providerSetting.vertexAI && providerSetting.useServiceAccount) return 1
-        val raw = keysOverride ?: providerSetting.apiKey
-        return parseApiKeys(raw).size.coerceIn(1, 32)
+        val keyCount = parseApiKeys(keysOverride ?: providerSetting.apiKey).size.coerceAtLeast(1)
+        val bucket = modelId?.let { classifyGoogleModelBucket(it) }
+        val isPrimaryChatRp = bucket == GoogleQuotaBucket.GEMINI_4_HYDROGEN ||
+            bucket == GoogleQuotaBucket.GEMINI_3_8 ||
+            bucket == GoogleQuotaBucket.GEMINI_3_6
+        return if (isPrimaryChatRp) {
+            (keyCount * 3 + 2).coerceIn(4, 64)
+        } else {
+            keyCount.coerceIn(1, 32)
+        }
     }
 
-    private fun ProviderSetting.Google.effectiveAuxKeys(): String? =
+    internal fun ProviderSetting.Google.effectiveAuxKeys(): String? =
         auxiliaryApiKey.takeIf { parseApiKeys(it).isNotEmpty() }
+            ?: parseApiKeys(apiKey).take(2).takeIf { it.isNotEmpty() }?.joinToString("\n")
 
-    private suspend fun transformRequestWithKey(
+    private fun buildGenerateContentUrl(
+        providerSetting: ProviderSetting.Google,
+        modelId: String,
+        stream: Boolean,
+    ): HttpUrl {
+        val action = if (stream) "streamGenerateContent" else "generateContent"
+        val normalizedModel = modelId.removePrefix("models/")
+        val path = if (providerSetting.vertexAI) {
+            "publishers/google/models/$normalizedModel:$action"
+        } else {
+            "models/$normalizedModel:$action"
+        }
+        val base = buildUrl(providerSetting = providerSetting, path = path)
+        return if (stream) {
+            base.newBuilder().addQueryParameter("alt", "sse").build()
+        } else {
+            base
+        }
+    }
+
+    private suspend fun signRequestWithKey(
         providerSetting: ProviderSetting.Google,
         request: Request,
-        sessionId: String? = null,
-        modelId: String? = null,
-        keysOverride: String? = null,
-        rotationModeOverride: KeyRotationMode? = null,
+        key: String?,
     ): SignedRequest {
         return if (providerSetting.vertexAI && providerSetting.useServiceAccount) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
@@ -163,31 +194,82 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 usedKey = null,
             )
         } else {
-            val key = keyRoulette.next(
-                keys = keysOverride ?: providerSetting.apiKey,
-                providerId = providerSetting.id.toString(),
-                sessionId = sessionId,
-                rotationMode = rotationModeOverride ?: providerSetting.keyRotationMode,
-                modelId = modelId,
-            )
+            val actualKey = key.orEmpty()
             val signed = if (providerSetting.vertexAI) {
                 request.newBuilder()
-                    .url(request.url.newBuilder().addQueryParameter("key", key).build())
+                    .url(request.url.newBuilder().addQueryParameter("key", actualKey).build())
                     .build()
             } else {
                 request.newBuilder()
-                    .addHeader("x-goog-api-key", key)
+                    .addHeader("x-goog-api-key", actualKey)
                     .build()
             }
-            SignedRequest(request = signed, usedKey = key)
+            SignedRequest(request = signed, usedKey = actualKey)
         }
     }
 
-    private suspend fun transformRequest(
+    private suspend fun executeWithModelFailover(
         providerSetting: ProviderSetting.Google,
-        request: Request,
-        sessionId: String? = null,
-    ): Request = transformRequestWithKey(providerSetting, request, sessionId).request
+        requestedModelId: String?,
+        keysOverride: String? = null,
+        errorPrefix: String = "Failed to get response",
+        buildRawRequest: (effectiveModel: String) -> Request,
+    ): Pair<String, String> {
+        val useServiceAccount = providerSetting.vertexAI && providerSetting.useServiceAccount
+        val effectiveKeys = keysOverride ?: providerSetting.apiKey
+        val maxAttempts = maxKeyAttempts(providerSetting, keysOverride, requestedModelId)
+        val triedCandidates = linkedSetOf<GoogleDispatchCandidate>()
+
+        for (attempt in 0 until maxAttempts) {
+            val candidate = if (useServiceAccount) {
+                GoogleDispatchCandidate("", requestedModelId.orEmpty())
+            } else {
+                keyRoulette.nextGoogleCandidate(
+                    keys = effectiveKeys,
+                    requestedModelId = requestedModelId.orEmpty(),
+                    excluded = triedCandidates,
+                ) ?: break
+            }
+            triedCandidates.add(candidate)
+
+            val effectiveModel = candidate.modelId
+            val reportedModel = effectiveModel.ifBlank { null }
+            val signed = signRequestWithKey(
+                providerSetting = providerSetting,
+                request = buildRawRequest(effectiveModel),
+                key = if (useServiceAccount) null else candidate.apiKey,
+            )
+            val response = client.newCall(signed.request).await()
+            val bodyStr = response.use { res ->
+                if (res.isSuccessful) {
+                    signed.usedKey?.takeIf { it.isNotBlank() }?.let {
+                        keyRoulette.reportSuccess(it, reportedModel)
+                    }
+                    return@use res.body.string()
+                }
+                val code = res.code
+                val retryAfter = res.header("Retry-After")
+                val errBody = res.body.string()
+                if (!signed.usedKey.isNullOrBlank()) {
+                    keyRoulette.reportGoogleError(signed.usedKey, code, retryAfter, errBody, reportedModel)
+                }
+                val hasMoreCandidates = !useServiceAccount &&
+                    attempt + 1 < maxAttempts &&
+                    keyRoulette.nextGoogleCandidate(
+                        keys = effectiveKeys,
+                        requestedModelId = requestedModelId.orEmpty(),
+                        excluded = triedCandidates,
+                    ) != null
+                if (!signed.usedKey.isNullOrBlank() && isFailoverStatusCode(code) && hasMoreCandidates) {
+                    Log.w(TAG, "Key/model ($reportedModel) failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
+                    return@use null
+                }
+                throw Exception("$errorPrefix: $code $errBody")
+            }
+            if (bodyStr != null) return bodyStr to effectiveModel
+        }
+        throw Exception("$errorPrefix: all API keys exhausted")
+    }
 
     private suspend fun executeWithKeyFailover(
         providerSetting: ProviderSetting.Google,
@@ -197,39 +279,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         rotationModeOverride: KeyRotationMode? = null,
         errorPrefix: String = "Failed to get response",
         buildRawRequest: () -> Request,
-    ): String {
-        val maxAttempts = maxKeyAttempts(providerSetting, keysOverride)
-        for (attempt in 0 until maxAttempts) {
-            val signed = transformRequestWithKey(
-                providerSetting = providerSetting,
-                request = buildRawRequest(),
-                sessionId = sessionId,
-                modelId = modelId,
-                keysOverride = keysOverride,
-                rotationModeOverride = rotationModeOverride,
-            )
-            val response = client.newCall(signed.request).await()
-            val bodyStr = response.use { res ->
-                if (res.isSuccessful) {
-                    signed.usedKey?.let { keyRoulette.reportSuccess(it, modelId) }
-                    return@use res.body.string()
-                }
-                val code = res.code
-                val retryAfter = res.header("Retry-After")
-                val errBody = res.body.string()
-                if (!signed.usedKey.isNullOrBlank()) {
-                    keyRoulette.reportGoogleError(signed.usedKey, code, retryAfter, errBody, modelId)
-                }
-                if (!signed.usedKey.isNullOrBlank() && isFailoverStatusCode(code) && attempt + 1 < maxAttempts) {
-                    Log.w(TAG, "Key failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
-                    return@use null
-                }
-                throw Exception("$errorPrefix: $code $errBody")
-            }
-            if (bodyStr != null) return bodyStr
-        }
-        throw Exception("$errorPrefix: all API keys exhausted")
-    }
+    ): String = executeWithModelFailover(
+        providerSetting = providerSetting,
+        requestedModelId = modelId,
+        keysOverride = keysOverride,
+        errorPrefix = errorPrefix,
+        buildRawRequest = { buildRawRequest() },
+    ).first
 
     override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> =
         withContext(Dispatchers.IO) {
@@ -292,21 +348,16 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val requestBody = buildCompletionRequestBody(messages, params)
         val bodyBytes = json.encodeToString(requestBody)
 
-        val url = buildUrl(
+        val (bodyStr, effectiveModel) = executeWithModelFailover(
             providerSetting = providerSetting,
-            path = if (providerSetting.vertexAI) {
-                "publishers/google/models/${params.model.modelId}:generateContent"
-            } else {
-                "models/${params.model.modelId}:generateContent"
-            }
-        )
-
-        val bodyStr = executeWithKeyFailover(
-            providerSetting = providerSetting,
-            sessionId = params.sessionId,
-            modelId = params.model.modelId,
+            requestedModelId = params.model.modelId,
             errorPrefix = "Failed to get response",
-        ) {
+        ) { effectiveModel ->
+            val url = buildGenerateContentUrl(
+                providerSetting = providerSetting,
+                modelId = effectiveModel,
+                stream = false,
+            )
             Request.Builder()
                 .url(url)
                 .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
@@ -321,7 +372,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             ?: error("No candidates in response")
         TextGenerationResult(
             id = Uuid.random().toString(),
-            model = params.model.modelId,
+            model = effectiveModel,
             message = parseMessage(candidate),
             finishReason = candidate["finishReason"]?.jsonPrimitive?.contentOrNull,
             usage = parseUsageMeta(bodyJson["usageMetadata"] as? JsonObject),
@@ -346,22 +397,15 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val requestBody = buildCompletionRequestBody(messages, params)
         val bodyJsonStr = json.encodeToString(requestBody)
 
-        val url = buildUrl(
-            providerSetting = providerSetting,
-            path = if (providerSetting.vertexAI) {
-                "publishers/google/models/${params.model.modelId}:streamGenerateContent"
-            } else {
-                "models/${params.model.modelId}:streamGenerateContent"
-            }
-        ).newBuilder().addQueryParameter("alt", "sse").build()
-
         logRequestBody(TAG, "streamText") { bodyJsonStr }
 
         val responseId = Uuid.random().toString()
-        val maxAttempts = maxKeyAttempts(providerSetting)
+        val useServiceAccount = providerSetting.vertexAI && providerSetting.useServiceAccount
+        val maxAttempts = maxKeyAttempts(providerSetting, modelId = params.model.modelId)
         val attemptIndex = AtomicInteger(0)
         val hasEmittedEvent = AtomicBoolean(false)
         val activeEventSource = AtomicReference<EventSource?>(null)
+        val triedCandidates = ConcurrentHashMap.newKeySet<GoogleDispatchCandidate>()
         val scope = this
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
@@ -375,18 +419,38 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         fun launchAttempt() {
             scope.launch {
                 val currentAttempt = attemptIndex.get()
+                val candidate = if (useServiceAccount) {
+                    GoogleDispatchCandidate("", params.model.modelId)
+                } else {
+                    keyRoulette.nextGoogleCandidate(
+                        keys = providerSetting.apiKey,
+                        requestedModelId = params.model.modelId,
+                        excluded = triedCandidates,
+                    )
+                }
+                if (candidate == null) {
+                    close(Exception("Failed to get response: all API keys exhausted"))
+                    return@launch
+                }
+                triedCandidates.add(candidate)
+
+                val effectiveModel = candidate.modelId
+                val attemptUrl = buildGenerateContentUrl(
+                    providerSetting = providerSetting,
+                    modelId = effectiveModel,
+                    stream = true,
+                )
                 val signed = try {
-                    transformRequestWithKey(
+                    signRequestWithKey(
                         providerSetting = providerSetting,
                         request = Request.Builder()
-                            .url(url)
+                            .url(attemptUrl)
                             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
-                            .configureSessionHeaders(url.toString(), params.sessionId)
+                            .configureSessionHeaders(attemptUrl.toString(), params.sessionId)
                             .post(bodyJsonStr.toRequestBody("application/json".toMediaType()))
                             .configureReferHeaders(providerSetting.baseUrl)
                             .build(),
-                        sessionId = params.sessionId,
-                        modelId = params.model.modelId,
+                        key = if (useServiceAccount) null else candidate.apiKey,
                     )
                 } catch (e: Throwable) {
                     close(e)
@@ -395,7 +459,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                 if (!scope.isActive) return@launch
 
-                val decoder = GoogleStreamDecoder(responseId, params.model.modelId)
+                val decoder = GoogleStreamDecoder(responseId, effectiveModel)
                 val listenerSuperseded = AtomicBoolean(false)
                 val successReported = AtomicBoolean(false)
                 val listener = object : EventSourceListener() {
@@ -408,7 +472,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         if (listenerSuperseded.get()) return
                         hasEmittedEvent.set(true)
                         if (successReported.compareAndSet(false, true)) {
-                            signed.usedKey?.let { keyRoulette.reportSuccess(it, params.model.modelId) }
+                            signed.usedKey?.takeIf { it.isNotBlank() }?.let {
+                                keyRoulette.reportSuccess(it, effectiveModel)
+                            }
                         }
                         Log.i(TAG, "onEvent: $data")
 
@@ -437,22 +503,30 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 statusCode = response.code,
                                 retryAfterHeader = response.header("Retry-After"),
                                 responseBody = bodyStr,
-                                modelId = params.model.modelId,
+                                modelId = effectiveModel,
                             )
                         }
+
+                        val hasMoreCandidates = !useServiceAccount &&
+                            currentAttempt + 1 < maxAttempts &&
+                            keyRoulette.nextGoogleCandidate(
+                                keys = providerSetting.apiKey,
+                                requestedModelId = params.model.modelId,
+                                excluded = triedCandidates,
+                            ) != null
 
                         val canFailover = !hasEmittedEvent.get() &&
                             !signed.usedKey.isNullOrBlank() &&
                             response != null &&
                             isFailoverStatusCode(response.code) &&
-                            currentAttempt + 1 < maxAttempts
+                            hasMoreCandidates
 
                         if (canFailover) {
                             listenerSuperseded.set(true)
                             attemptIndex.incrementAndGet()
                             Log.w(
                                 TAG,
-                                "Stream key failed with HTTP ${response.code}, failing over (${currentAttempt + 2}/$maxAttempts)"
+                                "Stream key/model ($effectiveModel) failed with HTTP ${response.code}, failing over (${currentAttempt + 2}/$maxAttempts)"
                             )
                             launchAttempt()
                             return

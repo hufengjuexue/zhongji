@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -50,7 +52,10 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.GoogleDispatchCandidate
+import me.rerere.ai.util.GoogleQuotaBucket
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.classifyGoogleModelBucket
 import me.rerere.ai.util.parseApiKeys
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
@@ -91,32 +96,73 @@ internal class InteractionsAPI(
     private fun isFailoverStatusCode(code: Int): Boolean =
         code == 429 || code in 401..403 || code in 500..599
 
+    private fun maxDispatchAttempts(apiKey: String, modelId: String): Int {
+        val keyCount = parseApiKeys(apiKey).size.coerceAtLeast(1)
+        val bucket = classifyGoogleModelBucket(modelId)
+        val isPrimaryChatRp = bucket == GoogleQuotaBucket.GEMINI_4_HYDROGEN ||
+            bucket == GoogleQuotaBucket.GEMINI_3_8 ||
+            bucket == GoogleQuotaBucket.GEMINI_3_6
+        return if (isPrimaryChatRp) {
+            (keyCount * 3 + 2).coerceIn(4, 64)
+        } else {
+            keyCount.coerceIn(1, 32)
+        }
+    }
+
+    private fun bodyBytesForModel(
+        baseBody: JsonObject,
+        baseBytes: String,
+        baseModelId: String,
+        effectiveModel: String,
+    ): String {
+        if (effectiveModel == baseModelId) return baseBytes
+        return json.encodeToString(JsonObject(baseBody + ("model" to JsonPrimitive(effectiveModel))))
+    }
+
     suspend fun generateText(
         providerSetting: ProviderSetting.Google,
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): TextGenerationResult = withContext(Dispatchers.IO) {
-        val requestBody = buildRequestBody(messages, params, stream = false)
-        val bodyBytes = json.encodeToString(requestBody)
-        val maxAttempts = parseApiKeys(providerSetting.apiKey).size.coerceIn(1, 32)
+        val baseBody = buildRequestBody(messages, params, stream = false)
+        val baseBytes = json.encodeToString(baseBody)
+        val maxAttempts = maxDispatchAttempts(providerSetting.apiKey, params.model.modelId)
+        val triedCandidates = linkedSetOf<GoogleDispatchCandidate>()
 
         for (attempt in 0 until maxAttempts) {
-            val (request, usedKey) = buildRequestWithKey(providerSetting, params, bodyBytes)
+            val candidate = keyRoulette.nextGoogleCandidate(
+                keys = providerSetting.apiKey,
+                requestedModelId = params.model.modelId,
+                excluded = triedCandidates,
+            ) ?: break
+            triedCandidates.add(candidate)
+
+            val usedKey = candidate.apiKey
+            val effectiveModel = candidate.modelId
+            val attemptBytes = bodyBytesForModel(baseBody, baseBytes, params.model.modelId, effectiveModel)
+            val request = buildRequest(providerSetting, params, usedKey, attemptBytes)
+
             // await() waits for the response headers; reading the body can still block.
             val parsed = client.newCall(request).await().use { response ->
                 if (response.isSuccessful) {
-                    if (usedKey.isNotBlank()) keyRoulette.reportSuccess(usedKey, params.model.modelId)
+                    if (usedKey.isNotBlank()) keyRoulette.reportSuccess(usedKey, effectiveModel)
                     val bodyJson = json.parseToJsonElement(response.body.string()).jsonObject
-                    return@use parseInteraction(bodyJson, fallbackModel = params.model.modelId)
+                    return@use parseInteraction(bodyJson, fallbackModel = effectiveModel)
                 }
                 val code = response.code
                 val retryAfter = response.header("Retry-After")
                 val errBody = response.body.string()
                 if (usedKey.isNotBlank()) {
-                    keyRoulette.reportGoogleError(usedKey, code, retryAfter, errBody, params.model.modelId)
+                    keyRoulette.reportGoogleError(usedKey, code, retryAfter, errBody, effectiveModel)
                 }
-                if (usedKey.isNotBlank() && isFailoverStatusCode(code) && attempt + 1 < maxAttempts) {
-                    Log.w(TAG, "Interactions key failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
+                val hasMoreCandidates = attempt + 1 < maxAttempts &&
+                    keyRoulette.nextGoogleCandidate(
+                        keys = providerSetting.apiKey,
+                        requestedModelId = params.model.modelId,
+                        excluded = triedCandidates,
+                    ) != null
+                if (usedKey.isNotBlank() && isFailoverStatusCode(code) && hasMoreCandidates) {
+                    Log.w(TAG, "Interactions key/model ($effectiveModel) failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
                     return@use null
                 }
                 throw Exception("Failed to get response: $code $errBody")
@@ -131,15 +177,16 @@ internal class InteractionsAPI(
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): Flow<StreamChunk> = callbackFlow {
-        val requestBody = buildRequestBody(messages, params, stream = true)
-        val bodyBytes = json.encodeToString(requestBody)
+        val baseBody = buildRequestBody(messages, params, stream = true)
+        val baseBytes = json.encodeToString(baseBody)
 
-        logRequestBody(TAG, "streamText") { bodyBytes }
+        logRequestBody(TAG, "streamText") { baseBytes }
 
-        val maxAttempts = parseApiKeys(providerSetting.apiKey).size.coerceIn(1, 32)
+        val maxAttempts = maxDispatchAttempts(providerSetting.apiKey, params.model.modelId)
         val attemptIndex = AtomicInteger(0)
         val hasEmittedEvent = AtomicBoolean(false)
         val activeEventSource = AtomicReference<EventSource?>(null)
+        val triedCandidates = ConcurrentHashMap.newKeySet<GoogleDispatchCandidate>()
         val scope = this
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
@@ -153,10 +200,24 @@ internal class InteractionsAPI(
         fun launchAttempt() {
             scope.launch {
                 val currentAttempt = attemptIndex.get()
-                val (request, usedKey) = buildRequestWithKey(providerSetting, params, bodyBytes)
+                val candidate = keyRoulette.nextGoogleCandidate(
+                    keys = providerSetting.apiKey,
+                    requestedModelId = params.model.modelId,
+                    excluded = triedCandidates,
+                )
+                if (candidate == null) {
+                    close(Exception("Failed to get response: all API keys exhausted"))
+                    return@launch
+                }
+                triedCandidates.add(candidate)
+
+                val usedKey = candidate.apiKey
+                val effectiveModel = candidate.modelId
+                val attemptBytes = bodyBytesForModel(baseBody, baseBytes, params.model.modelId, effectiveModel)
+                val request = buildRequest(providerSetting, params, usedKey, attemptBytes)
                 if (!scope.isActive) return@launch
 
-                val decoder = InteractionsStreamDecoder(fallbackModel = params.model.modelId)
+                val decoder = InteractionsStreamDecoder(fallbackModel = effectiveModel)
                 val listenerSuperseded = AtomicBoolean(false)
                 val successReported = AtomicBoolean(false)
 
@@ -170,7 +231,7 @@ internal class InteractionsAPI(
                         if (listenerSuperseded.get()) return
                         hasEmittedEvent.set(true)
                         if (successReported.compareAndSet(false, true) && usedKey.isNotBlank()) {
-                            keyRoulette.reportSuccess(usedKey, params.model.modelId)
+                            keyRoulette.reportSuccess(usedKey, effectiveModel)
                         }
                         Log.d(TAG, "onEvent: $id/$type $data")
                         try {
@@ -194,22 +255,29 @@ internal class InteractionsAPI(
                                 statusCode = response.code,
                                 retryAfterHeader = response.header("Retry-After"),
                                 responseBody = bodyRaw,
-                                modelId = params.model.modelId,
+                                modelId = effectiveModel,
                             )
                         }
+
+                        val hasMoreCandidates = currentAttempt + 1 < maxAttempts &&
+                            keyRoulette.nextGoogleCandidate(
+                                keys = providerSetting.apiKey,
+                                requestedModelId = params.model.modelId,
+                                excluded = triedCandidates,
+                            ) != null
 
                         val canFailover = !hasEmittedEvent.get() &&
                             usedKey.isNotBlank() &&
                             response != null &&
                             isFailoverStatusCode(response.code) &&
-                            currentAttempt + 1 < maxAttempts
+                            hasMoreCandidates
 
                         if (canFailover) {
                             listenerSuperseded.set(true)
                             attemptIndex.incrementAndGet()
                             Log.w(
                                 TAG,
-                                "Interactions stream failed with HTTP ${response.code}, failing over (${currentAttempt + 2}/$maxAttempts)"
+                                "Interactions stream ($effectiveModel) failed with HTTP ${response.code}, failing over (${currentAttempt + 2}/$maxAttempts)"
                             )
                             launchAttempt()
                             return
@@ -247,20 +315,14 @@ internal class InteractionsAPI(
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
-    private fun buildRequestWithKey(
+    private fun buildRequest(
         providerSetting: ProviderSetting.Google,
         params: TextGenerationParams,
+        usedKey: String,
         bodyBytes: String,
-    ): Pair<Request, String> {
+    ): Request {
         val url = "${providerSetting.baseUrl}/interactions"
-        val usedKey = keyRoulette.next(
-            keys = providerSetting.apiKey,
-            providerId = providerSetting.id.toString(),
-            sessionId = params.sessionId,
-            rotationMode = providerSetting.keyRotationMode,
-            modelId = params.model.modelId,
-        )
-        val request = Request.Builder()
+        return Request.Builder()
             .url(url)
             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .configureSessionHeaders(url, params.sessionId)
@@ -268,7 +330,6 @@ internal class InteractionsAPI(
             .addHeader("x-goog-api-key", usedKey)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
-        return request to usedKey
     }
 
     internal fun buildRequestBody(

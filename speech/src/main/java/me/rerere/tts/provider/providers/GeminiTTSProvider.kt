@@ -5,7 +5,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -45,7 +44,6 @@ private val KNOWN_VOCAL_TAGS = setOf(
 )
 
 private val SQUARE_VOCAL_TAG_REGEX = Regex("\\[([a-zA-Z][a-zA-Z\\s-]{1,24})\\]")
-private val ANGLE_VOCAL_TAG_REGEX = Regex("<([a-zA-Z][a-zA-Z\\s-]{1,24})>")
 
 internal data class PreparedGeminiTtsInput(
     val text: String,
@@ -58,29 +56,25 @@ internal class GeminiTtsHttpException(
     val errorBody: String,
 ) : Exception("Gemini TTS HTTP $statusCode $statusMessage: ${errorBody.take(240)}")
 
-internal fun normalizeGeminiTtsModelId(model: String): String =
-    model.trim().removePrefix("models/").lowercase()
-
-internal fun isInteractionsTtsModel(model: String): Boolean {
-    val m = normalizeGeminiTtsModelId(model)
-    return "2.5" !in m && "2-5" !in m
+internal fun normalizeGeminiTtsModelId(model: String): String {
+    val m = model.trim().removePrefix("models/").lowercase()
+    if (m.isBlank() || "3.1" in m || "3-1" in m || "2.5" in m || "2-5" in m) {
+        return "gemini-3.8-flash-tts"
+    }
+    return m
 }
 
-internal fun supportsVoiceDesignAndStyle(model: String): Boolean {
-    val m = normalizeGeminiTtsModelId(model)
-    if ("2.5" in m || "2-5" in m) return false
-    if ("3.1" in m || "3-1" in m) return false
-    return true
-}
+internal fun isInteractionsTtsModel(model: String): Boolean = true
+
+internal fun supportsVoiceDesignAndStyle(model: String): Boolean = true
 
 internal fun buildGeminiTtsCandidateModels(
     primaryModel: String,
     autoFallback: Boolean,
 ): List<String> {
-    val primary = primaryModel.trim().removePrefix("models/").ifBlank { "gemini-3.8-flash-tts" }
+    val primary = normalizeGeminiTtsModelId(primaryModel)
     if (!autoFallback) return listOf(primary)
-    val normPrimary = primary.lowercase()
-    val idx = GEMINI_TTS_MODEL_LADDER.indexOfFirst { it.lowercase() == normPrimary }
+    val idx = GEMINI_TTS_MODEL_LADDER.indexOfFirst { it.equals(primary, ignoreCase = true) }
     return if (idx >= 0) {
         GEMINI_TTS_MODEL_LADDER.subList(idx, GEMINI_TTS_MODEL_LADDER.size)
     } else {
@@ -91,20 +85,22 @@ internal fun buildGeminiTtsCandidateModels(
 internal fun resolveGeminiVoiceForAttempt(
     setting: TTSProviderSetting.Gemini,
     apiKey: String,
-    targetModel: String,
+    targetModel: String = "gemini-3.8-flash-tts",
     forceFallback: Boolean = false,
 ): String {
-    val primary = setting.voiceName.trim().ifBlank { "Kore" }
     val fallback = setting.fallbackVoiceName.trim().ifBlank { "Kore" }
     if (forceFallback) return fallback
 
+    val keyHint = maskGeminiTtsKey(apiKey)
+    val syncedVoice = setting.voiceIdsByKeyHint[keyHint]?.trim()?.takeIf { it.isNotBlank() }
+    if (syncedVoice != null) return syncedVoice
+
+    val primary = setting.voiceName.trim().ifBlank { "Kore" }
     val isCustom = primary.startsWith("voice_") || primary.startsWith("voicekey_")
     if (!isCustom) return primary
-    if (!supportsVoiceDesignAndStyle(targetModel)) return fallback
 
-    if (primary.startsWith("voice_") &&
-        setting.voiceOwnerKeyHint.isNotBlank() &&
-        maskGeminiTtsKey(apiKey) != setting.voiceOwnerKeyHint
+    if (setting.voiceOwnerKeyHint.isNotBlank() &&
+        keyHint != setting.voiceOwnerKeyHint
     ) {
         return fallback
     }
@@ -114,7 +110,7 @@ internal fun resolveGeminiVoiceForAttempt(
 internal fun prepareGeminiTtsText(
     rawText: String,
     settingStyle: String,
-    targetModel: String,
+    targetModel: String = "gemini-3.8-flash-tts",
 ): PreparedGeminiTtsInput {
     var working = rawText.trim()
     var inlineStyle = ""
@@ -126,28 +122,13 @@ internal fun prepareGeminiTtsText(
 
     val mergedStyle = listOf(settingStyle.trim(), inlineStyle)
         .filter { it.isNotBlank() }
-        .joinToString(", ")
+        .joinToString("; ")
 
-    return if (isInteractionsTtsModel(targetModel)) {
-        val converted = SQUARE_VOCAL_TAG_REGEX.replace(working) { match ->
-            val tag = match.groupValues[1].trim().lowercase()
-            if (tag in KNOWN_VOCAL_TAGS) "<$tag>" else match.value
-        }
-        PreparedGeminiTtsInput(text = converted, style = mergedStyle)
-    } else {
-        var stripped = SQUARE_VOCAL_TAG_REGEX.replace(working) { match ->
-            val tag = match.groupValues[1].trim().lowercase()
-            if (tag in KNOWN_VOCAL_TAGS) " " else match.value
-        }
-        stripped = ANGLE_VOCAL_TAG_REGEX.replace(stripped) { match ->
-            val tag = match.groupValues[1].trim().lowercase()
-            if (tag in KNOWN_VOCAL_TAGS) " " else match.value
-        }
-        PreparedGeminiTtsInput(
-            text = stripped.replace(Regex("\\s{2,}"), " ").trim(),
-            style = "",
-        )
+    val converted = SQUARE_VOCAL_TAG_REGEX.replace(working) { match ->
+        val tag = match.groupValues[1].trim().lowercase()
+        if (tag in KNOWN_VOCAL_TAGS) "<$tag>" else match.value
     }
+    return PreparedGeminiTtsInput(text = converted, style = mergedStyle)
 }
 
 internal fun stripWavHeaderIfPresent(bytes: ByteArray): ByteArray {
@@ -248,62 +229,6 @@ internal fun buildInteractionsTtsRequestBody(
     put("stream", true)
 }
 
-internal fun buildLegacyGenerateContentTtsRequestBody(
-    model: String,
-    text: String,
-    voice: String,
-): JsonObject = buildJsonObject {
-    put(
-        "contents",
-        buildJsonArray {
-            add(
-                buildJsonObject {
-                    put(
-                        "parts",
-                        buildJsonArray {
-                            add(
-                                buildJsonObject {
-                                    put("text", text)
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        },
-    )
-    put(
-        "generationConfig",
-        buildJsonArrayOrObject = buildJsonObject {
-            put("responseModalities", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("AUDIO")) })
-            put(
-                "speechConfig",
-                buildJsonObject {
-                    put(
-                        "voiceConfig",
-                        buildJsonObject {
-                            put(
-                                "prebuiltVoiceConfig",
-                                buildJsonObject {
-                                    put("voiceName", voice)
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        },
-    )
-    put("model", model)
-}
-
-private fun kotlinx.serialization.json.JsonObjectBuilder.put(
-    key: String,
-    buildJsonArrayOrObject: JsonObject,
-) {
-    put(key, buildJsonArrayOrObject as kotlinx.serialization.json.JsonElement)
-}
-
 internal fun extractAudioBytesFromInteractionsEvent(rawJson: String): List<ByteArray> {
     val trimmed = rawJson.trim()
     if (trimmed.isBlank() || trimmed == "[DONE]") return emptyList()
@@ -356,32 +281,6 @@ class GeminiTTSProvider(
     private val httpClient: OkHttpClient = defaultTtsHttpClient,
 ) : TTSProvider<TTSProviderSetting.Gemini> {
 
-    @Serializable
-    private data class LegacyResponse(
-        val candidates: List<LegacyCandidate> = emptyList(),
-    )
-
-    @Serializable
-    private data class LegacyCandidate(
-        val content: LegacyContent? = null,
-    )
-
-    @Serializable
-    private data class LegacyContent(
-        val parts: List<LegacyPart> = emptyList(),
-    )
-
-    @Serializable
-    private data class LegacyPart(
-        val inlineData: LegacyInlineData? = null,
-    )
-
-    @Serializable
-    private data class LegacyInlineData(
-        val data: String = "",
-        val mimeType: String = "",
-    )
-
     override val promptGuidance: String = """
         The active text-to-speech engine (Gemini 3.8 TTS) supports acting style and non-speech vocal cues.
         When calling the text_to_speech tool, you MAY enrich the "text" argument using safe square-bracket tags (never put them in your visible reply):
@@ -411,16 +310,18 @@ class GeminiTTSProvider(
         val baseUrl = normalizeGeminiTtsBaseUrl(providerSetting.baseUrl)
         val models = buildGeminiTtsCandidateModels(providerSetting.model, providerSetting.autoFallbackModels)
 
+        var usedCooldownBypass = false
         val candidates = buildList {
-            for (m in models) {
-                for (k in keys) {
+            for (k in keys) {
+                for (m in models) {
                     if (GeminiTtsPoolTracker.isAvailable(k, m)) {
                         add(k to m)
                     }
                 }
             }
         }.ifEmpty {
-            // 全部在冷却期时仍给主模型 + 首把 Key 一次最后尝试机会
+            // 全部在冷却期时仍给首把 Key + 主模型一次最后尝试机会
+            usedCooldownBypass = true
             listOf(keys.first() to models.first())
         }
 
@@ -428,6 +329,9 @@ class GeminiTTSProvider(
         var emittedAudio = false
 
         for ((apiKey, modelId) in candidates) {
+            if (!usedCooldownBypass && !GeminiTtsPoolTracker.isAvailable(apiKey, modelId)) {
+                continue
+            }
             val resolvedVoice = resolveGeminiVoiceForAttempt(providerSetting, apiKey, modelId)
             try {
                 synthesizeSingleAttempt(
@@ -447,8 +351,9 @@ class GeminiTTSProvider(
             } catch (e: GeminiTtsHttpException) {
                 lastError = e
                 // 若遇到跨项目/无效 voice_... 错误且还没吐音频，立即用相似备选音色原地重试一次
+                val isCustomVoice = resolvedVoice.startsWith("voice_") || resolvedVoice.startsWith("voicekey_")
                 if (!emittedAudio &&
-                    resolvedVoice.startsWith("voice_") &&
+                    isCustomVoice &&
                     isVoiceNotFoundError(e.statusCode, e.errorBody)
                 ) {
                     val fallbackVoice = resolveGeminiVoiceForAttempt(
@@ -522,76 +427,57 @@ class GeminiTTSProvider(
             "bitDepth" to "16",
         )
 
-        if (isInteractionsTtsModel(modelId)) {
-            val bodyJson = buildInteractionsTtsRequestBody(modelId, prepared, voice).toString()
-            val httpRequest = Request.Builder()
-                .url("$baseUrl/interactions")
-                .addHeader("x-goog-api-key", apiKey)
-                .addHeader("Content-Type", "application/json")
-                .addHeader("Accept", "text/event-stream")
-                .post(bodyJson.toRequestBody(GEMINI_JSON_MEDIA_TYPE))
-                .build()
+        val bodyJson = buildInteractionsTtsRequestBody(modelId, prepared, voice).toString()
+        val httpRequest = Request.Builder()
+            .url("$baseUrl/interactions?alt=sse")
+            .addHeader("x-goog-api-key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", "text/event-stream")
+            .post(bodyJson.toRequestBody(GEMINI_JSON_MEDIA_TYPE))
+            .build()
 
-            httpClient.newCall(httpRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errText = response.body.string()
-                    throw GeminiTtsHttpException(response.code, response.message, errText)
-                }
-                val contentType = response.header("Content-Type").orEmpty().lowercase()
-                var hasAudio = false
+        httpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errText = response.body.string()
+                throw GeminiTtsHttpException(response.code, response.message, errText)
+            }
+            val contentType = response.header("Content-Type").orEmpty().lowercase()
+            var hasAudio = false
 
-                if ("text/event-stream" in contentType) {
-                    val dataBuilder = StringBuilder()
-                    response.body.charStream().buffered().use { reader ->
-                        while (true) {
-                            val line = reader.readLine() ?: break
-                            when {
-                                line.startsWith("data:") -> {
-                                    if (dataBuilder.isNotEmpty()) dataBuilder.append('\n')
-                                    dataBuilder.append(line.removePrefix("data:").trimStart())
-                                }
-                                line.isBlank() && dataBuilder.isNotEmpty() -> {
-                                    val payload = dataBuilder.toString()
-                                    dataBuilder.setLength(0)
-                                    val chunks = extractAudioBytesFromInteractionsEvent(payload)
-                                    for (pcm in chunks) {
-                                        if (pcm.isNotEmpty()) {
-                                            hasAudio = true
-                                            onChunk(
-                                                AudioChunk(
-                                                    data = pcm,
-                                                    format = AudioFormat.PCM,
-                                                    sampleRate = GEMINI_SAMPLE_RATE,
-                                                    isLast = false,
-                                                    metadata = metadata,
-                                                ),
-                                            )
-                                        }
+            if ("text/event-stream" in contentType) {
+                val dataBuilder = StringBuilder()
+                response.body.charStream().buffered().use { reader ->
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        when {
+                            line.startsWith("data:") -> {
+                                if (dataBuilder.isNotEmpty()) dataBuilder.append('\n')
+                                dataBuilder.append(line.removePrefix("data:").trimStart())
+                            }
+                            line.isBlank() && dataBuilder.isNotEmpty() -> {
+                                val payload = dataBuilder.toString()
+                                dataBuilder.setLength(0)
+                                val chunks = extractAudioBytesFromInteractionsEvent(payload)
+                                for (pcm in chunks) {
+                                    if (pcm.isNotEmpty()) {
+                                        hasAudio = true
+                                        onChunk(
+                                            AudioChunk(
+                                                data = pcm,
+                                                format = AudioFormat.PCM,
+                                                sampleRate = GEMINI_SAMPLE_RATE,
+                                                isLast = false,
+                                                metadata = metadata,
+                                            ),
+                                        )
                                     }
                                 }
                             }
                         }
                     }
-                    if (dataBuilder.isNotEmpty()) {
-                        val chunks = extractAudioBytesFromInteractionsEvent(dataBuilder.toString())
-                        for (pcm in chunks) {
-                            if (pcm.isNotEmpty()) {
-                                hasAudio = true
-                                onChunk(
-                                    AudioChunk(
-                                        data = pcm,
-                                        format = AudioFormat.PCM,
-                                        sampleRate = GEMINI_SAMPLE_RATE,
-                                        isLast = false,
-                                        metadata = metadata,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    val rawJson = response.body.string()
-                    val chunks = extractAudioBytesFromInteractionsEvent(rawJson)
+                }
+                if (dataBuilder.isNotEmpty()) {
+                    val chunks = extractAudioBytesFromInteractionsEvent(dataBuilder.toString())
                     for (pcm in chunks) {
                         if (pcm.isNotEmpty()) {
                             hasAudio = true
@@ -607,49 +493,27 @@ class GeminiTTSProvider(
                         }
                     }
                 }
-
-                if (!hasAudio) {
-                    throw IllegalStateException("Gemini Interactions TTS 未返回有效音频数据")
-                }
-                onChunk(
-                    AudioChunk(
-                        data = byteArrayOf(),
-                        format = AudioFormat.PCM,
-                        sampleRate = GEMINI_SAMPLE_RATE,
-                        isLast = true,
-                        metadata = metadata,
-                    ),
-                )
-            }
-        } else {
-            val bodyJson = buildLegacyGenerateContentTtsRequestBody(modelId, prepared.text, voice).toString()
-            val httpRequest = Request.Builder()
-                .url("$baseUrl/models/$modelId:generateContent")
-                .addHeader("x-goog-api-key", apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(bodyJson.toRequestBody(GEMINI_JSON_MEDIA_TYPE))
-                .build()
-
-            httpClient.newCall(httpRequest).execute().use { response ->
+            } else {
                 val rawJson = response.body.string()
-                if (!response.isSuccessful) {
-                    throw GeminiTtsHttpException(response.code, response.message, rawJson)
+                val chunks = extractAudioBytesFromInteractionsEvent(rawJson)
+                for (pcm in chunks) {
+                    if (pcm.isNotEmpty()) {
+                        hasAudio = true
+                        onChunk(
+                            AudioChunk(
+                                data = pcm,
+                                format = AudioFormat.PCM,
+                                sampleRate = GEMINI_SAMPLE_RATE,
+                                isLast = false,
+                                metadata = metadata,
+                            ),
+                        )
+                    }
                 }
-                val parsed = geminiTtsJson.decodeFromString<LegacyResponse>(rawJson)
-                val b64 = parsed.candidates.firstOrNull()?.content?.parts?.firstOrNull()?.inlineData?.data.orEmpty()
-                if (b64.isBlank()) {
-                    throw IllegalStateException("Gemini 2.5 TTS 未返回音频数据")
-                }
-                val audioBytes = stripWavHeaderIfPresent(Base64.getDecoder().decode(b64))
-                onChunk(
-                    AudioChunk(
-                        data = audioBytes,
-                        format = AudioFormat.PCM,
-                        sampleRate = GEMINI_SAMPLE_RATE,
-                        isLast = true,
-                        metadata = metadata,
-                    ),
-                )
+            }
+
+            if (!hasAudio) {
+                throw IllegalStateException("Gemini 3.8 Interactions TTS 未返回有效音频数据")
             }
         }
     }
