@@ -326,12 +326,10 @@ class MiMoTTSProvider(
                 throw e
             } catch (e: TTSProviderException) {
                 lastError = e
-                e.statusCode?.let { code ->
-                    MiMoTtsKeyTracker.recordFailure(apiKey, code)
-                }
-                if (emittedAudio) throw e
                 val code = e.statusCode
-                if (code != null && code !in setOf(401, 403, 404, 408, 429) && code < 500) {
+                MiMoTtsKeyTracker.recordFailure(apiKey, code)
+                if (emittedAudio) throw e
+                if (code !in setOf(401, 403, 404, 408, 429) && code < 500) {
                     throw e
                 }
             } catch (e: Exception) {
@@ -344,6 +342,7 @@ class MiMoTTSProvider(
             is TTSProviderException -> throw err
             else -> throw TTSProviderException(
                 message = err?.message ?: "MiMo TTS 全部 Key 均已失败",
+                statusCode = 500,
                 cause = err,
             )
         }

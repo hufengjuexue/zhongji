@@ -403,6 +403,7 @@ class GeminiTTSProvider(
             is TTSProviderException -> throw err
             else -> throw TTSProviderException(
                 message = err?.message ?: "Gemini TTS 全部 Key 与模型均已耗尽或失败",
+                statusCode = 500,
                 cause = err,
             )
         }
