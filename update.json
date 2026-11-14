@@ -1,12 +1,12 @@
 {
-  "version": "1.3.1",
-  "versionCode": 198,
-  "publishedAt": "2026-11-14T15:25:34Z",
-  "changelog": "Kairos v1.3.1：\n\n1. 【决策精排】新增 Google gemini-decision-1（Decisions API /v1beta/decisions 单前向批量打分）及轻量模型二阶段重排层，过滤误召回并支持用法统计\n2. 【模型归类】新增 ModelType.DECISION 模型类型与设置项，不污染常规对话下拉框\n3. 【时序图谱】继承 v1.3.0 时序记忆关系图谱（Room v34）、压缩检查点自动打捞及可视化关系图谱页签\n4. 【单测基建】打通 GitHub Actions 全模块 JVM 单元测试门禁与反射签名兼容修复",
+  "version": "1.3.2",
+  "versionCode": 199,
+  "publishedAt": "2026-11-15T00:50:00Z",
+  "changelog": "Kairos v1.3.2：\n\n1. 【号池扩展】Google 号池新增 Gemini 3.5 Flash Lite（500 RPD/Key），仪表盘改为 2×2 与四胶囊紧凑布局不截断\n2. 【声线工坊】升级 Gemini 3.8 / 3.1 / 2.5 四代 TTS 接入：支持多 Key 顺序号池、四代自动降级吃满 40 次/Key、前端可视化捏声线（Voice Design）与 30 官方音色库即时试听，以及相似备选音色跨 Key/降级接力\n3. 【语音单测】新增 :speech 模块 JVM 单元测试并接入 GitHub Actions 门禁",
   "downloads": [
     {
-      "name": "kairos-1.3.1-arm64-v8a.apk",
-      "url": "https://github.com/hufengjuexue/kairos/releases/download/v1.3.1/kairos-1.3.1-arm64-v8a.apk",
+      "name": "kairos-1.3.2-arm64-v8a.apk",
+      "url": "https://github.com/hufengjuexue/kairos/releases/download/v1.3.2/kairos-1.3.2-arm64-v8a.apk",
       "size": "约 15.3 MB"
     }
   ]

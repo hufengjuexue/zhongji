@@ -123,6 +123,10 @@ class GoogleKeyPoolTest {
 
     @Test
     fun `classifyGoogleModelBucket classifies RP and auxiliary models accurately`() {
+        assertEquals(GoogleQuotaBucket.GEMINI_3_5_LITE, classifyGoogleModelBucket("gemini-3.5-flash-lite"))
+        assertEquals(GoogleQuotaBucket.GEMINI_3_5_LITE, classifyGoogleModelBucket("models/gemini-3.5-flash-lite-preview"))
+        assertEquals(null, classifyGoogleModelBucket("gemini-3.5-transcribe"))
+        assertEquals(null, classifyGoogleModelBucket("gemini-3-flash"))
         assertEquals(GoogleQuotaBucket.GEMINI_3_6, classifyGoogleModelBucket("gemini-3.6-flash"))
         assertEquals(GoogleQuotaBucket.GEMINI_3_8, classifyGoogleModelBucket("models/gemini-3.8-flash-preview"))
         assertEquals(GoogleQuotaBucket.GEMINI_4_HYDROGEN, classifyGoogleModelBucket("gemini-4-hydrogen"))

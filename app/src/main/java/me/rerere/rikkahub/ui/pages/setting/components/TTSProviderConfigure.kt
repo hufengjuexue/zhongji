@@ -2,22 +2,39 @@ package me.rerere.rikkahub.ui.pages.setting.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
@@ -26,6 +43,9 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.CardGroupScope
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.providers.GEMINI_TTS_MODEL_LADDER
+import me.rerere.tts.provider.providers.GeminiTtsPoolTracker
+import me.rerere.tts.provider.providers.parseGeminiTtsKeys
 import me.rerere.ui.components.OutlinedNumberInput
 import me.rerere.ui.components.SelectTextField
 
@@ -430,22 +450,234 @@ private fun CardGroupScope.miniMaxTTSItems(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 private fun CardGroupScope.geminiTTSItems(
     setting: TTSProviderSetting.Gemini,
     onValueChange: (TTSProviderSetting) -> Unit
 ) {
-    // API Key
+    var showVoiceStudio by remember(setting.id) { mutableStateOf(false) }
+    var poolRefreshTick by remember { mutableIntStateOf(0) }
+    val keys = remember(setting.apiKey) { parseGeminiTtsKeys(setting.apiKey) }
+    val poolSummary = remember(setting.apiKey, poolRefreshTick) {
+        GeminiTtsPoolTracker.summarizePool(setting.apiKey)
+    }
+
+    if (showVoiceStudio) {
+        GeminiVoiceStudioDialog(
+            setting = setting,
+            onDismiss = { showVoiceStudio = false },
+            onUpdateSetting = { updated -> onValueChange(updated) },
+        )
+    }
+
+    // API Key 号池
     formItem(
-        headlineContent = { Text(stringResource(R.string.setting_tts_page_api_key)) },
-        supportingContent = { Text(stringResource(R.string.setting_tts_page_api_key_description)) }
+        headlineContent = { Text("API Key 号池") },
+        supportingContent = {
+            Text(
+                if (keys.isEmpty()) {
+                    "支持填写多把 Google API Key（换行或逗号分隔），每把 Key 4 档模型合计约 40 次/天"
+                } else {
+                    "已识别 ${keys.size} 把 Key（顺序吃空防风控，合计最高 ${keys.size * 40} 次/天）"
+                }
+            )
+        }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = setting.apiKey,
+                onValueChange = { newApiKey ->
+                    onValueChange(setting.copy(apiKey = newApiKey))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                maxLines = 5,
+                placeholder = { Text("AIzaSy...（可粘贴多把，每行一把）") },
+            )
+
+            if (keys.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "今日号池配额估算（太平洋零点清零）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(
+                                onClick = {
+                                    GeminiTtsPoolTracker.resetCooldowns()
+                                    poolRefreshTick++
+                                }
+                            ) {
+                                Text("清空冷却")
+                            }
+                        }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            val labels = mapOf(
+                                "gemini-3.8-flash-tts" to "3.8 Flash",
+                                "gemini-3.8-flash-lite-tts" to "3.8 Lite",
+                                "gemini-3.1-flash-tts-preview" to "3.1 TTS",
+                                "gemini-2.5-flash-preview-tts" to "2.5 TTS",
+                            )
+                            GEMINI_TTS_MODEL_LADDER.forEach { modelId ->
+                                val (used, cap) = poolSummary[modelId] ?: (0 to keys.size * 10)
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                ) {
+                                    Text(
+                                        text = "${labels[modelId] ?: modelId}: $used/$cap",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Model + 4 档快选胶囊
+    formItem(
+        headlineContent = { Text("首选语音模型") },
+        supportingContent = { Text("推荐首选 gemini-3.8-flash-tts（支持捏声线、style 指令与音色表演标签）") }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                value = setting.model,
+                onValueChange = { newModel ->
+                    onValueChange(setting.copy(model = newModel))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("gemini-3.8-flash-tts") }
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                listOf(
+                    "gemini-3.8-flash-tts" to "3.8 Flash",
+                    "gemini-3.8-flash-lite-tts" to "3.8 Lite",
+                    "gemini-3.1-flash-tts-preview" to "3.1 Preview",
+                    "gemini-2.5-flash-preview-tts" to "2.5 Flash",
+                ).forEach { (id, label) ->
+                    FilterChip(
+                        selected = setting.model.trim().equals(id, ignoreCase = true),
+                        onClick = { onValueChange(setting.copy(model = id)) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        }
+    }
+
+    // 自动降级接力开关
+    formItem(
+        headlineContent = { Text("四代模型自动接力降级") },
+        supportingContent = { Text("当前 Key 的首选模型 429/满额时，先切号池同级 Key，再沿 3.8 Flash → 3.8 Lite → 3.1 → 2.5 接力") }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (setting.autoFallbackModels) "已开启（单 Key 最高吃满 40 次/天）" else "已关闭（仅使用所选模型）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Switch(
+                checked = setting.autoFallbackModels,
+                onCheckedChange = { enabled ->
+                    onValueChange(setting.copy(autoFallbackModels = enabled))
+                }
+            )
+        }
+    }
+
+    // 主音色 + 声线工坊弹窗入口
+    formItem(
+        headlineContent = { Text("主音色 (Voice Name)") },
+        supportingContent = {
+            val isCustom = setting.voiceName.trim().startsWith("voice_") || setting.voiceName.trim().startsWith("voicekey_")
+            Text(
+                if (isCustom) {
+                    val owner = setting.voiceOwnerKeyHint.ifBlank { "创建时的项目 Key" }
+                    "当前使用 3.8 定制声线（归属 $owner），切 Key 或降级 3.1/2.5 时将自动切换至下方相似备选"
+                } else {
+                    "可填写官方预置名（如 Kore / Aoede / Leda）或打开声线工坊捏专属声线并试听"
+                }
+            )
+        }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = setting.voiceName,
+                onValueChange = { newVoiceName ->
+                    onValueChange(setting.copy(voiceName = newVoiceName))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("Kore 或 voice_xxx") }
+            )
+            Button(
+                onClick = { showVoiceStudio = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("打开声线工坊（捏声线 · 试听官方音色库）")
+            }
+        }
+    }
+
+    // 相似备选音色
+    formItem(
+        headlineContent = { Text("相似备选官方音色") },
+        supportingContent = { Text("当换到其他项目的 Key 或降级到 3.1 / 2.5 时自动接力使用，保证声音风格连贯（也可在声线工坊一键设定）") }
     ) {
         OutlinedTextField(
-            value = setting.apiKey,
-            onValueChange = { newApiKey ->
-                onValueChange(setting.copy(apiKey = newApiKey))
+            value = setting.fallbackVoiceName,
+            onValueChange = { newFallback ->
+                onValueChange(setting.copy(fallbackVoiceName = newFallback))
             },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(stringResource(R.string.setting_tts_page_api_key_placeholder_gemini)) },
+            singleLine = true,
+            placeholder = { Text("Kore") }
+        )
+    }
+
+    // 语气 / 风格 Prompt（3.8 专用）
+    formItem(
+        headlineContent = { Text("默认语气 / 表演风格 (3.8)") },
+        supportingContent = { Text("仅 Gemini 3.8 生效。正文还支持 [sigh] [laugh] [whisper] 等标签，客户端会自动保留并转为 3.8/3.1 表演指令") }
+    ) {
+        OutlinedTextField(
+            value = setting.stylePrompt,
+            onValueChange = { newStyle ->
+                onValueChange(setting.copy(stylePrompt = newStyle))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 1,
+            maxLines = 3,
+            placeholder = { Text("例如: Speak warmly and gently with a subtle smile") }
         )
     }
 
@@ -460,37 +692,8 @@ private fun CardGroupScope.geminiTTSItems(
                 onValueChange(setting.copy(baseUrl = newBaseUrl))
             },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(stringResource(R.string.setting_tts_page_base_url_placeholder)) }
-        )
-    }
-
-    // Model
-    formItem(
-        headlineContent = { Text(stringResource(R.string.setting_tts_page_model)) },
-        supportingContent = { Text(stringResource(R.string.setting_tts_page_model_description)) }
-    ) {
-        OutlinedTextField(
-            value = setting.model,
-            onValueChange = { newModel ->
-                onValueChange(setting.copy(model = newModel))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(stringResource(R.string.setting_tts_page_model_placeholder_gemini)) }
-        )
-    }
-
-    // Voice Name
-    formItem(
-        headlineContent = { Text(stringResource(R.string.setting_tts_page_voice_name)) },
-        supportingContent = { Text(stringResource(R.string.setting_tts_page_voice_name_description)) }
-    ) {
-        OutlinedTextField(
-            value = setting.voiceName,
-            onValueChange = { newVoiceName ->
-                onValueChange(setting.copy(voiceName = newVoiceName))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(stringResource(R.string.setting_tts_page_voice_name_placeholder)) }
+            singleLine = true,
+            placeholder = { Text("https://generativelanguage.googleapis.com/v1beta") }
         )
     }
 }
