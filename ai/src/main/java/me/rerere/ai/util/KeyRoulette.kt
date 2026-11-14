@@ -30,6 +30,7 @@ enum class GoogleQuotaBucket(
     val displayName: String,
     val perKeyDailyLimit: Int,
 ) {
+    GEMINI_3_5_LITE("3.5L", "3.5 Lite", 500),
     GEMINI_3_6("3.6", "3.6 Flash", 20),
     GEMINI_3_8("3.8", "3.8 Flash", 20),
     GEMINI_4_HYDROGEN("H4", "Hydrogen", 20),
@@ -38,7 +39,7 @@ enum class GoogleQuotaBucket(
     ;
 
     companion object {
-        val CHAT_RP_BUCKETS = listOf(GEMINI_3_6, GEMINI_3_8, GEMINI_4_HYDROGEN)
+        val CHAT_RP_BUCKETS = listOf(GEMINI_3_6, GEMINI_3_8, GEMINI_4_HYDROGEN, GEMINI_3_5_LITE)
     }
 }
 
@@ -95,6 +96,7 @@ fun classifyGoogleModelBucket(modelId: String): GoogleQuotaBucket? {
         "hydrogen" in m -> GoogleQuotaBucket.GEMINI_4_HYDROGEN
         "3.8" in m || "3-8" in m -> GoogleQuotaBucket.GEMINI_3_8
         "3.6" in m || "3-6" in m -> GoogleQuotaBucket.GEMINI_3_6
+        ("3.5" in m || "3-5" in m) && "lite" in m -> GoogleQuotaBucket.GEMINI_3_5_LITE
         else -> null
     }
 }

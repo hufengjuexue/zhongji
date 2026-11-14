@@ -42,8 +42,12 @@ sealed class TTSProviderSetting {
         override var name: String = "Gemini TTS",
         val apiKey: String = "",
         val baseUrl: String = "https://generativelanguage.googleapis.com/v1beta",
-        val model: String = "gemini-2.5-flash-preview-tts",
-        val voiceName: String = "Kore"
+        val model: String = "gemini-3.8-flash-tts",
+        val voiceName: String = "Kore",
+        val fallbackVoiceName: String = "Kore",
+        val voiceOwnerKeyHint: String = "",
+        val stylePrompt: String = "",
+        val autoFallbackModels: Boolean = true,
     ) : TTSProviderSetting() {
         override fun copyProvider(
             id: Uuid,

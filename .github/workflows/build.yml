@@ -63,7 +63,7 @@ jobs:
       - name: Run Unit Tests
         run: |
           chmod +x gradlew
-          ./gradlew :ai:testDebugUnitTest :search:testDebugUnitTest :ui:testDebugUnitTest :workspace:testDebugUnitTest :app:testGithubDebugUnitTest --no-build-cache --stacktrace 2>&1 | tee test.log
+          ./gradlew :ai:testDebugUnitTest :speech:testDebugUnitTest :search:testDebugUnitTest :ui:testDebugUnitTest :workspace:testDebugUnitTest :app:testGithubDebugUnitTest --no-build-cache --stacktrace 2>&1 | tee test.log
           exit ${PIPESTATUS[0]}
       - name: Build
         run: |

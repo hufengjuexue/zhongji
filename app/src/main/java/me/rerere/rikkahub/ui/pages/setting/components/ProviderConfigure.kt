@@ -878,81 +878,86 @@ private fun GoogleDailyUsageDashboard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         if (keyCount > 0) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                GoogleQuotaBucket.CHAT_RP_BUCKETS.forEach { bucket ->
-                    val usedSum = pool.sumOf { it.bucketUsage[bucket]?.used ?: 0 }
-                    val exhaustedKeys = pool.count {
-                        it.bucketUsage[bucket]?.reason == KeyCooldownReason.RPD_EXHAUSTED
-                    }
-                    val totalCap = keyCount * bucket.perKeyDailyLimit
-                    val progress = if (totalCap > 0) (usedSum.toFloat() / totalCap).coerceIn(0f, 1f) else 0f
-                    val allExhausted = exhaustedKeys >= keyCount
+            GoogleQuotaBucket.CHAT_RP_BUCKETS.chunked(2).forEach { rowBuckets ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    rowBuckets.forEach { bucket ->
+                        val usedSum = pool.sumOf { it.bucketUsage[bucket]?.used ?: 0 }
+                        val exhaustedKeys = pool.count {
+                            it.bucketUsage[bucket]?.reason == KeyCooldownReason.RPD_EXHAUSTED
+                        }
+                        val totalCap = keyCount * bucket.perKeyDailyLimit
+                        val progress = if (totalCap > 0) (usedSum.toFloat() / totalCap).coerceIn(0f, 1f) else 0f
+                        val allExhausted = exhaustedKeys >= keyCount
 
-                    Surface(
-                        color = if (allExhausted) {
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        Surface(
+                            color = if (allExhausted) {
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f),
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             ) {
-                                Text(
-                                    text = bucket.displayName,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if (exhaustedKeys > 0) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
                                     Text(
-                                        text = "${exhaustedKeys}满",
+                                        text = bucket.displayName,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (exhaustedKeys > 0) {
+                                        Text(
+                                            text = "${exhaustedKeys}满",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "$usedSum / $totalCap",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontFamily = JetbrainsMono),
+                                    color = if (allExhausted) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    maxLines = 1,
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(3.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(if (allExhausted) 1f else progress)
+                                            .height(3.dp)
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(
+                                                if (allExhausted) MaterialTheme.colorScheme.error
+                                                else MaterialTheme.colorScheme.primary
+                                            ),
                                     )
                                 }
                             }
-                            Text(
-                                text = "$usedSum / $totalCap",
-                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = JetbrainsMono),
-                                color = if (allExhausted) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                                maxLines = 1,
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(3.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(if (allExhausted) 1f else progress)
-                                        .height(3.dp)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(
-                                            if (allExhausted) MaterialTheme.colorScheme.error
-                                            else MaterialTheme.colorScheme.primary
-                                        ),
-                                )
-                            }
                         }
+                    }
+                    if (rowBuckets.size < 2) {
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
             }
@@ -1110,97 +1115,111 @@ private fun GoogleKeyPoolEditor(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Row(
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 6.dp),
                         ) {
-                            Text(
-                                text = "#${index + 1}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(26.dp),
-                            )
-                            Text(
-                                text = maskApiKey(snap.key),
-                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = "#${index + 1}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(26.dp),
+                                )
+                                Text(
+                                    text = maskApiKey(snap.key),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
 
-                            if (snap.globalReason != KeyCooldownReason.READY) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.errorContainer,
-                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                                    shape = RoundedCornerShape(999.dp),
-                                ) {
-                                    Text(
-                                        text = when (snap.globalReason) {
-                                            KeyCooldownReason.AUTH_ERROR -> "鉴权失败"
-                                            KeyCooldownReason.SERVER_ERROR -> "异常"
-                                            else -> "冷却"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    )
-                                }
-                            } else {
-                                GoogleQuotaBucket.CHAT_RP_BUCKETS.forEach { bucket ->
-                                    val bu = snap.bucketUsage[bucket]
-                                    val used = bu?.used ?: 0
-                                    val reason = bu?.reason ?: KeyCooldownReason.READY
-                                    val (bg, fg, pillText) = when {
-                                        reason == KeyCooldownReason.RPD_EXHAUSTED -> Triple(
-                                            MaterialTheme.colorScheme.errorContainer,
-                                            MaterialTheme.colorScheme.onErrorContainer,
-                                            if (used > 0) "${bucket.shortLabel} $used 满" else "${bucket.shortLabel} 满",
-                                        )
-                                        reason == KeyCooldownReason.RPM_LIMIT -> Triple(
-                                            MaterialTheme.colorScheme.tertiaryContainer,
-                                            MaterialTheme.colorScheme.onTertiaryContainer,
-                                            "${bucket.shortLabel} 限",
-                                        )
-                                        used > 0 -> Triple(
-                                            MaterialTheme.colorScheme.primaryContainer,
-                                            MaterialTheme.colorScheme.onPrimaryContainer,
-                                            "${bucket.shortLabel} $used",
-                                        )
-                                        else -> Triple(
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                                            MaterialTheme.colorScheme.onSurfaceVariant,
-                                            "${bucket.shortLabel} 0",
-                                        )
-                                    }
+                                if (snap.globalReason != KeyCooldownReason.READY) {
                                     Surface(
-                                        color = bg,
-                                        contentColor = fg,
-                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.errorContainer,
+                                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                        shape = RoundedCornerShape(999.dp),
                                     ) {
                                         Text(
-                                            text = pillText,
-                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetbrainsMono),
-                                            maxLines = 1,
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                            text = when (snap.globalReason) {
+                                                KeyCooldownReason.AUTH_ERROR -> "鉴权失败"
+                                                KeyCooldownReason.SERVER_ERROR -> "异常"
+                                                else -> "冷却"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                         )
                                     }
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        val updated = parseApiKeys(apiKey).filterNot { it == snap.key }
+                                        onApiKeyChange(updated.joinToString("\n"))
+                                    },
+                                    modifier = Modifier.size(30.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = HugeIcons.Cancel01,
+                                        contentDescription = stringResource(R.string.delete),
+                                        modifier = Modifier.size(15.dp),
+                                    )
                                 }
                             }
 
-                            IconButton(
-                                onClick = {
-                                    val updated = parseApiKeys(apiKey).filterNot { it == snap.key }
-                                    onApiKeyChange(updated.joinToString("\n"))
-                                },
-                                modifier = Modifier.size(30.dp),
-                            ) {
-                                Icon(
-                                    imageVector = HugeIcons.Cancel01,
-                                    contentDescription = stringResource(R.string.delete),
-                                    modifier = Modifier.size(15.dp),
-                                )
+                            if (snap.globalReason == KeyCooldownReason.READY) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 30.dp, end = 6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    GoogleQuotaBucket.CHAT_RP_BUCKETS.forEach { bucket ->
+                                        val bu = snap.bucketUsage[bucket]
+                                        val used = bu?.used ?: 0
+                                        val reason = bu?.reason ?: KeyCooldownReason.READY
+                                        val (bg, fg, pillText) = when {
+                                            reason == KeyCooldownReason.RPD_EXHAUSTED -> Triple(
+                                                MaterialTheme.colorScheme.errorContainer,
+                                                MaterialTheme.colorScheme.onErrorContainer,
+                                                if (used > 0) "${bucket.shortLabel} $used 满" else "${bucket.shortLabel} 满",
+                                            )
+                                            reason == KeyCooldownReason.RPM_LIMIT -> Triple(
+                                                MaterialTheme.colorScheme.tertiaryContainer,
+                                                MaterialTheme.colorScheme.onTertiaryContainer,
+                                                "${bucket.shortLabel} 限",
+                                            )
+                                            used > 0 -> Triple(
+                                                MaterialTheme.colorScheme.primaryContainer,
+                                                MaterialTheme.colorScheme.onPrimaryContainer,
+                                                "${bucket.shortLabel} $used",
+                                            )
+                                            else -> Triple(
+                                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                                "${bucket.shortLabel} 0",
+                                            )
+                                        }
+                                        Surface(
+                                            color = bg,
+                                            contentColor = fg,
+                                            shape = RoundedCornerShape(6.dp),
+                                        ) {
+                                            Text(
+                                                text = pillText,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetbrainsMono),
+                                                maxLines = 1,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
