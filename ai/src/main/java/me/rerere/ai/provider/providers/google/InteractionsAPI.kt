@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
@@ -138,7 +139,7 @@ internal class InteractionsAPI(
         val maxAttempts = parseApiKeys(providerSetting.apiKey).size.coerceIn(1, 32)
         val attemptIndex = AtomicInteger(0)
         val hasEmittedEvent = AtomicBoolean(false)
-        @Volatile var activeEventSource: EventSource? = null
+        val activeEventSource = AtomicReference<EventSource?>(null)
         val scope = this
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
@@ -234,14 +235,14 @@ internal class InteractionsAPI(
                     }
                 }
 
-                activeEventSource = client.newEventSource(request, listener)
+                activeEventSource.getAndSet(client.newEventSource(request, listener))?.cancel()
             }
         }
 
         launchAttempt()
 
         awaitClose {
-            activeEventSource?.cancel()
+            activeEventSource.get()?.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
