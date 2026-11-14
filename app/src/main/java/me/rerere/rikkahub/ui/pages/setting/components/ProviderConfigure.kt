@@ -1320,6 +1320,12 @@ private fun openExternalUrl(
         .onFailure { onError("无法打开浏览器: ${it.message}") }
 }
 
+private enum class GoogleRpGuideTier(val tabLabel: String, val headline: String) {
+    BASIC("基础篇", "先用 1 把 Key 聊起来"),
+    ADVANCED("进阶篇", "3 个模型接力翻 3 倍"),
+    ULTIMATE("终极篇", "AIS 号池 × App + NotebookLM 绿色 RP"),
+}
+
 @Composable
 private fun GoogleRpQuickStartBanner(
     onOpenGuide: () -> Unit,
@@ -1338,18 +1344,15 @@ private fun GoogleRpQuickStartBanner(
             modifier = Modifier.padding(12.dp),
         ) {
             Text(
-                text = "吃透免费机制，Google 原生生态就是 RP 的终极答案",
+                text = "Google 原生生态就是 RP 的终极答案",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "1 个项目 = 3.6(20) + 3.8(20) + Hydrogen(20) = 60 次对话/日\n+ Embedding 2 (1K/日) & Decision 1 (10K/日)",
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
-            )
-            Text(
-                text = "× 别在同项目建多个 Key（额度共享无效）\n√ 点「创建新项目」，每项目只拿 1 把 Key",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.9f),
+                text = "• 基础：AI Studio 拿第 1 把 Key 粘贴保存即开聊\n" +
+                    "• 进阶：同把 Key 分吃 3.6 / 3.8 / Hydrogen = 60 次/日\n" +
+                    "• 终极：多项目建号池 + 官方 App × NotebookLM 绿色闭环",
+                style = MaterialTheme.typography.bodySmall,
             )
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1362,10 +1365,10 @@ private fun GoogleRpQuickStartBanner(
                         }
                     },
                 ) {
-                    Text("去 AI Studio 建项目", maxLines = 1)
+                    Text("去 AI Studio 拿 Key", maxLines = 1)
                 }
                 TextButton(onClick = onOpenGuide) {
-                    Text("完整攻略 & Source 闭环", maxLines = 1)
+                    Text("分步教程", maxLines = 1)
                 }
             }
         }
@@ -1378,10 +1381,11 @@ private fun GoogleRpGuideDialog(
 ) {
     val uriHandler = LocalUriHandler.current
     val toaster = LocalToaster.current
+    var selectedTier by remember { mutableStateOf(GoogleRpGuideTier.BASIC) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Google RP 号池 × Source 工程指南") },
+        title = { Text("Google 原生 RP 三阶指南") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1396,64 +1400,129 @@ private fun GoogleRpGuideDialog(
                     fontWeight = FontWeight.Medium,
                 )
 
-                GoogleGuideSectionCard(
-                    title = "1. 一眼算清免费账本（关键看 Project）",
-                    body = "• 配额按 Project 独立计算，同一项目下建多个 Key 额度共享无效。\n" +
-                        "• 每个独立项目每天白嫖：Gemini 3.6 Flash (20) + 3.8 Flash (20) + Hydrogen (20) = 60 次主力 RP，另加 Embedding 2 (1K/日) 与 Decision 1 (10K/日)。\n" +
-                        "• 叠满 5~20 把项目 Key 即可日均 300~1,200 次直连，北京时间每日约 16:00（PT 零点）自动刷新。",
-                )
-
-                GoogleGuideSectionCard(
-                    title = "2. 三步安全建池（防风控铁律）",
-                    body = "• ① 在 AI Studio 点「创建新项目」，每项目只生成 1 把 Key（建议用 rp-01、notes-02 等普通命名，别一口气暴建）。\n" +
-                        "• ② 点主界面「批量导入」一次性粘贴全部 Key，系统自动去重。\n" +
-                        "• ③ 策略保持默认「顺序吃空」：第 1 把 Key 的某个模型用尽 20 次才切下一把，避免多项目横跳；同把 Key 的 Hydrogen 用尽不会误伤 3.8 与 3.6。",
-                )
-
-                GoogleGuideSectionCard(
-                    title = "3. Kairos 模型与记忆抄作业",
-                    body = "• 主力对话：Hydrogen / Gemini 3.8 Flash / Gemini 3.6 Flash 轮换（顶部 3 栏实时显示总余量）。\n" +
-                        "• 记忆检索与决策：选择 gemini-embedding-2 与 gemini-decision-1。\n" +
-                        "• 「Embedding / Decision 专用 Key」留空即可：默认固定只复用主池 #1，绝不唤醒其余项目。",
-                )
-
-                GoogleGuideSectionCard(
-                    title = "4. 全谷歌闭环：Kairos + NotebookLM Source 工程",
-                    body = "• 体验公式：综合体验 = 逻辑底座 × 语言颗粒度，别把上万字设定集硬塞进开局系统词。\n" +
-                        "• NotebookLM 做静态 Source：把原作、人物小传与世界观丢进 NotebookLM 拆解关系、生成精细章节大纲与场景锚点，Kairos 开聊前只做 1~2 句精准定调。\n" +
-                        "• Kairos 负责动态记忆：日常对话由 Embedding 2 + Decision 1 自动提炼进本地时序图谱并在尾部近因注入，死保 Prefix Cache 前缀缓存命中。",
-                )
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ConnectedChoiceButtons(
+                    options = GoogleRpGuideTier.entries,
+                    selected = selectedTier,
+                    onSelect = { selectedTier = it },
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            openExternalUrl(uriHandler, AI_STUDIO_API_KEY_URL) { msg ->
-                                toaster.show(msg, type = ToastType.Error)
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("AI Studio", maxLines = 1)
+                    minHeight = 38.dp,
+                ) { tier, selected ->
+                    ConnectedChoiceLabel(
+                        text = tier.tabLabel,
+                        selected = selected,
+                    )
+                }
+
+                when (selectedTier) {
+                    GoogleRpGuideTier.BASIC -> {
+                        GoogleGuideSectionCard(
+                            title = "第一步：1 分钟配通你的第一把 LLM Key",
+                            body = "• ① 点击下方「AI Studio」登录任意 Google 账号。\n" +
+                                "• ② 点右上角或页面里的「Create API key」创建并复制 Key（以 AIza... 开头）。\n" +
+                                "• ③ 回到本页粘进「主力 Key 号池」（或点「批量导入」粘贴），再点本页右下角「保存」。\n" +
+                                "• ④ 去模型页面随便选一个 Gemini 对话模型（如 Gemini 3.8 Flash），现在就能直接聊天了！",
+                        )
+                        GoogleGuideSectionCard(
+                            title = "第二步：顺手白嫖官方记忆（不用另配）",
+                            body = "• 刚刚这 1 把 Key 天生自带 Gemini Embedding 2 (1,000 次/日) 和 Gemini Decision 1 (10,000 次/日)。\n" +
+                                "• 在记忆设置里分别选对应模型即可；「Embedding / Decision 专用 Key」先留空，默认直接复用这把 Key。",
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                openExternalUrl(uriHandler, AI_STUDIO_API_KEY_URL) { msg ->
+                                    toaster.show(msg, type = ToastType.Error)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("打开 AI Studio 拿第 1 把 Key", maxLines = 1)
+                        }
                     }
-                    OutlinedButton(
-                        onClick = {
-                            openExternalUrl(uriHandler, NOTEBOOK_LM_URL) { msg ->
-                                toaster.show(msg, type = ToastType.Error)
+
+                    GoogleRpGuideTier.ADVANCED -> {
+                        GoogleGuideSectionCard(
+                            title = "为什么 1 把 Key 能白嫖 60 次高质量 RP / 天？",
+                            body = "• Google AI Studio 的免费每日次数（RPD）不是所有模型共抢 20 次，而是按「每个项目 × 每个模型」独立计算 20 次：\n" +
+                                "• 同一把 Key 同时享有 3 个主力 RP 模型：\n" +
+                                "  - Gemini 4 Hydrogen：20 次/日（文笔与演出主力）\n" +
+                                "  - Gemini 3.8 Flash：20 次/日（高速接力主力）\n" +
+                                "  - Gemini 3.6 Flash：20 次/日（稳健长线兜底）",
+                        )
+                        GoogleGuideSectionCard(
+                            title = "日常不断档切模型技巧",
+                            body = "• 当聊到 Hydrogen 提示今天 20 次用完时，不要删号、也不用等明天：在聊天页面顶部直接切换到 Gemini 3.8 Flash 或 3.6 Flash 继续演！\n" +
+                                "• 本页顶部 3 栏仪表盘会实时显示每个模型还剩多少次；每天北京时间约 16:00（太平洋时间 00:00）自动满血重置。",
+                        )
+                    }
+
+                    GoogleRpGuideTier.ULTIMATE -> {
+                        GoogleGuideSectionCard(
+                            title = "一、AIS 自建多项目免费号池（300~1,200 次/日）",
+                            body = "• × 最大误区：在同一个 Project 下建 10 把 Key 额度共享无效！\n" +
+                                "• √ 正确做法：在 AI Studio 点「创建新项目」，每 1 个独立项目只拿 1 把 Key（项目名用 rp-01、notes-02 等中性名称，别短时间一口气暴建）。\n" +
+                                "• 点本页「批量导入」一次贴进所有 Key，策略保持默认「顺序吃空」：同一把 Key 耗尽才切下一把，不跨项目横跳防风控；且 Hydrogen 用完不会误伤它上面的 3.8 与 3.6。\n" +
+                                "• 「Embedding / Decision 专用 Key」建议留空（锁定只复用 #1）或单独绑 1 把专用 Key，绝不唤醒其余项目。",
+                        )
+                        GoogleGuideSectionCard(
+                            title = "二、官方 App + NotebookLM Source 绿色 RP 闭环",
+                            body = "• 核心公式：综合体验 = 逻辑底座 × 语言颗粒度。彻底告别万字破限八股文与随时炸号的三方反代。\n" +
+                                "• NotebookLM 做静态 Source 底座：把原作小说、人物设定书、世界观文档丢进 NotebookLM，精读拆解人物关系、输出精细章节大纲与场景锚点；Kairos 开聊前只需 1~2 句干净定调。\n" +
+                                "• Kairos 负责动态记忆图谱：长线剧情由直连的 Embedding 2 + Decision 1 自动提炼进本地时序图谱，并通过尾部近因向量注入保住 Prompt Caching 前缀缓存，实现 100% 谷歌原生绿色 RP。",
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    openExternalUrl(uriHandler, AI_STUDIO_API_KEY_URL) { msg ->
+                                        toaster.show(msg, type = ToastType.Error)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("AI Studio", maxLines = 1)
                             }
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("NotebookLM", maxLines = 1)
+                            OutlinedButton(
+                                onClick = {
+                                    openExternalUrl(uriHandler, NOTEBOOK_LM_URL) { msg ->
+                                        toaster.show(msg, type = ToastType.Error)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("NotebookLM", maxLines = 1)
+                            }
+                        }
                     }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) {
-                Text("我看懂了")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (selectedTier) {
+                    GoogleRpGuideTier.BASIC -> {
+                        TextButton(onClick = onDismiss) {
+                            Text("先配 Key")
+                        }
+                        Button(onClick = { selectedTier = GoogleRpGuideTier.ADVANCED }) {
+                            Text("下一阶：3 模型")
+                        }
+                    }
+                    GoogleRpGuideTier.ADVANCED -> {
+                        TextButton(onClick = onDismiss) {
+                            Text("懂了")
+                        }
+                        Button(onClick = { selectedTier = GoogleRpGuideTier.ULTIMATE }) {
+                            Text("下一阶：终极")
+                        }
+                    }
+                    GoogleRpGuideTier.ULTIMATE -> {
+                        Button(onClick = onDismiss) {
+                            Text("全部掌握，开冲！")
+                        }
+                    }
+                }
             }
         },
     )
