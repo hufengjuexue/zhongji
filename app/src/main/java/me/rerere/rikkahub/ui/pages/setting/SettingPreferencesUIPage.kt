@@ -5,14 +5,20 @@ import android.graphics.Typeface
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,6 +30,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +40,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -223,14 +232,60 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                             headlineContent = { Text(stringResource(R.string.setting_display_page_quote_color)) },
                             supportingContent = { Text(stringResource(R.string.setting_display_page_rp_colors_desc)) },
                         ) {
-                            OutlinedTextField(
-                                value = displaySetting.quoteColorHex,
-                                onValueChange = { updateDisplaySetting(displaySetting.copy(quoteColorHex = it.take(9))) },
-                                label = { Text(stringResource(R.string.setting_display_page_quote_color)) },
-                                placeholder = { Text("#E18A24") },
-                                singleLine = true,
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                                 modifier = Modifier.fillMaxWidth(),
-                            )
+                            ) {
+                                OutlinedTextField(
+                                    value = displaySetting.quoteColorHex,
+                                    onValueChange = { updateDisplaySetting(displaySetting.copy(quoteColorHex = it.take(9))) },
+                                    label = { Text(stringResource(R.string.setting_display_page_quote_color)) },
+                                    placeholder = { Text("#E18A24") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                val presets = remember {
+                                    listOf(
+                                        "#E18A24" to Color(0xFFE18A24),
+                                        "#D97757" to Color(0xFFD97757),
+                                        "#4F8A8B" to Color(0xFF4F8A8B),
+                                        "#9B6B9E" to Color(0xFF9B6B9E),
+                                    )
+                                }
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    presets.forEach { (hex, color) ->
+                                        val selected = displaySetting.quoteColorHex.equals(hex, ignoreCase = true)
+                                        Box(
+                                            modifier = Modifier
+                                                .size(26.dp)
+                                                .clip(CircleShape)
+                                                .background(color)
+                                                .border(
+                                                    width = if (selected) 2.dp else 1.dp,
+                                                    color = if (selected) {
+                                                        MaterialTheme.colorScheme.primary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.outlineVariant
+                                                    },
+                                                    shape = CircleShape,
+                                                )
+                                                .clickable {
+                                                    updateDisplaySetting(displaySetting.copy(quoteColorHex = hex))
+                                                },
+                                        )
+                                    }
+                                    if (displaySetting.quoteColorHex.isNotBlank()) {
+                                        TextButton(
+                                            onClick = { updateDisplaySetting(displaySetting.copy(quoteColorHex = "")) },
+                                        ) {
+                                            Text("恢复默认")
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     switchItem(

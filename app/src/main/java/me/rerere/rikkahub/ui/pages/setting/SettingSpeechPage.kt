@@ -66,6 +66,8 @@ import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.CardGroupValue
+import me.rerere.rikkahub.ui.components.ui.ConnectedChoiceButtons
+import me.rerere.rikkahub.ui.components.ui.ConnectedChoiceLabel
 import me.rerere.rikkahub.ui.components.ui.ItemAction
 import me.rerere.rikkahub.ui.components.ui.ItemActionMenu
 import me.rerere.rikkahub.ui.components.ui.PagerTab
@@ -86,6 +88,12 @@ import me.rerere.ui.components.RikkaConfirmDialog
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+
+private enum class TtsReadScope(val label: String) {
+    ALL("全部内容"),
+    QUOTED_ONLY("仅引号对话"),
+    OUTSIDE_BRACKETS("跳过括号动作"),
+}
 
 private enum class SpeechTab(
     override val icon: ImageVector,
@@ -296,18 +304,43 @@ private fun TTSProviderList(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                switchItem(
-                    checked = displaySetting.ttsOnlyReadQuoted,
-                    onCheckedChange = { updateDisplaySetting(displaySetting.copy(ttsOnlyReadQuoted = it)) },
-                    supportingContent = { Text(stringResource(R.string.setting_display_page_tts_only_read_quoted_desc)) },
-                    headlineContent = { Text(stringResource(R.string.setting_display_page_tts_only_read_quoted_title)) },
-                )
-                switchItem(
-                    checked = displaySetting.ttsOnlyReadOutsideBrackets,
-                    onCheckedChange = { updateDisplaySetting(displaySetting.copy(ttsOnlyReadOutsideBrackets = it)) },
-                    supportingContent = { Text(stringResource(R.string.setting_display_page_tts_read_outside_brackets_desc)) },
-                    headlineContent = { Text(stringResource(R.string.setting_display_page_tts_read_outside_brackets_title)) },
-                )
+                val selectedScope = when {
+                    displaySetting.ttsOnlyReadQuoted -> TtsReadScope.QUOTED_ONLY
+                    displaySetting.ttsOnlyReadOutsideBrackets -> TtsReadScope.OUTSIDE_BRACKETS
+                    else -> TtsReadScope.ALL
+                }
+                formItem(
+                    headlineContent = { Text("TTS 朗读范围") },
+                    supportingContent = { Text("控制语音朗读时是否只读引号对话或跳过括号动作") },
+                ) {
+                    ConnectedChoiceButtons(
+                        options = TtsReadScope.entries,
+                        selected = selectedScope,
+                        onSelect = { scope ->
+                            val updated = when (scope) {
+                                TtsReadScope.ALL -> displaySetting.copy(
+                                    ttsOnlyReadQuoted = false,
+                                    ttsOnlyReadOutsideBrackets = false,
+                                )
+                                TtsReadScope.QUOTED_ONLY -> displaySetting.copy(
+                                    ttsOnlyReadQuoted = true,
+                                    ttsOnlyReadOutsideBrackets = false,
+                                )
+                                TtsReadScope.OUTSIDE_BRACKETS -> displaySetting.copy(
+                                    ttsOnlyReadQuoted = false,
+                                    ttsOnlyReadOutsideBrackets = true,
+                                )
+                            }
+                            updateDisplaySetting(updated)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { scope, selected ->
+                        ConnectedChoiceLabel(
+                            text = scope.label,
+                            selected = selected,
+                        )
+                    }
+                }
                 switchItem(
                     checked = displaySetting.autoPlayTTSAfterGeneration,
                     onCheckedChange = { updateDisplaySetting(displaySetting.copy(autoPlayTTSAfterGeneration = it)) },

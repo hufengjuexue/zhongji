@@ -190,7 +190,7 @@ data class DisplaySetting(
     val enableLatexRendering: Boolean = false,
     val enableQuoteHighlight: Boolean = true,
     val quoteColorHex: String = "",
-    val enableBracketButton: Boolean = false,
+    val enableBracketButton: Boolean = true,
     val bracketButtonSymbol: String = "（）",
     val enableBlurEffect: Boolean = false,
     val backgroundEffectType: BackgroundEffectType = BackgroundEffectType.BLUR,
