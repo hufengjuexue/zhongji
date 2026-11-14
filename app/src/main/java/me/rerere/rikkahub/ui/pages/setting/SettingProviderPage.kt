@@ -75,6 +75,7 @@ import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.FileImport
+import me.rerere.hugeicons.stroke.Idea01
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.rikkahub.R
@@ -91,6 +92,7 @@ import me.rerere.rikkahub.ui.components.ui.decodeProviderSetting
 import me.rerere.rikkahub.ui.components.ui.longPressReorder
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.pages.setting.components.KairosRpGuideDialog
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.ImageUtils
 import me.rerere.rikkahub.utils.plus
@@ -106,6 +108,7 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var searchQuery by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<ProviderSetting?>(null) }
+    var showGuideDialog by remember { mutableStateOf(false) }
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         val newProviders = settings.providers.toMutableList().apply {
@@ -156,6 +159,12 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                     BackButton()
                 },
                 actions = {
+                    IconButton(onClick = { showGuideDialog = true }) {
+                        Icon(
+                            imageVector = HugeIcons.Idea01,
+                            contentDescription = "三阶上手教程",
+                        )
+                    }
                     ImportProviderButton {
                         addProvider(it.copyProvider(Uuid.random()))
                     }
@@ -252,6 +261,12 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
         onDismiss = { deleteTarget = null },
     ) {
         Text(stringResource(R.string.setting_provider_page_delete_dialog_text))
+    }
+
+    if (showGuideDialog) {
+        KairosRpGuideDialog(
+            onDismiss = { showGuideDialog = false },
+        )
     }
 }
 

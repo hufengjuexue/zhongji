@@ -11,7 +11,11 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
@@ -36,6 +40,9 @@ import me.rerere.ai.provider.DecisionAnswer
 import me.rerere.ai.provider.DecisionGenerationParams
 import me.rerere.ai.provider.DecisionGenerationResult
 import me.rerere.ai.provider.DecisionQuestion
+import me.rerere.ai.provider.EmbeddingGenerationParams
+import me.rerere.ai.provider.EmbeddingGenerationResult
+import me.rerere.ai.provider.KeyRotationMode
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -62,6 +69,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.parseApiKeys
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
@@ -114,22 +122,54 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private suspend fun transformRequest(
+    private data class SignedRequest(
+        val request: Request,
+        val usedKey: String?,
+    )
+
+    private fun isFailoverStatusCode(code: Int): Boolean =
+        code == 429 || code in 401..403 || code in 500..599
+
+    private fun maxKeyAttempts(
+        providerSetting: ProviderSetting.Google,
+        keysOverride: String? = null,
+    ): Int {
+        if (providerSetting.vertexAI && providerSetting.useServiceAccount) return 1
+        val raw = keysOverride ?: providerSetting.apiKey
+        return parseApiKeys(raw).size.coerceIn(1, 32)
+    }
+
+    private fun ProviderSetting.Google.effectiveAuxKeys(): String? =
+        auxiliaryApiKey.takeIf { parseApiKeys(it).isNotEmpty() }
+
+    private suspend fun transformRequestWithKey(
         providerSetting: ProviderSetting.Google,
         request: Request,
         sessionId: String? = null,
-    ): Request {
+        modelId: String? = null,
+        keysOverride: String? = null,
+        rotationModeOverride: KeyRotationMode? = null,
+    ): SignedRequest {
         return if (providerSetting.vertexAI && providerSetting.useServiceAccount) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
                 serviceAccountEmail = providerSetting.serviceAccountEmail.trim(),
                 privateKeyPem = StringEscapeUtils.unescapeJson(providerSetting.privateKey.trim()),
             )
-            request.newBuilder()
-                .addHeader("Authorization", "Bearer $accessToken")
-                .build()
+            SignedRequest(
+                request = request.newBuilder()
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .build(),
+                usedKey = null,
+            )
         } else {
-            val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), sessionId)
-            if (providerSetting.vertexAI) {
+            val key = keyRoulette.next(
+                keys = keysOverride ?: providerSetting.apiKey,
+                providerId = providerSetting.id.toString(),
+                sessionId = sessionId,
+                rotationMode = rotationModeOverride ?: providerSetting.keyRotationMode,
+                modelId = modelId,
+            )
+            val signed = if (providerSetting.vertexAI) {
                 request.newBuilder()
                     .url(request.url.newBuilder().addQueryParameter("key", key).build())
                     .build()
@@ -138,59 +178,104 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     .addHeader("x-goog-api-key", key)
                     .build()
             }
+            SignedRequest(request = signed, usedKey = key)
         }
+    }
+
+    private suspend fun transformRequest(
+        providerSetting: ProviderSetting.Google,
+        request: Request,
+        sessionId: String? = null,
+    ): Request = transformRequestWithKey(providerSetting, request, sessionId).request
+
+    private suspend fun executeWithKeyFailover(
+        providerSetting: ProviderSetting.Google,
+        sessionId: String? = null,
+        modelId: String? = null,
+        keysOverride: String? = null,
+        rotationModeOverride: KeyRotationMode? = null,
+        errorPrefix: String = "Failed to get response",
+        buildRawRequest: () -> Request,
+    ): String {
+        val maxAttempts = maxKeyAttempts(providerSetting, keysOverride)
+        for (attempt in 0 until maxAttempts) {
+            val signed = transformRequestWithKey(
+                providerSetting = providerSetting,
+                request = buildRawRequest(),
+                sessionId = sessionId,
+                modelId = modelId,
+                keysOverride = keysOverride,
+                rotationModeOverride = rotationModeOverride,
+            )
+            val response = client.newCall(signed.request).await()
+            val bodyStr = response.use { res ->
+                if (res.isSuccessful) {
+                    signed.usedKey?.let { keyRoulette.reportSuccess(it, modelId) }
+                    return@use res.body.string()
+                }
+                val code = res.code
+                val retryAfter = res.header("Retry-After")
+                val errBody = res.body.string()
+                if (!signed.usedKey.isNullOrBlank()) {
+                    keyRoulette.reportGoogleError(signed.usedKey, code, retryAfter, errBody, modelId)
+                }
+                if (!signed.usedKey.isNullOrBlank() && isFailoverStatusCode(code) && attempt + 1 < maxAttempts) {
+                    Log.w(TAG, "Key failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
+                    return@use null
+                }
+                throw Exception("$errorPrefix: $code $errBody")
+            }
+            if (bodyStr != null) return bodyStr
+        }
+        throw Exception("$errorPrefix: all API keys exhausted")
     }
 
     override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> =
         withContext(Dispatchers.IO) {
             val url = buildUrl(providerSetting = providerSetting, path = "models?pageSize=100")
-            val request = transformRequest(
-                providerSetting = providerSetting,
-                request = Request.Builder()
-                    .url(url)
-                    .headers(providerSetting.mergeCustomHeaders())
-                    .get()
-                    .build()
-            )
-            val response = client.newCall(request).await()
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: error("empty body")
-                Log.d(TAG, "listModels: $body")
-                val bodyObject = json.parseToJsonElement(body).jsonObject
-                val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
-
-                models.mapNotNull {
-                    val modelObject = it.jsonObject
-
-                    // 忽略非 chat / embedding / decision 模型
-                    val modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/")
-                    val supportedGenerationMethods =
-                        modelObject["supportedGenerationMethods"]?.jsonArray
-                            ?.map { method -> method.jsonPrimitive.content }
-                            .orEmpty()
-                    val isDecisionModel = modelId.contains("decision", ignoreCase = true) ||
-                        supportedGenerationMethods.any {
-                            it.contains("decision", ignoreCase = true) || it.equals("decide", ignoreCase = true)
-                        }
-                    if ("generateContent" !in supportedGenerationMethods &&
-                        "embedContent" !in supportedGenerationMethods &&
-                        !isDecisionModel
-                    ) {
-                        return@mapNotNull null
-                    }
-
-                    Model(
-                        modelId = modelId,
-                        displayName = modelObject["displayName"]?.jsonPrimitive?.contentOrNull ?: modelId,
-                        type = when {
-                            isDecisionModel -> ModelType.DECISION
-                            "generateContent" in supportedGenerationMethods -> ModelType.CHAT
-                            else -> ModelType.EMBEDDING
-                        },
-                    )
+            val body = runCatching {
+                executeWithKeyFailover(providerSetting = providerSetting, errorPrefix = "Failed to list models") {
+                    Request.Builder()
+                        .url(url)
+                        .headers(providerSetting.mergeCustomHeaders())
+                        .get()
+                        .build()
                 }
-            } else {
-                emptyList()
+            }.getOrNull() ?: return@withContext emptyList()
+
+            Log.d(TAG, "listModels: $body")
+            val bodyObject = json.parseToJsonElement(body).jsonObject
+            val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
+
+            models.mapNotNull {
+                val modelObject = it.jsonObject
+
+                // 忽略非 chat / embedding / decision 模型
+                val modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/")
+                val supportedGenerationMethods =
+                    modelObject["supportedGenerationMethods"]?.jsonArray
+                        ?.map { method -> method.jsonPrimitive.content }
+                        .orEmpty()
+                val isDecisionModel = modelId.contains("decision", ignoreCase = true) ||
+                    supportedGenerationMethods.any {
+                        it.contains("decision", ignoreCase = true) || it.equals("decide", ignoreCase = true)
+                    }
+                if ("generateContent" !in supportedGenerationMethods &&
+                    "embedContent" !in supportedGenerationMethods &&
+                    !isDecisionModel
+                ) {
+                    return@mapNotNull null
+                }
+
+                Model(
+                    modelId = modelId,
+                    displayName = modelObject["displayName"]?.jsonPrimitive?.contentOrNull ?: modelId,
+                    type = when {
+                        isDecisionModel -> ModelType.DECISION
+                        "generateContent" in supportedGenerationMethods -> ModelType.CHAT
+                        else -> ModelType.EMBEDDING
+                    },
+                )
             }
         }
 
@@ -204,6 +289,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         val requestBody = buildCompletionRequestBody(messages, params)
+        val bodyBytes = json.encodeToString(requestBody)
 
         val url = buildUrl(
             providerSetting = providerSetting,
@@ -214,26 +300,20 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
         )
 
-        val request = transformRequest(
+        val bodyStr = executeWithKeyFailover(
             providerSetting = providerSetting,
-            request = Request.Builder()
+            sessionId = params.sessionId,
+            modelId = params.model.modelId,
+            errorPrefix = "Failed to get response",
+        ) {
+            Request.Builder()
                 .url(url)
                 .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
                 .configureSessionHeaders(url.toString(), params.sessionId)
-                .post(
-                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
-                )
+                .post(bodyBytes.toRequestBody("application/json".toMediaType()))
                 .configureReferHeaders(providerSetting.baseUrl)
-                .build(),
-            sessionId = params.sessionId,
-        )
-
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+                .build()
         }
-
-        val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
 
         val candidate = bodyJson["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
@@ -263,6 +343,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         params: TextGenerationParams,
     ): Flow<StreamChunk> = callbackFlow {
         val requestBody = buildCompletionRequestBody(messages, params)
+        val bodyJsonStr = json.encodeToString(requestBody)
 
         val url = buildUrl(
             providerSetting = providerSetting,
@@ -273,24 +354,14 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
         ).newBuilder().addQueryParameter("alt", "sse").build()
 
-        val request = transformRequest(
-            providerSetting = providerSetting,
-            request = Request.Builder()
-                .url(url)
-                .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
-                .configureSessionHeaders(url.toString(), params.sessionId)
-                .post(
-                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
-                )
-                .configureReferHeaders(providerSetting.baseUrl)
-                .build(),
-            sessionId = params.sessionId,
-        )
-
-        logRequestBody(TAG, "streamText") { json.encodeToString(requestBody) }
+        logRequestBody(TAG, "streamText") { bodyJsonStr }
 
         val responseId = Uuid.random().toString()
-        val decoder = GoogleStreamDecoder(responseId, params.model.modelId)
+        val maxAttempts = maxKeyAttempts(providerSetting)
+        val attemptIndex = AtomicInteger(0)
+        val hasEmittedEvent = AtomicBoolean(false)
+        @Volatile var activeEventSource: EventSource? = null
+        val scope = this
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
             chunks.forEach { chunk ->
@@ -300,71 +371,135 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
-        val listener = object : EventSourceListener() {
-            override fun onEvent(
-                eventSource: EventSource,
-                id: String?,
-                type: String?,
-                data: String
-            ) {
-                Log.i(TAG, "onEvent: $data")
-
-                try {
-                    val result = decoder.accept(SseEvent(id = id, event = type, data = data))
-                    sendChunks(result.chunks)
-                    if (result.completed) close()
+        fun launchAttempt() {
+            scope.launch {
+                val currentAttempt = attemptIndex.get()
+                val signed = try {
+                    transformRequestWithKey(
+                        providerSetting = providerSetting,
+                        request = Request.Builder()
+                            .url(url)
+                            .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
+                            .configureSessionHeaders(url.toString(), params.sessionId)
+                            .post(bodyJsonStr.toRequestBody("application/json".toMediaType()))
+                            .configureReferHeaders(providerSetting.baseUrl)
+                            .build(),
+                        sessionId = params.sessionId,
+                        modelId = params.model.modelId,
+                    )
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Failed to parse stream event: $data", e)
                     close(e)
+                    return@launch
                 }
-            }
 
-            override fun onFailure(
-                eventSource: EventSource,
-                t: Throwable?,
-                response: Response?
-            ) {
-                var exception = t
+                if (!scope.isActive) return@launch
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.message}")
+                val decoder = GoogleStreamDecoder(responseId, params.model.modelId)
+                val listenerSuperseded = AtomicBoolean(false)
+                val successReported = AtomicBoolean(false)
+                val listener = object : EventSourceListener() {
+                    override fun onEvent(
+                        eventSource: EventSource,
+                        id: String?,
+                        type: String?,
+                        data: String
+                    ) {
+                        if (listenerSuperseded.get()) return
+                        hasEmittedEvent.set(true)
+                        if (successReported.compareAndSet(false, true)) {
+                            signed.usedKey?.let { keyRoulette.reportSuccess(it, params.model.modelId) }
+                        }
+                        Log.i(TAG, "onEvent: $data")
 
-                try {
-                    if (t == null && response != null) {
-                        val bodyStr = response.body.stringSafe()
-                        if (!bodyStr.isNullOrEmpty()) {
-                            val bodyElement = json.parseToJsonElement(bodyStr)
-                            println(bodyElement)
-                            if (bodyElement is JsonObject) {
-                                exception = Exception(
-                                    bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
-                                        ?: "unknown"
-                                )
-                            }
-                        } else {
-                            exception = Exception("Unknown error: ${response.code}")
+                        try {
+                            val result = decoder.accept(SseEvent(id = id, event = type, data = data))
+                            sendChunks(result.chunks)
+                            if (result.completed) close()
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "Failed to parse stream event: $data", e)
+                            close(e)
                         }
                     }
-                } catch (e: Throwable) {
-                    e.printStackTrace()
-                    exception = e
-                } finally {
-                    close(exception ?: Exception("Stream failed"))
-                }
-            }
 
-            override fun onClosed(eventSource: EventSource) {
-                println("[onClosed] 连接已关闭")
-                sendChunks(decoder.onClosed())
-                close()
+                    override fun onFailure(
+                        eventSource: EventSource,
+                        t: Throwable?,
+                        response: Response?
+                    ) {
+                        if (listenerSuperseded.get()) return
+                        var exception = t
+                        val bodyStr = response?.body?.stringSafe()
+
+                        if (!signed.usedKey.isNullOrBlank() && response != null) {
+                            keyRoulette.reportGoogleError(
+                                key = signed.usedKey,
+                                statusCode = response.code,
+                                retryAfterHeader = response.header("Retry-After"),
+                                responseBody = bodyStr,
+                                modelId = params.model.modelId,
+                            )
+                        }
+
+                        val canFailover = !hasEmittedEvent.get() &&
+                            !signed.usedKey.isNullOrBlank() &&
+                            response != null &&
+                            isFailoverStatusCode(response.code) &&
+                            currentAttempt + 1 < maxAttempts
+
+                        if (canFailover) {
+                            listenerSuperseded.set(true)
+                            attemptIndex.incrementAndGet()
+                            Log.w(
+                                TAG,
+                                "Stream key failed with HTTP ${response.code}, failing over (${currentAttempt + 2}/$maxAttempts)"
+                            )
+                            launchAttempt()
+                            return
+                        }
+
+                        t?.printStackTrace()
+                        println("[onFailure] 发生错误: ${t?.message}")
+
+                        try {
+                            if (t == null && response != null) {
+                                if (!bodyStr.isNullOrEmpty()) {
+                                    val bodyElement = json.parseToJsonElement(bodyStr)
+                                    println(bodyElement)
+                                    if (bodyElement is JsonObject) {
+                                        exception = Exception(
+                                            bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
+                                                ?: "unknown"
+                                        )
+                                    }
+                                } else {
+                                    exception = Exception("Unknown error: ${response.code}")
+                                }
+                            }
+                        } catch (e: Throwable) {
+                            e.printStackTrace()
+                            exception = e
+                        } finally {
+                            close(exception ?: Exception("Stream failed"))
+                        }
+                    }
+
+                    override fun onClosed(eventSource: EventSource) {
+                        if (listenerSuperseded.get()) return
+                        println("[onClosed] 连接已关闭")
+                        sendChunks(decoder.onClosed())
+                        close()
+                    }
+                }
+
+                activeEventSource = client.newEventSource(signed.request, listener)
             }
         }
 
-        val eventSource = client.newEventSource(request, listener)
+        launchAttempt()
 
         awaitClose {
             println("[awaitClose] 关闭eventSource")
-            eventSource.cancel()
+            activeEventSource?.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
@@ -1021,30 +1156,136 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         )
     }
 
+    override suspend fun generateEmbedding(
+        providerSetting: ProviderSetting.Google,
+        params: EmbeddingGenerationParams,
+    ): EmbeddingGenerationResult = withContext(Dispatchers.IO) {
+        require(params.input.isNotEmpty()) { "Embedding input cannot be empty" }
+        val rawModelId = params.model.modelId.removePrefix("models/")
+        val allEmbeddings = mutableListOf<List<Float>>()
+
+        // Gemini Developer API batchEmbedContents 单批最多 100 条
+        params.input.chunked(100).forEach { chunk ->
+            val isSingle = chunk.size == 1
+            val path = if (isSingle) {
+                if (providerSetting.vertexAI) {
+                    "publishers/google/models/$rawModelId:embedContent"
+                } else {
+                    "models/$rawModelId:embedContent"
+                }
+            } else {
+                if (providerSetting.vertexAI) {
+                    "publishers/google/models/$rawModelId:batchEmbedContents"
+                } else {
+                    "models/$rawModelId:batchEmbedContents"
+                }
+            }
+            val url = buildUrl(providerSetting = providerSetting, path = path)
+            val requestBody = if (isSingle) {
+                buildEmbedContentRequestBody(rawModelId, chunk.first())
+            } else {
+                buildBatchEmbedContentsRequestBody(rawModelId, chunk)
+            }
+            val bodyBytes = json.encodeToString(requestBody)
+            logRequestBody(TAG, "generateEmbedding") { bodyBytes }
+
+            val auxKeys = providerSetting.effectiveAuxKeys()
+            val bodyStr = executeWithKeyFailover(
+                providerSetting = providerSetting,
+                sessionId = null,
+                modelId = params.model.modelId,
+                keysOverride = auxKeys,
+                rotationModeOverride = KeyRotationMode.SEQUENTIAL,
+                errorPrefix = "Failed to generate embedding",
+            ) {
+                Request.Builder()
+                    .url(url)
+                    .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
+                    .post(bodyBytes.toRequestBody("application/json".toMediaType()))
+                    .configureReferHeaders(providerSetting.baseUrl)
+                    .build()
+            }
+            val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+            if (isSingle) {
+                allEmbeddings.add(parseEmbedContentResponse(bodyJson))
+            } else {
+                allEmbeddings.addAll(parseBatchEmbedContentsResponse(bodyJson))
+            }
+        }
+
+        EmbeddingGenerationResult(
+            usage = null,
+            embeddings = allEmbeddings,
+        )
+    }
+
+    internal fun buildEmbedContentRequestBody(modelId: String, text: String): JsonObject {
+        val modelResource = "models/${modelId.removePrefix("models/")}"
+        return buildJsonObject {
+            put("model", modelResource)
+            put("content", buildJsonObject {
+                putJsonArray("parts") {
+                    add(buildJsonObject { put("text", text) })
+                }
+            })
+        }
+    }
+
+    internal fun buildBatchEmbedContentsRequestBody(modelId: String, texts: List<String>): JsonObject {
+        val modelResource = "models/${modelId.removePrefix("models/")}"
+        return buildJsonObject {
+            putJsonArray("requests") {
+                texts.forEach { text ->
+                    add(buildJsonObject {
+                        put("model", modelResource)
+                        put("content", buildJsonObject {
+                            putJsonArray("parts") {
+                                add(buildJsonObject { put("text", text) })
+                            }
+                        })
+                    })
+                }
+            }
+        }
+    }
+
+    internal fun parseEmbedContentResponse(bodyJson: JsonObject): List<Float> =
+        bodyJson["embedding"]?.jsonObject?.get("values")?.jsonArray
+            ?.map { it.jsonPrimitive.content.toFloat() }
+            ?: error("No embedding values in response")
+
+    internal fun parseBatchEmbedContentsResponse(bodyJson: JsonObject): List<List<Float>> =
+        bodyJson["embeddings"]?.jsonArray?.map { item ->
+            item.jsonObject["values"]?.jsonArray
+                ?.map { it.jsonPrimitive.content.toFloat() }
+                ?: error("No embedding values in batch response")
+        } ?: error("No embeddings in batch response")
+
     override suspend fun evaluateDecisions(
         providerSetting: ProviderSetting.Google,
         params: DecisionGenerationParams,
     ): DecisionGenerationResult = withContext(Dispatchers.IO) {
         val requestBody = buildDecisionsRequestBody(params)
+        val bodyBytes = json.encodeToString(requestBody)
         val url = buildUrl(providerSetting = providerSetting, path = "decisions")
-        val request = transformRequest(
+        logRequestBody(TAG, "evaluateDecisions") { bodyBytes }
+
+        val auxKeys = providerSetting.effectiveAuxKeys()
+        val bodyStr = executeWithKeyFailover(
             providerSetting = providerSetting,
-            request = Request.Builder()
+            sessionId = null,
+            modelId = params.model.modelId,
+            keysOverride = auxKeys,
+            rotationModeOverride = KeyRotationMode.SEQUENTIAL,
+            errorPrefix = "Failed to evaluate decisions",
+        ) {
+            Request.Builder()
                 .url(url)
                 .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
-                .post(
-                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
-                )
+                .post(bodyBytes.toRequestBody("application/json".toMediaType()))
                 .configureReferHeaders(providerSetting.baseUrl)
-                .build(),
-        )
-        logRequestBody(TAG, "evaluateDecisions") { json.encodeToString(requestBody) }
-
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            throw Exception("Failed to evaluate decisions: ${response.code} ${response.body?.string()}")
+                .build()
         }
-        val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
         parseDecisionsResponse(bodyJson)
     }

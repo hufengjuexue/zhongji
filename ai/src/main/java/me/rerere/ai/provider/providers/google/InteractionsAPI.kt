@@ -9,7 +9,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
@@ -46,6 +50,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.parseApiKeys
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
@@ -82,22 +87,42 @@ internal class InteractionsAPI(
     private val client: OkHttpClient,
     private val keyRoulette: KeyRoulette = KeyRoulette.default(),
 ) {
+    private fun isFailoverStatusCode(code: Int): Boolean =
+        code == 429 || code in 401..403 || code in 500..599
+
     suspend fun generateText(
         providerSetting: ProviderSetting.Google,
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): TextGenerationResult = withContext(Dispatchers.IO) {
         val requestBody = buildRequestBody(messages, params, stream = false)
-        val request = buildRequest(providerSetting, params, requestBody)
+        val bodyBytes = json.encodeToString(requestBody)
+        val maxAttempts = parseApiKeys(providerSetting.apiKey).size.coerceIn(1, 32)
 
-        // await() waits for the response headers; reading the body can still block.
-        client.newCall(request).await().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception("Failed to get response: ${response.code} ${response.body.string()}")
+        for (attempt in 0 until maxAttempts) {
+            val (request, usedKey) = buildRequestWithKey(providerSetting, params, bodyBytes)
+            // await() waits for the response headers; reading the body can still block.
+            val parsed = client.newCall(request).await().use { response ->
+                if (response.isSuccessful) {
+                    if (usedKey.isNotBlank()) keyRoulette.reportSuccess(usedKey, params.model.modelId)
+                    val bodyJson = json.parseToJsonElement(response.body.string()).jsonObject
+                    return@use parseInteraction(bodyJson, fallbackModel = params.model.modelId)
+                }
+                val code = response.code
+                val retryAfter = response.header("Retry-After")
+                val errBody = response.body.string()
+                if (usedKey.isNotBlank()) {
+                    keyRoulette.reportGoogleError(usedKey, code, retryAfter, errBody, params.model.modelId)
+                }
+                if (usedKey.isNotBlank() && isFailoverStatusCode(code) && attempt + 1 < maxAttempts) {
+                    Log.w(TAG, "Interactions key failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
+                    return@use null
+                }
+                throw Exception("Failed to get response: $code $errBody")
             }
-            val bodyJson = json.parseToJsonElement(response.body.string()).jsonObject
-            parseInteraction(bodyJson, fallbackModel = params.model.modelId)
+            if (parsed != null) return@withContext parsed
         }
+        throw Exception("Failed to get response: all API keys exhausted")
     }
 
     fun streamText(
@@ -106,11 +131,15 @@ internal class InteractionsAPI(
         params: TextGenerationParams,
     ): Flow<StreamChunk> = callbackFlow {
         val requestBody = buildRequestBody(messages, params, stream = true)
-        val request = buildRequest(providerSetting, params, requestBody)
+        val bodyBytes = json.encodeToString(requestBody)
 
-        logRequestBody(TAG, "streamText") { json.encodeToString(requestBody) }
+        logRequestBody(TAG, "streamText") { bodyBytes }
 
-        val decoder = InteractionsStreamDecoder(fallbackModel = params.model.modelId)
+        val maxAttempts = parseApiKeys(providerSetting.apiKey).size.coerceIn(1, 32)
+        val attemptIndex = AtomicInteger(0)
+        val hasEmittedEvent = AtomicBoolean(false)
+        @Volatile var activeEventSource: EventSource? = null
+        val scope = this
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
             chunks.forEach { chunk ->
@@ -120,69 +149,125 @@ internal class InteractionsAPI(
             }
         }
 
-        val listener = object : EventSourceListener() {
-            override fun onEvent(
-                eventSource: EventSource,
-                id: String?,
-                type: String?,
-                data: String
-            ) {
-                Log.d(TAG, "onEvent: $id/$type $data")
-                try {
-                    val result = decoder.accept(SseEvent(id = id, event = type, data = data))
-                    sendChunks(result.chunks)
-                    if (result.completed) close()
-                } catch (e: Throwable) {
-                    Log.e(TAG, "Failed to parse stream event: $data", e)
-                    close(e)
-                }
-            }
+        fun launchAttempt() {
+            scope.launch {
+                val currentAttempt = attemptIndex.get()
+                val (request, usedKey) = buildRequestWithKey(providerSetting, params, bodyBytes)
+                if (!scope.isActive) return@launch
 
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                var exception = t
+                val decoder = InteractionsStreamDecoder(fallbackModel = params.model.modelId)
+                val listenerSuperseded = AtomicBoolean(false)
+                val successReported = AtomicBoolean(false)
 
-                val bodyRaw = response?.body?.stringSafe()
-                try {
-                    if (!bodyRaw.isNullOrBlank()) {
-                        exception = json.parseToJsonElement(bodyRaw).parseErrorDetail()
-                    } else if (t == null && response != null) {
-                        exception = Exception("Unknown error: ${response.code}")
+                val listener = object : EventSourceListener() {
+                    override fun onEvent(
+                        eventSource: EventSource,
+                        id: String?,
+                        type: String?,
+                        data: String
+                    ) {
+                        if (listenerSuperseded.get()) return
+                        hasEmittedEvent.set(true)
+                        if (successReported.compareAndSet(false, true) && usedKey.isNotBlank()) {
+                            keyRoulette.reportSuccess(usedKey, params.model.modelId)
+                        }
+                        Log.d(TAG, "onEvent: $id/$type $data")
+                        try {
+                            val result = decoder.accept(SseEvent(id = id, event = type, data = data))
+                            sendChunks(result.chunks)
+                            if (result.completed) close()
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "Failed to parse stream event: $data", e)
+                            close(e)
+                        }
                     }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                } finally {
-                    close(exception ?: Exception("Stream failed"))
-                }
-            }
 
-            override fun onClosed(eventSource: EventSource) {
-                sendChunks(decoder.onClosed())
-                close()
+                    override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                        if (listenerSuperseded.get()) return
+                        var exception = t
+                        val bodyRaw = response?.body?.stringSafe()
+
+                        if (usedKey.isNotBlank() && response != null) {
+                            keyRoulette.reportGoogleError(
+                                key = usedKey,
+                                statusCode = response.code,
+                                retryAfterHeader = response.header("Retry-After"),
+                                responseBody = bodyRaw,
+                                modelId = params.model.modelId,
+                            )
+                        }
+
+                        val canFailover = !hasEmittedEvent.get() &&
+                            usedKey.isNotBlank() &&
+                            response != null &&
+                            isFailoverStatusCode(response.code) &&
+                            currentAttempt + 1 < maxAttempts
+
+                        if (canFailover) {
+                            listenerSuperseded.set(true)
+                            attemptIndex.incrementAndGet()
+                            Log.w(
+                                TAG,
+                                "Interactions stream failed with HTTP ${response.code}, failing over (${currentAttempt + 2}/$maxAttempts)"
+                            )
+                            launchAttempt()
+                            return
+                        }
+
+                        try {
+                            if (!bodyRaw.isNullOrBlank()) {
+                                exception = json.parseToJsonElement(bodyRaw).parseErrorDetail()
+                            } else if (t == null && response != null) {
+                                exception = Exception("Unknown error: ${response.code}")
+                            }
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
+                        } finally {
+                            close(exception ?: Exception("Stream failed"))
+                        }
+                    }
+
+                    override fun onClosed(eventSource: EventSource) {
+                        if (listenerSuperseded.get()) return
+                        sendChunks(decoder.onClosed())
+                        close()
+                    }
+                }
+
+                activeEventSource = client.newEventSource(request, listener)
             }
         }
 
-        val eventSource = client.newEventSource(request, listener)
+        launchAttempt()
 
         awaitClose {
-            eventSource.cancel()
+            activeEventSource?.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
-    private fun buildRequest(
+    private fun buildRequestWithKey(
         providerSetting: ProviderSetting.Google,
         params: TextGenerationParams,
-        requestBody: JsonObject,
-    ): Request {
+        bodyBytes: String,
+    ): Pair<Request, String> {
         val url = "${providerSetting.baseUrl}/interactions"
-        return Request.Builder()
+        val usedKey = keyRoulette.next(
+            keys = providerSetting.apiKey,
+            providerId = providerSetting.id.toString(),
+            sessionId = params.sessionId,
+            rotationMode = providerSetting.keyRotationMode,
+            modelId = params.model.modelId,
+        )
+        val request = Request.Builder()
             .url(url)
             .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .configureSessionHeaders(url, params.sessionId)
-            .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-goog-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString(), params.sessionId))
+            .post(bodyBytes.toRequestBody("application/json".toMediaType()))
+            .addHeader("x-goog-api-key", usedKey)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
+        return request to usedKey
     }
 
     internal fun buildRequestBody(
