@@ -691,7 +691,7 @@ internal object KeyCooldownTracker {
                 }
 
                 val liteOrder = if (k in 0..1) {
-                    listOf(key) + liteKeys.filter { it != key }
+                    listOf(key)
                 } else {
                     liteKeys
                 }
