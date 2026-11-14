@@ -42,6 +42,7 @@ import me.rerere.ai.provider.DecisionGenerationResult
 import me.rerere.ai.provider.DecisionQuestion
 import me.rerere.ai.provider.EmbeddingGenerationParams
 import me.rerere.ai.provider.EmbeddingGenerationResult
+import me.rerere.ai.provider.KeyRotationMode
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -129,15 +130,25 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private fun isFailoverStatusCode(code: Int): Boolean =
         code == 429 || code in 401..403 || code in 500..599
 
-    private fun maxKeyAttempts(providerSetting: ProviderSetting.Google): Int {
+    private fun maxKeyAttempts(
+        providerSetting: ProviderSetting.Google,
+        keysOverride: String? = null,
+    ): Int {
         if (providerSetting.vertexAI && providerSetting.useServiceAccount) return 1
-        return parseApiKeys(providerSetting.apiKey).size.coerceIn(1, 32)
+        val raw = keysOverride ?: providerSetting.apiKey
+        return parseApiKeys(raw).size.coerceIn(1, 32)
     }
+
+    private fun ProviderSetting.Google.effectiveAuxKeys(): String? =
+        auxiliaryApiKey.takeIf { parseApiKeys(it).isNotEmpty() }
 
     private suspend fun transformRequestWithKey(
         providerSetting: ProviderSetting.Google,
         request: Request,
         sessionId: String? = null,
+        modelId: String? = null,
+        keysOverride: String? = null,
+        rotationModeOverride: KeyRotationMode? = null,
     ): SignedRequest {
         return if (providerSetting.vertexAI && providerSetting.useServiceAccount) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
@@ -152,10 +163,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             )
         } else {
             val key = keyRoulette.next(
-                keys = providerSetting.apiKey,
+                keys = keysOverride ?: providerSetting.apiKey,
                 providerId = providerSetting.id.toString(),
                 sessionId = sessionId,
-                rotationMode = providerSetting.keyRotationMode,
+                rotationMode = rotationModeOverride ?: providerSetting.keyRotationMode,
+                modelId = modelId,
             )
             val signed = if (providerSetting.vertexAI) {
                 request.newBuilder()
@@ -179,23 +191,33 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private suspend fun executeWithKeyFailover(
         providerSetting: ProviderSetting.Google,
         sessionId: String? = null,
+        modelId: String? = null,
+        keysOverride: String? = null,
+        rotationModeOverride: KeyRotationMode? = null,
         errorPrefix: String = "Failed to get response",
         buildRawRequest: () -> Request,
     ): String {
-        val maxAttempts = maxKeyAttempts(providerSetting)
+        val maxAttempts = maxKeyAttempts(providerSetting, keysOverride)
         for (attempt in 0 until maxAttempts) {
-            val signed = transformRequestWithKey(providerSetting, buildRawRequest(), sessionId)
+            val signed = transformRequestWithKey(
+                providerSetting = providerSetting,
+                request = buildRawRequest(),
+                sessionId = sessionId,
+                modelId = modelId,
+                keysOverride = keysOverride,
+                rotationModeOverride = rotationModeOverride,
+            )
             val response = client.newCall(signed.request).await()
             val bodyStr = response.use { res ->
                 if (res.isSuccessful) {
-                    signed.usedKey?.let { keyRoulette.reportSuccess(it) }
+                    signed.usedKey?.let { keyRoulette.reportSuccess(it, modelId) }
                     return@use res.body.string()
                 }
                 val code = res.code
                 val retryAfter = res.header("Retry-After")
                 val errBody = res.body.string()
                 if (!signed.usedKey.isNullOrBlank()) {
-                    keyRoulette.reportGoogleError(signed.usedKey, code, retryAfter, errBody)
+                    keyRoulette.reportGoogleError(signed.usedKey, code, retryAfter, errBody, modelId)
                 }
                 if (!signed.usedKey.isNullOrBlank() && isFailoverStatusCode(code) && attempt + 1 < maxAttempts) {
                     Log.w(TAG, "Key failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
@@ -281,6 +303,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val bodyStr = executeWithKeyFailover(
             providerSetting = providerSetting,
             sessionId = params.sessionId,
+            modelId = params.model.modelId,
             errorPrefix = "Failed to get response",
         ) {
             Request.Builder()
@@ -362,6 +385,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                             .configureReferHeaders(providerSetting.baseUrl)
                             .build(),
                         sessionId = params.sessionId,
+                        modelId = params.model.modelId,
                     )
                 } catch (e: Throwable) {
                     close(e)
@@ -372,6 +396,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                 val decoder = GoogleStreamDecoder(responseId, params.model.modelId)
                 val listenerSuperseded = AtomicBoolean(false)
+                val successReported = AtomicBoolean(false)
                 val listener = object : EventSourceListener() {
                     override fun onEvent(
                         eventSource: EventSource,
@@ -381,7 +406,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     ) {
                         if (listenerSuperseded.get()) return
                         hasEmittedEvent.set(true)
-                        signed.usedKey?.let { keyRoulette.reportSuccess(it) }
+                        if (successReported.compareAndSet(false, true)) {
+                            signed.usedKey?.let { keyRoulette.reportSuccess(it, params.model.modelId) }
+                        }
                         Log.i(TAG, "onEvent: $data")
 
                         try {
@@ -409,6 +436,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 statusCode = response.code,
                                 retryAfterHeader = response.header("Retry-After"),
                                 responseBody = bodyStr,
+                                modelId = params.model.modelId,
                             )
                         }
 
@@ -1161,9 +1189,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             val bodyBytes = json.encodeToString(requestBody)
             logRequestBody(TAG, "generateEmbedding") { bodyBytes }
 
+            val auxKeys = providerSetting.effectiveAuxKeys()
             val bodyStr = executeWithKeyFailover(
                 providerSetting = providerSetting,
                 sessionId = null,
+                modelId = params.model.modelId,
+                keysOverride = auxKeys,
+                rotationModeOverride = KeyRotationMode.SEQUENTIAL,
                 errorPrefix = "Failed to generate embedding",
             ) {
                 Request.Builder()
@@ -1238,9 +1270,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val url = buildUrl(providerSetting = providerSetting, path = "decisions")
         logRequestBody(TAG, "evaluateDecisions") { bodyBytes }
 
+        val auxKeys = providerSetting.effectiveAuxKeys()
         val bodyStr = executeWithKeyFailover(
             providerSetting = providerSetting,
             sessionId = null,
+            modelId = params.model.modelId,
+            keysOverride = auxKeys,
+            rotationModeOverride = KeyRotationMode.SEQUENTIAL,
             errorPrefix = "Failed to evaluate decisions",
         ) {
             Request.Builder()

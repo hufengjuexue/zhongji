@@ -104,7 +104,7 @@ internal class InteractionsAPI(
             // await() waits for the response headers; reading the body can still block.
             val parsed = client.newCall(request).await().use { response ->
                 if (response.isSuccessful) {
-                    if (usedKey.isNotBlank()) keyRoulette.reportSuccess(usedKey)
+                    if (usedKey.isNotBlank()) keyRoulette.reportSuccess(usedKey, params.model.modelId)
                     val bodyJson = json.parseToJsonElement(response.body.string()).jsonObject
                     return@use parseInteraction(bodyJson, fallbackModel = params.model.modelId)
                 }
@@ -112,7 +112,7 @@ internal class InteractionsAPI(
                 val retryAfter = response.header("Retry-After")
                 val errBody = response.body.string()
                 if (usedKey.isNotBlank()) {
-                    keyRoulette.reportGoogleError(usedKey, code, retryAfter, errBody)
+                    keyRoulette.reportGoogleError(usedKey, code, retryAfter, errBody, params.model.modelId)
                 }
                 if (usedKey.isNotBlank() && isFailoverStatusCode(code) && attempt + 1 < maxAttempts) {
                     Log.w(TAG, "Interactions key failed with HTTP $code, failing over (${attempt + 1}/$maxAttempts)")
@@ -157,6 +157,7 @@ internal class InteractionsAPI(
 
                 val decoder = InteractionsStreamDecoder(fallbackModel = params.model.modelId)
                 val listenerSuperseded = AtomicBoolean(false)
+                val successReported = AtomicBoolean(false)
 
                 val listener = object : EventSourceListener() {
                     override fun onEvent(
@@ -167,7 +168,9 @@ internal class InteractionsAPI(
                     ) {
                         if (listenerSuperseded.get()) return
                         hasEmittedEvent.set(true)
-                        if (usedKey.isNotBlank()) keyRoulette.reportSuccess(usedKey)
+                        if (successReported.compareAndSet(false, true) && usedKey.isNotBlank()) {
+                            keyRoulette.reportSuccess(usedKey, params.model.modelId)
+                        }
                         Log.d(TAG, "onEvent: $id/$type $data")
                         try {
                             val result = decoder.accept(SseEvent(id = id, event = type, data = data))
@@ -190,6 +193,7 @@ internal class InteractionsAPI(
                                 statusCode = response.code,
                                 retryAfterHeader = response.header("Retry-After"),
                                 responseBody = bodyRaw,
+                                modelId = params.model.modelId,
                             )
                         }
 
@@ -253,6 +257,7 @@ internal class InteractionsAPI(
             providerId = providerSetting.id.toString(),
             sessionId = params.sessionId,
             rotationMode = providerSetting.keyRotationMode,
+            modelId = params.model.modelId,
         )
         val request = Request.Builder()
             .url(url)

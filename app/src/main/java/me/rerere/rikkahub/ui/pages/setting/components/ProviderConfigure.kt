@@ -3,11 +3,14 @@ package me.rerere.rikkahub.ui.pages.setting.components
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -49,7 +53,9 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ProviderQuota
 import me.rerere.ai.provider.UsageWindow
 import me.rerere.ai.provider.supportsQuota
+import me.rerere.ai.util.GoogleQuotaBucket
 import me.rerere.ai.util.KeyCooldownReason
+import me.rerere.ai.util.KeyPoolItemSnapshot
 import me.rerere.ai.util.KeyPoolMonitor
 import me.rerere.ai.util.maskApiKey
 import me.rerere.ai.util.parseApiKeys
@@ -605,7 +611,12 @@ private fun ProviderConfigureGoogle(
         if (!useServiceAccount) {
             googleKeyPoolItem(
                 apiKey = provider.apiKey,
+                auxiliaryApiKey = provider.auxiliaryApiKey,
                 onApiKeyChange = { onEdit(provider.copy(apiKey = it)) },
+            )
+            googleAuxiliaryKeyItem(
+                auxiliaryApiKey = provider.auxiliaryApiKey,
+                onAuxiliaryKeyChange = { onEdit(provider.copy(auxiliaryApiKey = it)) },
             )
         }
         if (!provider.vertexAI) {
@@ -629,12 +640,14 @@ private fun ProviderConfigureGoogle(
     CardGroup {
         if (!useServiceAccount) {
             formItem(
-                headlineContent = { Text("多 Key 轮询策略") },
+                headlineContent = { Text("多 Key 调度策略") },
                 supportingContent = {
                     Text(
                         when (provider.keyRotationMode) {
+                            KeyRotationMode.SEQUENTIAL ->
+                                "推荐防风控：同模型优先用第 1 把可用 Key，用尽或撞 429 再切下一把，避免多项目横跳"
                             KeyRotationMode.STICKY ->
-                                "同一对话优先锁定同一把 Key 保前缀缓存；撞 429 或 RPD 用尽自动切下一把"
+                                "不同对话分散绑定不同 Key，单场对话内锁定同一把以保前缀缓存"
                             KeyRotationMode.ROUND_ROBIN ->
                                 "每次请求在健康池里轮换不同 Key，分散 5 RPM 高频并发限制"
                         }
@@ -648,6 +661,7 @@ private fun ProviderConfigureGoogle(
                 ) { mode, selected ->
                     ConnectedChoiceLabel(
                         text = when (mode) {
+                            KeyRotationMode.SEQUENTIAL -> "顺序吃空"
                             KeyRotationMode.STICKY -> "缓存优先"
                             KeyRotationMode.ROUND_ROBIN -> "逐次轮询"
                         },
@@ -713,6 +727,7 @@ private fun ProviderConfigureGoogle(
 
 private fun CardGroupScope.googleKeyPoolItem(
     apiKey: String,
+    auxiliaryApiKey: String,
     onApiKeyChange: (String) -> Unit,
 ) = formItem(
     headlineContent = {
@@ -721,23 +736,87 @@ private fun CardGroupScope.googleKeyPoolItem(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("API Key 号池")
+            Text("主力 Key 号池")
             GoogleKeyPoolSummaryBadge(apiKey = apiKey)
         }
     },
 ) {
     GoogleKeyPoolEditor(
         apiKey = apiKey,
+        auxiliaryApiKey = auxiliaryApiKey,
         onApiKeyChange = onApiKeyChange,
+    )
+}
+
+private fun CardGroupScope.googleAuxiliaryKeyItem(
+    auxiliaryApiKey: String,
+    onAuxiliaryKeyChange: (String) -> Unit,
+) = formItem(
+    headlineContent = {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Embedding / Decision 专用 Key")
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                shape = RoundedCornerShape(999.dp),
+            ) {
+                val count = remember(auxiliaryApiKey) { parseApiKeys(auxiliaryApiKey).size }
+                Text(
+                    text = if (count == 0) "默认复用主池 #1" else "已独立 ($count 把)",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+        }
+    },
+    supportingContent = {
+        Text("Embedding 2 (1K/日) 与 Decision 1 (10K/日) 专用通道；填 1~2 把即可与聊天号池物理隔离，留空则固定复用主池第 1 把")
+    },
+) {
+    GoogleAuxiliaryKeyField(
+        auxiliaryApiKey = auxiliaryApiKey,
+        onAuxiliaryKeyChange = onAuxiliaryKeyChange,
+    )
+}
+
+@Composable
+private fun GoogleAuxiliaryKeyField(
+    auxiliaryApiKey: String,
+    onAuxiliaryKeyChange: (String) -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = auxiliaryApiKey,
+        onValueChange = { onAuxiliaryKeyChange(it.trim()) },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 1,
+        maxLines = 2,
+        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
+        placeholder = {
+            Text(
+                "可选：粘贴专用项目 Key（留空即固定用主池 #1）",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        },
+        visualTransformation = if (!visible) PasswordVisualTransformation() else VisualTransformation.None,
+        trailingIcon = {
+            IconButton(onClick = { visible = !visible }) {
+                Icon(if (visible) HugeIcons.ViewOff else HugeIcons.View, contentDescription = null)
+            }
+        },
     )
 }
 
 @Composable
 private fun GoogleKeyPoolSummaryBadge(apiKey: String) {
     val statusVersion by KeyPoolMonitor.statusVersion.collectAsStateWithLifecycle()
-    val statuses = remember(apiKey, statusVersion) { KeyPoolMonitor.inspect(apiKey) }
-    val total = statuses.size
-    val cooling = statuses.count { it.reason != KeyCooldownReason.READY }
+    val pool = remember(apiKey, statusVersion) { KeyPoolMonitor.inspectPool(apiKey) }
+    val total = pool.size
+    val cooling = pool.count { it.hasAnyCooling }
     val ready = total - cooling
 
     val (containerColor, contentColor, label) = when {
@@ -754,12 +833,12 @@ private fun GoogleKeyPoolSummaryBadge(apiKey: String) {
         ready > 0 -> Triple(
             MaterialTheme.colorScheme.tertiaryContainer,
             MaterialTheme.colorScheme.onTertiaryContainer,
-            "$ready 就绪 / $cooling 冷却",
+            "$ready 就绪 / $cooling 部分冷却",
         )
         else -> Triple(
             MaterialTheme.colorScheme.errorContainer,
             MaterialTheme.colorScheme.onErrorContainer,
-            "全部冷却 ($cooling)",
+            "全池冷却 ($cooling)",
         )
     }
 
@@ -777,14 +856,135 @@ private fun GoogleKeyPoolSummaryBadge(apiKey: String) {
 }
 
 @Composable
+private fun GoogleDailyUsageDashboard(
+    pool: List<KeyPoolItemSnapshot>,
+    auxPool: List<KeyPoolItemSnapshot>,
+) {
+    val keyCount = pool.size
+    if (keyCount == 0 && auxPool.isEmpty()) return
+
+    val combinedForAux = remember(pool, auxPool) { pool + auxPool }
+    val embUsed = combinedForAux.sumOf { it.bucketUsage[GoogleQuotaBucket.EMBEDDING]?.used ?: 0 }
+    val decUsed = combinedForAux.sumOf { it.bucketUsage[GoogleQuotaBucket.DECISION]?.used ?: 0 }
+    val otherChat = pool.sumOf { it.otherChatCount }
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        if (keyCount > 0) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                GoogleQuotaBucket.CHAT_RP_BUCKETS.forEach { bucket ->
+                    val usedSum = pool.sumOf { it.bucketUsage[bucket]?.used ?: 0 }
+                    val exhaustedKeys = pool.count {
+                        it.bucketUsage[bucket]?.reason == KeyCooldownReason.RPD_EXHAUSTED
+                    }
+                    val totalCap = keyCount * bucket.perKeyDailyLimit
+                    val progress = if (totalCap > 0) (usedSum.toFloat() / totalCap).coerceIn(0f, 1f) else 0f
+                    val allExhausted = exhaustedKeys >= keyCount
+
+                    Surface(
+                        color = if (allExhausted) {
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = bucket.displayName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (exhaustedKeys > 0) {
+                                    Text(
+                                        text = "${exhaustedKeys}满",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "$usedSum / $totalCap",
+                                style = MaterialTheme.typography.titleSmall.copy(fontFamily = JetbrainsMono),
+                                color = if (allExhausted) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                maxLines = 1,
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(if (allExhausted) 1f else progress)
+                                        .height(3.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(
+                                            if (allExhausted) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.primary
+                                        ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (embUsed > 0 || decUsed > 0 || otherChat > 0) {
+            val parts = buildList {
+                if (embUsed > 0) add("Embedding 今日 $embUsed 次")
+                if (decUsed > 0) add("Decision 今日 $decUsed 次")
+                if (otherChat > 0) add("其他模型 $otherChat 次")
+            }
+            Text(
+                text = parts.joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 2.dp),
+            )
+        }
+    }
+}
+
+@Composable
 private fun GoogleKeyPoolEditor(
     apiKey: String,
+    auxiliaryApiKey: String,
     onApiKeyChange: (String) -> Unit,
 ) {
     val toaster = LocalToaster.current
     val statusVersion by KeyPoolMonitor.statusVersion.collectAsStateWithLifecycle()
-    val statuses = remember(apiKey, statusVersion) { KeyPoolMonitor.inspect(apiKey) }
-    val coolingCount = statuses.count { it.reason != KeyCooldownReason.READY }
+    val pool = remember(apiKey, statusVersion) { KeyPoolMonitor.inspectPool(apiKey) }
+    val auxPool = remember(auxiliaryApiKey, statusVersion) { KeyPoolMonitor.inspectPool(auxiliaryApiKey) }
+    val coolingCount = pool.count { it.hasAnyCooling }
+    val hasAnyUsage = remember(pool, auxPool) {
+        (pool + auxPool).any { snap ->
+            snap.otherChatCount > 0 || snap.bucketUsage.values.any { it.used > 0 }
+        }
+    }
 
     var visible by remember { mutableStateOf(false) }
     var showAllKeys by remember { mutableStateOf(false) }
@@ -794,6 +994,8 @@ private fun GoogleKeyPoolEditor(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
+        GoogleDailyUsageDashboard(pool = pool, auxPool = auxPool)
+
         OutlinedTextField(
             value = apiKey,
             onValueChange = { onApiKeyChange(it) },
@@ -810,12 +1012,12 @@ private fun GoogleKeyPoolEditor(
             supportingText = {
                 Text(
                     when {
-                        statuses.isEmpty() ->
+                        pool.isEmpty() ->
                             "支持一次粘贴多账号 / 多项目 Key；别忘了点右下角保存生效"
-                        statuses.size == 1 ->
-                            "当前 1 把 Key；点下方「批量导入」或直接换行追加即可组池轮询"
+                        pool.size == 1 ->
+                            "当前 1 把 Key；点下方「批量导入」或换行追加即可组池（PT 零点自动清零）"
                         else ->
-                            "已识别 ${statuses.size} 把不重复 Key，撞 429 或 RPD 耗尽自动切流"
+                            "已识别 ${pool.size} 把不重复 Key，每日容量 ${pool.size * 20} 次/模型（PT 零点自动清零）"
                     }
                 )
             },
@@ -859,48 +1061,29 @@ private fun GoogleKeyPoolEditor(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("重置冷却")
                 }
+            } else if (hasAnyUsage) {
+                TextButton(
+                    onClick = {
+                        val allKeysRaw = "$apiKey\n$auxiliaryApiKey"
+                        KeyPoolMonitor.resetDailyUsage(allKeysRaw)
+                        toaster.show("已清零今日请求计数", type = ToastType.Success)
+                    },
+                ) {
+                    Text("清零计数")
+                }
             }
         }
 
-        if (statuses.isNotEmpty()) {
+        if (pool.isNotEmpty()) {
             val maxCollapsed = 5
-            val visibleKeys = if (showAllKeys || statuses.size <= maxCollapsed) {
-                statuses
+            val visibleKeys = if (showAllKeys || pool.size <= maxCollapsed) {
+                pool
             } else {
-                statuses.take(maxCollapsed)
+                pool.take(maxCollapsed)
             }
-            val nowMs = System.currentTimeMillis()
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                visibleKeys.forEachIndexed { index, info ->
-                    val statusLabel = when (info.reason) {
-                        KeyCooldownReason.READY -> "就绪"
-                        KeyCooldownReason.RPM_LIMIT -> {
-                            val sec = ((info.cooldownUntilMs - nowMs) / 1000L).coerceAtLeast(1L)
-                            "限流 ${sec}s"
-                        }
-                        KeyCooldownReason.RPD_EXHAUSTED -> {
-                            val mins = ((info.cooldownUntilMs - nowMs) / 60_000L).coerceAtLeast(1L)
-                            if (mins >= 60) "RPD耗尽 · ${mins / 60}h" else "RPD耗尽 · ${mins}m"
-                        }
-                        KeyCooldownReason.AUTH_ERROR -> "鉴权失败"
-                        KeyCooldownReason.SERVER_ERROR -> "服务异常"
-                    }
-                    val badgeColor = when (info.reason) {
-                        KeyCooldownReason.READY -> MaterialTheme.colorScheme.secondaryContainer
-                        KeyCooldownReason.RPM_LIMIT, KeyCooldownReason.SERVER_ERROR ->
-                            MaterialTheme.colorScheme.tertiaryContainer
-                        KeyCooldownReason.RPD_EXHAUSTED, KeyCooldownReason.AUTH_ERROR ->
-                            MaterialTheme.colorScheme.errorContainer
-                    }
-                    val badgeTextColor = when (info.reason) {
-                        KeyCooldownReason.READY -> MaterialTheme.colorScheme.onSecondaryContainer
-                        KeyCooldownReason.RPM_LIMIT, KeyCooldownReason.SERVER_ERROR ->
-                            MaterialTheme.colorScheme.onTertiaryContainer
-                        KeyCooldownReason.RPD_EXHAUSTED, KeyCooldownReason.AUTH_ERROR ->
-                            MaterialTheme.colorScheme.onErrorContainer
-                    }
-
+                visibleKeys.forEachIndexed { index, snap ->
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
                         shape = RoundedCornerShape(10.dp),
@@ -909,57 +1092,106 @@ private fun GoogleKeyPoolEditor(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                                .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Text(
                                 text = "#${index + 1}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(28.dp),
+                                modifier = Modifier.width(26.dp),
                             )
                             Text(
-                                text = maskApiKey(info.key),
+                                text = maskApiKey(snap.key),
                                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            Surface(
-                                color = badgeColor,
-                                contentColor = badgeTextColor,
-                                shape = RoundedCornerShape(999.dp),
-                            ) {
-                                Text(
-                                    text = statusLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                )
+
+                            if (snap.globalReason != KeyCooldownReason.READY) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                    shape = RoundedCornerShape(999.dp),
+                                ) {
+                                    Text(
+                                        text = when (snap.globalReason) {
+                                            KeyCooldownReason.AUTH_ERROR -> "鉴权失败"
+                                            KeyCooldownReason.SERVER_ERROR -> "异常"
+                                            else -> "冷却"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            } else {
+                                GoogleQuotaBucket.CHAT_RP_BUCKETS.forEach { bucket ->
+                                    val bu = snap.bucketUsage[bucket]
+                                    val used = bu?.used ?: 0
+                                    val reason = bu?.reason ?: KeyCooldownReason.READY
+                                    val (bg, fg, pillText) = when {
+                                        reason == KeyCooldownReason.RPD_EXHAUSTED -> Triple(
+                                            MaterialTheme.colorScheme.errorContainer,
+                                            MaterialTheme.colorScheme.onErrorContainer,
+                                            if (used > 0) "${bucket.shortLabel} $used 满" else "${bucket.shortLabel} 满",
+                                        )
+                                        reason == KeyCooldownReason.RPM_LIMIT -> Triple(
+                                            MaterialTheme.colorScheme.tertiaryContainer,
+                                            MaterialTheme.colorScheme.onTertiaryContainer,
+                                            "${bucket.shortLabel} 限",
+                                        )
+                                        used > 0 -> Triple(
+                                            MaterialTheme.colorScheme.primaryContainer,
+                                            MaterialTheme.colorScheme.onPrimaryContainer,
+                                            "${bucket.shortLabel} $used",
+                                        )
+                                        else -> Triple(
+                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                            MaterialTheme.colorScheme.onSurfaceVariant,
+                                            "${bucket.shortLabel} 0",
+                                        )
+                                    }
+                                    Surface(
+                                        color = bg,
+                                        contentColor = fg,
+                                        shape = RoundedCornerShape(6.dp),
+                                    ) {
+                                        Text(
+                                            text = pillText,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetbrainsMono),
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
                             }
+
                             IconButton(
                                 onClick = {
-                                    val updated = parseApiKeys(apiKey).filterNot { it == info.key }
+                                    val updated = parseApiKeys(apiKey).filterNot { it == snap.key }
                                     onApiKeyChange(updated.joinToString("\n"))
                                 },
-                                modifier = Modifier.size(32.dp),
+                                modifier = Modifier.size(30.dp),
                             ) {
                                 Icon(
                                     imageVector = HugeIcons.Cancel01,
                                     contentDescription = stringResource(R.string.delete),
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(15.dp),
                                 )
                             }
                         }
                     }
                 }
 
-                if (statuses.size > maxCollapsed) {
+                if (pool.size > maxCollapsed) {
                     TextButton(
                         onClick = { showAllKeys = !showAllKeys },
                         modifier = Modifier.align(Alignment.End),
                     ) {
                         Text(
-                            if (showAllKeys) "收起列表" else "展开全部 ${statuses.size} 把 Key"
+                            if (showAllKeys) "收起列表" else "展开全部 ${pool.size} 把 Key"
                         )
                     }
                 }
