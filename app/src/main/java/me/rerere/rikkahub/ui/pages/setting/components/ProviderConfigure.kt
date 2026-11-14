@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ContainedLoadingIndicator
@@ -41,7 +43,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -989,11 +994,18 @@ private fun GoogleKeyPoolEditor(
     var visible by remember { mutableStateOf(false) }
     var showAllKeys by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showGuideDialog by remember { mutableStateOf(false) }
 
     Column(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
+        if (pool.isEmpty()) {
+            GoogleRpQuickStartBanner(
+                onOpenGuide = { showGuideDialog = true },
+            )
+        }
+
         GoogleDailyUsageDashboard(pool = pool, auxPool = auxPool)
 
         OutlinedTextField(
@@ -1043,7 +1055,7 @@ private fun GoogleKeyPoolEditor(
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("批量导入 Key")
+                Text("批量导入", maxLines = 1)
             }
 
             if (coolingCount > 0) {
@@ -1059,7 +1071,7 @@ private fun GoogleKeyPoolEditor(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("重置冷却")
+                    Text("重置冷却", maxLines = 1)
                 }
             } else if (hasAnyUsage) {
                 TextButton(
@@ -1069,7 +1081,16 @@ private fun GoogleKeyPoolEditor(
                         toaster.show("已清零今日请求计数", type = ToastType.Success)
                     },
                 ) {
-                    Text("清零计数")
+                    Text("清零计数", maxLines = 1)
+                }
+            }
+
+            if (pool.isNotEmpty()) {
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = { showGuideDialog = true },
+                ) {
+                    Text("? 攻略", maxLines = 1)
                 }
             }
         }
@@ -1278,5 +1299,191 @@ private fun GoogleKeyPoolEditor(
                 }
             },
         )
+    }
+
+    if (showGuideDialog) {
+        GoogleRpGuideDialog(
+            onDismiss = { showGuideDialog = false },
+        )
+    }
+}
+
+private const val AI_STUDIO_API_KEY_URL = "https://aistudio.google.com/apikey"
+private const val NOTEBOOK_LM_URL = "https://notebooklm.google.com/"
+
+private fun openExternalUrl(
+    uriHandler: UriHandler,
+    url: String,
+    onError: (String) -> Unit,
+) {
+    runCatching { uriHandler.openUri(url) }
+        .onFailure { onError("无法打开浏览器: ${it.message}") }
+}
+
+@Composable
+private fun GoogleRpQuickStartBanner(
+    onOpenGuide: () -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    val toaster = LocalToaster.current
+
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(12.dp),
+        ) {
+            Text(
+                text = "吃透免费机制，Google 原生生态就是 RP 的终极答案",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "1 个项目 = 3.6(20) + 3.8(20) + Hydrogen(20) = 60 次对话/日\n+ Embedding 2 (1K/日) & Decision 1 (10K/日)",
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetbrainsMono),
+            )
+            Text(
+                text = "× 别在同项目建多个 Key（额度共享无效）\n√ 点「创建新项目」，每项目只拿 1 把 Key",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.9f),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilledTonalButton(
+                    onClick = {
+                        openExternalUrl(uriHandler, AI_STUDIO_API_KEY_URL) { msg ->
+                            toaster.show(msg, type = ToastType.Error)
+                        }
+                    },
+                ) {
+                    Text("去 AI Studio 建项目", maxLines = 1)
+                }
+                TextButton(onClick = onOpenGuide) {
+                    Text("完整攻略 & Source 闭环", maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GoogleRpGuideDialog(
+    onDismiss: () -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    val toaster = LocalToaster.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Google RP 号池 × Source 工程指南") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = "全世界最懂 RP 的底座其实是 Google：把官方免费额度与记忆生态吃干榨净，比任何不稳定反代都稳。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                )
+
+                GoogleGuideSectionCard(
+                    title = "1. 一眼算清免费账本（关键看 Project）",
+                    body = "• 配额按 Project 独立计算，同一项目下建多个 Key 额度共享无效。\n" +
+                        "• 每个独立项目每天白嫖：Gemini 3.6 Flash (20) + 3.8 Flash (20) + Hydrogen (20) = 60 次主力 RP，另加 Embedding 2 (1K/日) 与 Decision 1 (10K/日)。\n" +
+                        "• 叠满 5~20 把项目 Key 即可日均 300~1,200 次直连，北京时间每日约 16:00（PT 零点）自动刷新。",
+                )
+
+                GoogleGuideSectionCard(
+                    title = "2. 三步安全建池（防风控铁律）",
+                    body = "• ① 在 AI Studio 点「创建新项目」，每项目只生成 1 把 Key（建议用 rp-01、notes-02 等普通命名，别一口气暴建）。\n" +
+                        "• ② 点主界面「批量导入」一次性粘贴全部 Key，系统自动去重。\n" +
+                        "• ③ 策略保持默认「顺序吃空」：第 1 把 Key 的某个模型用尽 20 次才切下一把，避免多项目横跳；同把 Key 的 Hydrogen 用尽不会误伤 3.8 与 3.6。",
+                )
+
+                GoogleGuideSectionCard(
+                    title = "3. Kairos 模型与记忆抄作业",
+                    body = "• 主力对话：Hydrogen / Gemini 3.8 Flash / Gemini 3.6 Flash 轮换（顶部 3 栏实时显示总余量）。\n" +
+                        "• 记忆检索与决策：选择 gemini-embedding-2 与 gemini-decision-1。\n" +
+                        "• 「Embedding / Decision 专用 Key」留空即可：默认固定只复用主池 #1，绝不唤醒其余项目。",
+                )
+
+                GoogleGuideSectionCard(
+                    title = "4. 全谷歌闭环：Kairos + NotebookLM Source 工程",
+                    body = "• 体验公式：综合体验 = 逻辑底座 × 语言颗粒度，别把上万字设定集硬塞进开局系统词。\n" +
+                        "• NotebookLM 做静态 Source：把原作、人物小传与世界观丢进 NotebookLM 拆解关系、生成精细章节大纲与场景锚点，Kairos 开聊前只做 1~2 句精准定调。\n" +
+                        "• Kairos 负责动态记忆：日常对话由 Embedding 2 + Decision 1 自动提炼进本地时序图谱并在尾部近因注入，死保 Prefix Cache 前缀缓存命中。",
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            openExternalUrl(uriHandler, AI_STUDIO_API_KEY_URL) { msg ->
+                                toaster.show(msg, type = ToastType.Error)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("AI Studio", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            openExternalUrl(uriHandler, NOTEBOOK_LM_URL) { msg ->
+                                toaster.show(msg, type = ToastType.Error)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("NotebookLM", maxLines = 1)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("我看懂了")
+            }
+        },
+    )
+}
+
+@Composable
+private fun GoogleGuideSectionCard(
+    title: String,
+    body: String,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(10.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
